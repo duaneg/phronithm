@@ -1,0 +1,12 @@
+__pycache__/
+
+# Claude Code sandbox placeholder files and ephemeral directories (recreated each session)
+.claude/agents
+.claude/commands
+.claude/settings.json
+.claude/skills
+.claude/worktrees/
+.mcp.json
+
+# vim swap files
+.*.swp

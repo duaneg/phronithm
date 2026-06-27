@@ -1,0 +1,19 @@
+# GCC/Clang warning flags for C/C++ analysis
+# Used when compile_commands.json is not available
+
+-Wall
+-Wextra
+-Wpedantic
+-Wformat=2
+-Wformat-security
+-Wnull-dereference
+-Wstack-protector
+-Wtrampolines
+-Walloca
+-Wvla
+-Warray-bounds=2
+-Wimplicit-fallthrough
+-Wshift-overflow=2
+-Wstringop-overflow=4
+-Wconversion
+-Wsign-conversion

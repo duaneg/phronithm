@@ -1,0 +1,31 @@
+{
+  "name": "phronithm",
+  "owner": {
+    "name": "Duane Griffin"
+  },
+  "plugins": [
+    {
+      "name": "phronithm",
+      "source": "./",
+      "version": "0.3.1",
+      "description": "Workflow skills for LLM-assisted programming: feature, review, critique, diagnose, refactor, impact-analysis, concurrency, breakdown, and more.",
+      "author": {
+        "name": "Duane Griffin"
+      },
+      "homepage": "https://github.com/duaneg/phronithm",
+      "repository": "https://github.com/duaneg/phronithm",
+      "license": "MIT",
+      "keywords": [
+        "workflow",
+        "skills",
+        "llm-assisted",
+        "code-review",
+        "refactor",
+        "diagnose",
+        "critique",
+        "feature",
+        "testing"
+      ]
+    }
+  ]
+}
