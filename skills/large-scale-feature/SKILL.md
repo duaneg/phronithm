@@ -155,7 +155,7 @@ Load the phronithm:feature skill and begin Phase 4. Implementation plan: docs/pl
 
 Substitute the actual feature name and path. Wait for user confirmation before continuing.
 
-Proceed with `/phronithm:feature` Phases 4–5 on the same feature branch for implementation and review. `/phronithm:feature` Phase 5 includes the postmortem — ensure it runs. If Phase 5 will not begin in this session, explicitly instruct the requester: "Phase 5 (Review, including postmortem) must be run before this feature is complete."
+Proceed with `/phronithm:feature` Phases 4–5 on the same feature branch for implementation and review. `/phronithm:feature` Phase 5 includes the retrospective — ensure it runs. If Phase 5 will not begin in this session, explicitly instruct the requester: "Phase 5 (Review, including retrospective) must be run before this feature is complete."
 
 ## Review gates
 

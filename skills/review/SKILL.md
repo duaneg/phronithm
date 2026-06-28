@@ -48,7 +48,7 @@ Examine code through one or more focused lenses. Each lens targets a specific cl
 
 1. **Identify** the code under review — files, functions, change set, impacted code using phronithm:impact-analysis.
 2. **Triage scope**: before selecting lenses, check whether the review is warranted at its current scope.
-   - If the scope is a mechanically verifiable no-op (rename with no unresolved references, typo in a string literal, version bump, regenerated code matching its generator input), output an empty findings list with a lenses-applied entry noting the triage decision, and stop — the Phase 3 exit gate (including postmortem) does not apply. If uncertain whether a change is trivially correct, proceed with the review.
+   - If the scope is a mechanically verifiable no-op (rename with no unresolved references, typo in a string literal, version bump, regenerated code matching its generator input), output an empty findings list with a lenses-applied entry noting the triage decision, and stop — the Phase 3 exit gate does not apply. If uncertain whether a change is trivially correct, proceed with the review.
    - If concurrency escalation applies to the entire scope, escalate rather than partially reviewing.
    - If static-analysis findings were consumed and comprehensively cover the scope, note the mechanical concerns already addressed — Phase 2 can skip those.
 3. **Select lenses**: choose from the lens catalogue below based on the code's characteristics. Default: all applicable lenses. The reviewer or requester may narrow the selection.

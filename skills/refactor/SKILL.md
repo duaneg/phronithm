@@ -167,7 +167,7 @@ After assessment (or pre-flight for single-file invocations), assess the active 
 7. **Stop** when further generalisation hits any of these:
    - Increases indirection depth (callers must trace through more layers to understand behaviour).
    - Requires callers to pass configuration or flags to distinguish cases that were previously just inline.
-   - The complexity-assessment lens scores the refactored code as net negative by more than 15% on any metric or more than 5% on a majority of metrics (provisional thresholds — see [complexity-assessment](${CLAUDE_PLUGIN_ROOT}/docs/lenses/complexity-assessment.md) for calibration notes and review trigger).
+   - The complexity-assessment lens scores the refactored code as net negative by more than 15% on any metric or more than 5% on a majority of metrics (provisional thresholds — see [complexity-assessment](${CLAUDE_PLUGIN_ROOT}/docs/lenses/complexity-assessment.md) for calibration notes).
    - There is no significant progress (5%+ on any metric) for more than three iterations.
 
 ### Pattern: Structural Decomposition
@@ -204,7 +204,7 @@ Stages may be marked by comment headers, descriptive comments, blank-line groups
 **Stop conditions**: Stop when any of these apply:
 - An extracted function has fewer than ~5 meaningful lines — it is likely over-decomposed.
 - The orchestrator contains business logic rather than reading as a plain call sequence — decomposition has not cleanly separated concerns.
-- The complexity-assessment lens scores the decomposed code as net negative (same provisional thresholds as the deduplication pattern — see [complexity-assessment](${CLAUDE_PLUGIN_ROOT}/docs/lenses/complexity-assessment.md) for calibration notes and review trigger).
+- The complexity-assessment lens scores the decomposed code as net negative (same provisional thresholds as the deduplication pattern — see [complexity-assessment](${CLAUDE_PLUGIN_ROOT}/docs/lenses/complexity-assessment.md) for calibration notes).
 - The orchestrator exceeds ~20 lines or no longer reads as a clear summary of the operation.
 - Inter-stage data coupling remains excessive despite state consolidation (step 2).
 
