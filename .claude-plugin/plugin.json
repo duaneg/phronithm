@@ -1,7 +1,7 @@
 {
   "name": "phronithm",
   "version": "0.3.1",
-  "description": "Workflow skills for LLM-assisted programming: breakdown, concurrency, critique, diagnose, feature, impact-analysis, investigate, large-scale-feature, persona-debug, pin-behaviour, refactor, review, static-analysis.",
+  "description": "Workflow skills for LLM-assisted programming: breakdown, concurrency, critique, diagnose, edit, feature, impact-analysis, investigate, large-scale-feature, persona-debug, pin-behaviour, refactor, review, static-analysis.",
   "author": {
     "name": "Duane Griffin"
   }

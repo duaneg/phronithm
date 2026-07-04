@@ -15,7 +15,7 @@ A Claude Code plugin (`phronithm`) shipping workflow skills for LLM-assisted pro
 
 - `.claude-plugin/plugin.json`: Plugin manifest. `.claude-plugin/marketplace.json`: Marketplace metadata.
 - `skills/<name>/SKILL.md`: Workflow skills. Each skill is a directory with a `SKILL.md` file. See `docs/skill-catalogue.md` for the full inventory and design decisions.
-- `agents/<name>.md`: Plugin subagents (auto-discovered, namespaced `phronithm:<name>` on install). `phronithm:critic` runs the phronithm:critique skill as a read-only subagent.
+- `agents/<name>.md`: Plugin subagents (auto-discovered, namespaced `phronithm:<name>` on install). `phronithm:critic` runs the phronithm:critique skill as a read-only subagent. `phronithm:editor` runs the phronithm:edit skill, returning a change log inline.
 - `docs/lenses/`: Review lens documents loaded by the phronithm:review skill.
 - `docs/critique.md`: Core critique template. Compose with a type appendix from `docs/critique/`: `critique-code`, `critique-design`, `critique-phronithm`, `critique-skill`, `critique-maths`.
 - `docs/agent-protocols.md`: Shared protocols for autonomous agents (scope rules, stop conditions, security escalation, red-green test discipline, PR discipline).
