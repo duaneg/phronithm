@@ -50,7 +50,7 @@ findings:
     review_by: "2026-09-01"       # optional; skill flags entries past this date
 ```
 
-`type` classifies the suppression (`false-positive` = tool is wrong; `accepted-risk` = real but deferred; `intentional` = not a problem here). `review_by` turns accepted risk into a time-bound commitment — the skill reports how many active exclusions are past their review date so suppressions don't accumulate silently.
+`type` classifies the suppression (`false-positive` = tool is wrong; `accepted-risk` = real but deferred; `intentional` = not a problem here). `review_by` turns accepted risk into a time-bound commitment; the skill reports how many active exclusions are past their review date.
 
 ## JSON output (`--format=json`)
 

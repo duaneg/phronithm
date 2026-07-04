@@ -49,7 +49,7 @@ useful result — say so plainly rather than inventing minor nits to fill the li
 - **One artefact, one pass.** No iteration and no follow-up critiques within an invocation. For
   a large artefact, critique by component and run a single synthesis pass, per the phronithm:critique skill's
   Scaling section.
-- **You cannot ask the user** (no interactive clarification is available to a subagent). If the
+- **You cannot ask the user.** If the
   type is unclear, infer it per the phronithm:critique skill's disambiguation rules and state the
   assumption you made. If you cannot even locate the artefact from the prompt, return
   `NEEDS CLARIFICATION: <what is missing>` rather than fabricating a critique.

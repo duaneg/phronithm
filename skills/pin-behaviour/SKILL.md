@@ -126,8 +126,7 @@ Record outputs as:
 - **value / return / exception assertions** where the surface is small and stable.
 - **golden-master snapshots** where output is large or structured. Snapshots are
   generated from current behaviour and **auto-accepted** as the oracle — there is
-  no inline human-approval step (design tension #2 dropped per the requester
-  decision recorded in the implementation plan). Each is recorded in `pinned[]`
+  no inline human-approval step. Each is recorded in `pinned[]`
   with `capture-kind: snapshot` so the Phase 4 critique and the downstream
   git-diff review can scrutinise it.
 - **Control non-determinism at the seam** — inject the clock/RNG, fix ordering —

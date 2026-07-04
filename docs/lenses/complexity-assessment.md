@@ -18,7 +18,7 @@ Before and after change, estimate using LLM:
 - **Duplication count**: Number of duplicate blocks.
 - **Cognitive complexity**: Nesting depth weighted by control flow — how hard code is to *read*, not just how many paths exist. Score increments for each control flow structure (if/else, switch, loops, try/catch, ternary, short-circuit operators) plus a structural nesting penalty per additional level. Unlike cyclomatic complexity, nesting itself increases the score independently of path count. Full definition: [SonarSource Cognitive Complexity white paper](https://www.sonarsource.com/docs/CognitiveComplexity.pdf).
 
-The six metrics above cover the key dimensions relevant to refactoring stop conditions: code volume (LOC), dependency structure (fan-in/fan-out), branching complexity (cyclomatic), interface complexity (parameter count), structural redundancy (duplication count), and readability (cognitive complexity). Coupling/cohesion metrics (CBO, LCOM and variants) are absent: computing them reliably requires language-specific static analysis tooling not universally available, and fan-in/fan-out already captures the coupling signal relevant to refactoring changes. The metric set is considered sufficient for the current stop-condition use case; add coupling/cohesion only if you encounter a refactor whose coupling or cohesion clearly worsened yet all six metrics registered improved or unchanged.
+The six metrics cover code volume (LOC), dependency structure (fan-in/fan-out), branching complexity (cyclomatic), interface complexity (parameter count), structural redundancy (duplication count), and readability (cognitive complexity). Coupling/cohesion metrics (CBO, LCOM) are out of scope — fan-in/fan-out already captures the relevant coupling signal. Add them only if a refactor's coupling or cohesion clearly worsens despite the six metrics registering improved or unchanged.
 
 ## Scoring
 
@@ -28,10 +28,6 @@ Each metric is computed for the code region before and after the change. Report:
 2. Direction: improved, unchanged, or degraded.
 
 No composite score. Consumers (e.g. [phronithm:refactor](../../skills/refactor/SKILL.md) stop conditions) define their own thresholds over individual deltas.
-
-*Provisional thresholds* — the 15%/5% figures are starting values chosen to tolerate minor trade-offs while rejecting clear regressions. Deduplication and decomposition may warrant different thresholds (deduplication's primary signal is duplication count; decomposition's is cognitive complexity), but a single shared threshold is used until observation justifies splitting.
-
-**Calibration check**: if the refactor stop condition repeatedly mis-classifies changes — firing on changes that are clear improvements, or failing to fire on clear regressions — the thresholds are miscalibrated; revisit them. Near-misses (the condition almost firing) are also informative.
 
 ## Scope
 

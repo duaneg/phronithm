@@ -151,7 +151,7 @@ After assessment (or pre-flight for single-file invocations), assess the active 
 
 3. **Generalise**: Extract the common structure. The generalisation should be a clear improvement: less code, clearer intent, single point of change.
    - Behaviour preservation is the invariant, including of side-effects. Differences in behaviour should be considered on a case-by-case basis and justified only when the result does not break backward compatibility policy (NOTE: project specific). Exact log messages and other side-effects not intended to modify *user-visible* behaviour can be rationalised.
-   - Error handling: be very careful in verifying error handling behaviour is *exactly* the same. Test this assumption with full test coverage. Add runtime assertions to verify equivalence.
+   - Error handling: be careful in verifying error handling behaviour is *exactly* the same. Test this assumption with full test coverage. Add runtime assertions to verify equivalence.
    - Logging: review logging messages, rationalise and generalise as required.
 
 4. **Test**: Run all tests that may be impacted.
@@ -167,7 +167,7 @@ After assessment (or pre-flight for single-file invocations), assess the active 
 7. **Stop** when further generalisation hits any of these:
    - Increases indirection depth (callers must trace through more layers to understand behaviour).
    - Requires callers to pass configuration or flags to distinguish cases that were previously just inline.
-   - The complexity-assessment lens scores the refactored code as net negative by more than 15% on any metric or more than 5% on a majority of metrics (provisional thresholds — see [complexity-assessment](${CLAUDE_PLUGIN_ROOT}/docs/lenses/complexity-assessment.md) for calibration notes).
+   - The [complexity-assessment](${CLAUDE_PLUGIN_ROOT}/docs/lenses/complexity-assessment.md) lens scores the refactored code as net negative by more than 15% on any metric or more than 5% on a majority of metrics. These are provisional starting values, chosen to tolerate minor trade-offs while rejecting clear regressions; a single shared threshold is used across deduplication and decomposition until observation justifies splitting them. If the stop condition repeatedly mis-classifies changes — firing on clear improvements, or failing to fire on clear regressions; near-misses are informative too — the thresholds are miscalibrated and should be revisited.
    - There is no significant progress (5%+ on any metric) for more than three iterations.
 
 ### Pattern: Structural Decomposition
@@ -204,7 +204,7 @@ Stages may be marked by comment headers, descriptive comments, blank-line groups
 **Stop conditions**: Stop when any of these apply:
 - An extracted function has fewer than ~5 meaningful lines — it is likely over-decomposed.
 - The orchestrator contains business logic rather than reading as a plain call sequence — decomposition has not cleanly separated concerns.
-- The complexity-assessment lens scores the decomposed code as net negative (same provisional thresholds as the deduplication pattern — see [complexity-assessment](${CLAUDE_PLUGIN_ROOT}/docs/lenses/complexity-assessment.md) for calibration notes).
+- The complexity-assessment lens scores the decomposed code as net negative, by the same provisional thresholds as the deduplication pattern (step 7, above).
 - The orchestrator exceeds ~20 lines or no longer reads as a clear summary of the operation.
 - Inter-stage data coupling remains excessive despite state consolidation (step 2).
 

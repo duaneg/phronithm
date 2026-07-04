@@ -16,6 +16,6 @@
 
 Prose clarity is substance for skill documents — an ambiguous sentence is a functional defect. Flag unclear phrasing as a finding, not a style issue.
 
-**Design intent**: For skill-type artefacts, verify that flagged phrasing is intentional design before classifying it as a defect. Check what the instruction is trying to accomplish before proposing rewrites — "subagent" may be deliberate Agent-tool usage, a multi-pass loop may be intentional, an apparently inverted condition may be the correct stop criterion. 43% false-positive rate was observed in one session when this check was skipped.
+**Design intent**: For skill-type artefacts, verify that flagged phrasing is intentional design before classifying it as a defect. Check what the instruction is trying to accomplish before proposing rewrites — "subagent" may be deliberate Agent-tool usage, a multi-pass loop may be intentional, an apparently inverted condition may be the correct stop criterion.
 
 When critiquing a SKILL.md, also apply [critique-phronithm](critique-phronithm.md) — it covers LLM instruction-quality dimensions that apply to all phronithm types.
