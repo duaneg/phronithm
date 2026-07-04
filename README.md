@@ -2,6 +2,10 @@
 
 Structured workflows for LLM agents, focussed on programming.
 
+*Phronesis (φρόνησις)*: practical wisdom. The capacity to judge and act well in a particular situation, weighing context and consequences rather than applying rules mechanically.
+
+*Algorithm (from algorismus, after الخوارزمي)*: a finite, precisely specified sequence of steps that transforms an input into an output.
+
 ## Skills
 
 - **phronithm:breakdown** — work decomposition and execution planning with dependency ordering and parallelism analysis
