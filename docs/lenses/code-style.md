@@ -1,8 +1,8 @@
-# Lens: Style
+# Lens: Code Style
 
-Convention adherence, concision, consistency, and mechanical choices. Covers what automated formatters cannot.
+Convention adherence, concision, consistency, and mechanical choices in code. Covers what automated formatters cannot.
 
-**Defers to:** [general](general.md) for naming intent and structural clarity; [comments](comments.md) for comment content and prose conventions. Formatter-enforced concerns (line length, brace style, indentation width, import ordering, string quoting) are out of scope.
+**Defers to:** [general](general.md) for naming intent and structural clarity; [comments](comments.md) for comment content; [docs-style](docs-style.md) for prose economy in comments and documentation. Formatter-enforced concerns (line length, brace style, indentation width, import ordering, string quoting) are out of scope.
 
 ## Consistency
 

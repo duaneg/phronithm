@@ -28,6 +28,7 @@ Applies to any document loaded as LLM context: SKILL.md files, CLAUDE.md section
    - Throat-clearing before the first actionable instruction
    - Examples added to unambiguous instructions (examples reduce ambiguity; where none exists, they add cost without value)
    - Constraints repeated for emphasis rather than restructured for salience
+   - The named patterns in the [docs-style](../lenses/docs-style.md) lens: rationale restatement, design-history aside, cross-reference justification, announcing honesty, explained metaphor
 
    **Concision trap**: Cuts motivated by token efficiency can remove load-bearing content. Before flagging text as redundant, verify it is genuinely decorative. Cross-check against axes 7 and 8: does removal weaken a high-risk instruction (obedience failure mode), reduce visibility of a key constraint (salience), drop a diagnostic signal, or delete an explicit prohibition? If yes, the text is not redundant — it is misplaced emphasis. Restructure for salience rather than delete. Concision that removes load-bearing content is a functional defect.
 

@@ -1,6 +1,6 @@
 # Lens: General
 
-Correctness, clarity, naming, structure. Flags but does not deeply analyse specialist concerns — defer to [error-handling](error-handling.md), [data-structures](data-structures.md), [style](style.md). If reviewing with only this lens, treat flagged concerns as open findings.
+Correctness, clarity, naming, structure. Flags but does not deeply analyse specialist concerns — defer to [error-handling](error-handling.md), [data-structures](data-structures.md), [code-style](code-style.md). If reviewing with only this lens, treat flagged concerns as open findings.
 
 **Assumes sequential code.** Escalate to [phronithm:concurrency](../../skills/concurrency/SKILL.md) if shared mutable state, threads/tasks, or synchronisation primitives are present.
 
@@ -30,13 +30,13 @@ Correctness, clarity, naming, structure. Flags but does not deeply analyse speci
 
 - Can a reader understand intent without cross-referencing unrelated files?
 - Distant coupling and implicit invariants: does the code rely on guarantees or conventions established elsewhere, making it unreadable in isolation?
-- Control flow: obvious which path executes under which conditions? Deep nesting (>3 levels) is a red flag; reduction techniques are [style](style.md).
+- Control flow: obvious which path executes under which conditions? Deep nesting (>3 levels) is a red flag; reduction techniques are [code-style](code-style.md).
 - Abstraction level: single level per function, not mixed orchestration and detail.
-- Expression and statement density is [style](style.md).
+- Expression and statement density is [code-style](code-style.md).
 
 ### Naming
 
-Whether names communicate the right meaning. Mechanical conventions (casing, prefix/suffix rules, concision, shadowing) are [style](style.md).
+Whether names communicate the right meaning. Mechanical conventions (casing, prefix/suffix rules, concision, shadowing) are [code-style](code-style.md).
 
 - Describe *what*, not *how*. Implementation details in names couple callers to internals.
 - Consistent vocabulary: one term per concept.

@@ -53,7 +53,7 @@ Examine code through one or more focused lenses. Each lens targets a specific cl
    - If static-analysis findings were consumed and comprehensively cover the scope, note the mechanical concerns already addressed — Phase 2 can skip those.
 3. **Select lenses**: choose from the lens catalogue below based on the code's characteristics. Default: all applicable lenses. The reviewer or requester may narrow the selection.
    - Code with concurrency → use the phronithm:concurrency skill instead. Concurrency requires diagnostic reasoning, not checklist review.
-   - Diff includes LLM instruction artefacts → always apply the phronithmic critique: [critique](${CLAUDE_PLUGIN_ROOT}/docs/critique.md) + [critique-skill](${CLAUDE_PLUGIN_ROOT}/docs/critique/critique-skill.md) + [critique-phronithm](${CLAUDE_PLUGIN_ROOT}/docs/critique/critique-phronithm.md). Detection: files matching `agents/*.md`, `skills/*/SKILL.md`, `*protocol*.md`, or files containing system-prompt-like instruction patterns (imperative directives to an LLM, role assignments, behavioural constraints). This catches obedience failure modes, triggering clarity issues, and adversarial edge cases that standard code review lenses miss.
+   - Diff includes LLM instruction artefacts → always apply the phronithmic critique: [critique](${CLAUDE_PLUGIN_ROOT}/docs/critique.md) + [critique-skill](${CLAUDE_PLUGIN_ROOT}/docs/critique/critique-skill.md) + [critique-phronithm](${CLAUDE_PLUGIN_ROOT}/docs/critique/critique-phronithm.md), plus the [docs-style](${CLAUDE_PLUGIN_ROOT}/docs/lenses/docs-style.md) lens for prose economy. Detection: files matching `agents/*.md`, `skills/*/SKILL.md`, `*protocol*.md`, or files containing system-prompt-like instruction patterns (imperative directives to an LLM, role assignments, behavioural constraints). This catches obedience failure modes, triggering clarity issues, and adversarial edge cases that standard code review lenses miss.
 4. **Read** the code. Understand what it does before looking for what's wrong.
 
 Exit criteria: Scope is defined. Lenses are selected. The code is understood.
@@ -97,7 +97,8 @@ Available lenses (in `docs/lenses/`):
 - **[general](${CLAUDE_PLUGIN_ROOT}/docs/lenses/general.md)**: Correctness, clarity, naming, structure.
 - **[data-structures](${CLAUDE_PLUGIN_ROOT}/docs/lenses/data-structures.md)**: Appropriate choice and use of data structures.
 - **[error-handling](${CLAUDE_PLUGIN_ROOT}/docs/lenses/error-handling.md)**: Error propagation, consistency, and taxonomy.
-- **[style](${CLAUDE_PLUGIN_ROOT}/docs/lenses/style.md)**: Craft, convention, and idiomatic language use.
+- **[code-style](${CLAUDE_PLUGIN_ROOT}/docs/lenses/code-style.md)**: Craft, convention, and idiomatic language use in code.
+- **[docs-style](${CLAUDE_PLUGIN_ROOT}/docs/lenses/docs-style.md)**: Documentation and instruction prose economy.
 - **[comments](${CLAUDE_PLUGIN_ROOT}/docs/lenses/comments.md)**: Inline and doc comment content. Natural language prose conventions.
 - **[complexity-assessment](${CLAUDE_PLUGIN_ROOT}/docs/lenses/complexity-assessment.md)**: LoC, cyclomatic and cognitive complexity metrics.
 - **[io](${CLAUDE_PLUGIN_ROOT}/docs/lenses/io.md)**: IO and filesystem operations. Failure modes, resource management, blocking behaviour, atomicity.

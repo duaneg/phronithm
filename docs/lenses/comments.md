@@ -4,11 +4,13 @@ Inline comments, doc comments, and prose conventions.
 
 **Out of scope:** file-level boilerplate (licence headers, copyright notices).
 
-**Defers to:** [style](style.md) for formatter-enforced conventions; [general](general.md) for naming and structural clarity that removes the need for comments.
+**Defers to:** [code-style](code-style.md) for formatter-enforced conventions; [docs-style](docs-style.md) for prose economy; [general](general.md) for naming and structural clarity that removes the need for comments.
 
 ## Prose Conventions
 
-- Terse, professional, direct. Longer passages (design rationale, trade-off discussion) may express more personality.
+Applies [docs-style](docs-style.md), plus comment-specific nuances:
+
+- Longer passages (design rationale, trade-off discussion) may express more personality than terse inline comments.
 - Spell-check all prose. Domain terms and identifiers are not typos but should be consistent and defined on first use where non-obvious.
 - Higher-level context first, then implementation details.
 
@@ -36,4 +38,4 @@ Public interface contract — audience is callers, not maintainers.
 - **Lead with a single-sentence summary** meaningful in isolation (indexes, tooltips, search results).
 - **Document the contract, not the implementation.** Parameters, return values, error conditions, preconditions, postconditions, side effects. Omit internal details the caller cannot rely on.
 - **Examples earn their keep.** Include when the calling pattern is non-obvious. Remove examples that restate the signature.
-- Tooling-specific formatting (Javadoc, rustdoc, JSDoc, etc.) is [style](style.md).
+- Tooling-specific formatting (Javadoc, rustdoc, JSDoc, etc.) is [code-style](code-style.md).

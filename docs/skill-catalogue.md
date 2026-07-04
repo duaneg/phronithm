@@ -8,7 +8,7 @@ Inventory of implemented and planned skills.
 - **[phronithm:concurrency](../skills/concurrency/SKILL.md)**: Systematic concurrency analysis. Standalone skill (not a review lens) because it requires building and verifying a concurrency model, not checklist review.
 - **[phronithm:critique](../skills/critique/SKILL.md)**: Direct evaluation of any artefact (code, design, skill document) against the critique framework axes. Lighter-weight than phronithm:review — no lens workflow, no phases. Produces structured findings with severity.
 - **[phronithm:diagnose](../skills/diagnose/SKILL.md)**: Systematic fault isolation: triage, investigate, reproduce, diagnose, fix.
-- **[phronithm:edit](../skills/edit/SKILL.md)**: Applies [documentation-prose-style](documentation-prose-style.md) to a document or provided text — trims prose while preserving informative content. Run as the `phronithm:editor` subagent for a standalone editing pass, or invoked directly.
+- **[phronithm:edit](../skills/edit/SKILL.md)**: Applies the [docs-style](lenses/docs-style.md) lens to a document or provided text — trims prose while preserving informative content. Run as the `phronithm:editor` subagent for a standalone editing pass, or invoked directly.
 - **[phronithm:feature](../skills/feature/SKILL.md)**: End-to-end feature delivery: brainstorm, design, plan, implement, review.
 - **[phronithm:impact-analysis](../skills/impact-analysis/SKILL.md)**: Prerequisite skill: given a change, determine what code is affected directly, transitively, and implicitly. Uses [LSP](lsp/integration.md) for compiler-grade tracing when available; falls back to grep. Produces an impact map consumed by other skills (phronithm:review, phronithm:refactor, phronithm:concurrency, phronithm:diagnose).
 - **[phronithm:investigate](../skills/investigate/SKILL.md)**: Domain-general investigation — settle an open claim to a result-with-rigour. The investigative sibling of `phronithm:feature`: shares its epistemic backbone but reshapes the core around a moving target (the [investigation loop](investigation-loop.md)) and a claim-plus-evidence deliverable. Covers research, code/perf spikes, open-question root-cause, and unfamiliar-API discovery, with domain specifics (e.g. a maths rigour ladder) deferred to project `CLAUDE.md`.
@@ -35,7 +35,8 @@ Implemented:
 - **[general](lenses/general.md)**: Correctness, clarity, naming, structure.
 - **[data-structures](lenses/data-structures.md)**: Appropriate choice and use of data structures.
 
-- **[style](lenses/style.md)**: Craft, convention, and idiomatic language use. What automated tools cannot enforce.
+- **[code-style](lenses/code-style.md)**: Craft, convention, and idiomatic language use in code. What automated tools cannot enforce.
+- **[docs-style](lenses/docs-style.md)**: Documentation and instruction prose economy — trims narrative and rationale restatement while preserving load-bearing content. Applied by [phronithm:edit](../skills/edit/SKILL.md) and the [critique-phronithm](critique/critique-phronithm.md) appendix.
 - **[comments](lenses/comments.md)**: Inline and doc comment content.
 - **[io](lenses/io.md)**: IO and filesystem operations. Failure modes, resource management, blocking behaviour, atomicity.
 - **[numerical](lenses/numerical.md)**: Floating-point and numeric code. Cancellation, summation, conditioning vs stability, comparison/tolerance, special values, representation, cross-platform reproducibility, and numerical testing. The deep-dive checklist behind the [critique-maths](critique/critique-maths.md) appendix.

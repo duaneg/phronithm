@@ -5,7 +5,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob
 
 # Edit: Prose Style Application
 
-Apply [documentation-prose-style](${CLAUDE_PLUGIN_ROOT}/docs/documentation-prose-style.md) to a document or provided text. Trims prose that violates its patterns while preserving everything informative, readable, and load-bearing. An editing pass, not a review — it fixes what phronithm:critique's critique-phronithm appendix would otherwise only flag.
+Apply the [docs-style](${CLAUDE_PLUGIN_ROOT}/docs/lenses/docs-style.md) lens to a document or provided text. Trims prose that violates its patterns while preserving everything informative, readable, and load-bearing. An editing pass, not a review — it fixes what phronithm:critique's critique-phronithm appendix would otherwise only flag.
 
 ## Interface
 
@@ -20,7 +20,7 @@ Apply [documentation-prose-style](${CLAUDE_PLUGIN_ROOT}/docs/documentation-prose
 
 ## Workflow
 
-1. **Load the guide**: Read [documentation-prose-style](${CLAUDE_PLUGIN_ROOT}/docs/documentation-prose-style.md) in full. Its five goals and Examples section are the only criteria applied — this skill does not add house-style rules beyond what the guide states.
+1. **Load the guide**: Read [docs-style](${CLAUDE_PLUGIN_ROOT}/docs/lenses/docs-style.md) in full. Its five goals and Examples section are the only criteria applied — this skill does not add house-style rules beyond what the guide states.
 2. **Read the artefact** in full before editing. Understand what it is for, so a trim doesn't remove load-bearing content mistaken for narrative.
 3. **Scan** for each pattern in the guide's Examples section — rationale restatement, design-history asides, cross-reference justification, announcing honesty, explained metaphor — plus the general rules: unnecessary verbs/adverbs, and the Current goal's historical notes/past decisions/process narration.
 4. **Edit**: apply the minimal cut for each violation. Some patterns reduce to a shorter sentence (see the guide's "after" examples); others cut entirely. Do not touch passages that don't match a named pattern. If Edit/Write are among your available tools, apply each edit to the file directly. If they are not, do not attempt to write — build the change log instead (see Report).

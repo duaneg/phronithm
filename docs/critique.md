@@ -42,7 +42,8 @@ Append the relevant artefact-type module after this core prompt to add type-spec
 | general | Correctness, clarity, naming, structure. Starting point. |
 | error-handling | Handler correctness, propagation, taxonomy. |
 | data-structures | Structure selection, invariants. Run before error-handling. |
-| style | Convention adherence, concision. |
+| code-style | Convention adherence, concision, in code. |
+| docs-style | Documentation and instruction prose economy. |
 | comments | Inline and doc comment quality. |
 | complexity-assessment | Measure complexity change; refactor stop condition. |
 | io | IO failure modes, resource management, atomicity. |

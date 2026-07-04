@@ -1,4 +1,6 @@
-# Documentation Prose Style
+# Lens: Docs Style
+
+Documentation and instruction prose — SKILL.md bodies, CLAUDE.md, design docs, prompts, and other free-form text loaded as context. For code comments, [comments](comments.md) layers comment-specific conventions on top of this baseline.
 
 Documentation prose should be:
 - Written for: intelligent context-aware readers, human and LLM, familiar with the state of the art.
