@@ -20,6 +20,8 @@ Apply the [docs-style](${CLAUDE_PLUGIN_ROOT}/docs/lenses/docs-style.md) lens to 
 
 ## Workflow
 
+When the artefact is a file (or files) in a git working tree, follow the [pre-flight](${CLAUDE_PLUGIN_ROOT}/docs/pre-flight.md) check first. Do not continue until it passes. When the artefact is literal text provided in the request, this does not apply.
+
 1. **Load the guide**: Read [docs-style](${CLAUDE_PLUGIN_ROOT}/docs/lenses/docs-style.md) in full. Its five goals and Examples section are the only criteria applied — this skill does not add house-style rules beyond what the guide states.
 2. **Read the artefact** in full before editing. Understand what it is for, so a trim doesn't remove load-bearing content mistaken for narrative.
 3. **Scan** for each pattern in the guide's Examples section — rationale restatement, design-history asides, cross-reference justification, announcing honesty, explained metaphor — plus the general rules: unnecessary verbs/adverbs, and the Current goal's historical notes/past decisions/process narration.
@@ -35,6 +37,10 @@ Apply the [docs-style](${CLAUDE_PLUGIN_ROOT}/docs/lenses/docs-style.md) lens to 
 ## Relationship to other skills
 
 phronithm:critique's critique-phronithm appendix flags verbosity in skill and CLAUDE.md-style artefacts as findings; this skill fixes them directly instead of reporting them. Run phronithm:critique first when correctness or design also need evaluation — this skill only edits, it never assesses.
+
+## Commit discipline
+
+See [agent-protocols § Commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/agent-protocols.md). Applies only when edits were applied directly to a file in a git working tree (step 4, Edit/Write available) — commit the edited file(s) together, referencing the pattern(s) corrected. When the artefact was literal text, or Edit/Write were unavailable and a change log was returned instead, there is nothing for this skill to commit — the caller applies and commits it.
 
 ## Scaling
 

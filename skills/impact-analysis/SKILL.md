@@ -174,7 +174,7 @@ Exit criteria: Each affected site has a distance, coupling, and risk classificat
 
 Challenge the map. Actively seek affected code that was missed. Co-change history is a discovery mechanism, not just a verification step — it catches dependencies invisible to static analysis and grep: tools hardcoded to specific values, test fixtures assuming old shapes, configuration referencing removed entities. Treat Phase 4 findings as first-class discoveries, not confirmations of earlier phases.
 
-1. **Check co-change history**: use `git log` to find files that historically change together with the change surface. Sites that frequently co-change but aren't in the map are suspicious — investigate and either add them or document why they're unaffected.
+1. **Check co-change history**: use the [co-change](${CLAUDE_PLUGIN_ROOT}/docs/vcs.md#co-change) operation to find files that historically change together with the change surface. Sites that frequently co-change but aren't in the map are suspicious — investigate and either add them or document why they're unaffected.
 
 2. **Challenge exclusions**: for each dependent excluded in Phase 2, restate what would have to be true for it to be affected. Is that condition actually impossible, or merely not obvious? When LSP is available, use `textDocument/references` to verify that no references were missed by earlier tracing.
 

@@ -21,6 +21,7 @@ A Claude Code plugin (`phronithm`) shipping workflow skills for LLM-assisted pro
 - `docs/agent-protocols.md`: Shared protocols for autonomous agents (scope rules, stop conditions, security escalation, red-green test discipline, PR discipline).
 - `docs/code-patterns.md`: Structural duplication patterns. Referenced by phronithm:refactor and phronithm:review lenses.
 - `docs/investigation-loop.md`: Canonical, domain-general investigation micro-loop (observe → multi-hypothesis → cheapest-falsify-first → update → verify). Referenced (not re-described) by phronithm:diagnose, phronithm:feature, phronithm:investigate, and phronithm:persona-debug.
+- `docs/vcs.md`: Named VCS history-inspection operations (recent-changes, fix-history, churn, co-change, last-activity, etc.). Referenced by phronithm:diagnose, phronithm:impact-analysis, and phronithm:refactor so VCS-specific commands live in one file.
 - `docs/lsp/`: LSP integration guides. `integration.md` is the method-agnostic operation catalogue for phronithm:impact-analysis. Language-specific appendices: `typescript.md`, `java.md`.
 - `configs/static-analysis/`: Default linter/type-checker configs (ruff, mypy, gcc flags, spotbugs, clang-tidy) used by the phronithm:static-analysis skill as fallbacks when target projects lack their own.
 - `tools/`: Python helpers (stdlib only) invoked at runtime by phronithm:impact-analysis and phronithm:refactor skills.

@@ -63,7 +63,7 @@ The observe → hypothesise → cheapest-test → update cycle here follows the 
    - **Data flow**: in multi-stage pipelines or transformation chains, find the stage where correct input first produces incorrect output. Changes upstream of the actual defect treat symptoms.
    - **State**: when the symptom is unexpected state (wrong value, wrong enum, missing flag), trace who **writes** the state, not just who reads it.
    - **Concurrency**: the defect may originate in a different thread, task, or process — trace shared state and ordering dependencies, not just the failing execution.
-2. **Check history**: recent commits touching the affected area (`git log -p`). Issue trackers and commit messages for similar past bugs. Recurring bugs in the same code signal structural problems — note them.
+2. **Check history**: [recent-changes](${CLAUDE_PLUGIN_ROOT}/docs/vcs.md#recent-changes) touching the affected area. Issue trackers and commit messages for similar past bugs. Recurring bugs in the same code signal structural problems — note them.
 3. **Search for siblings**: if the bug is in one instance of a pattern, check other instances.
 4. **Gather diagnostics**: logs, traces, profiling data, test output — whatever is available. Record what you observe; do not rely on memory.
 5. **Nested-tool / environment conflict**: Does the tool under investigation use the same infrastructure as this environment (sandbox, bwrap, network stack, runtime)? If so, test the nesting hypothesis first — before filesystem-level hypotheses. Script comments, dependency declarations, or error messages mentioning `bwrap`, `seccomp`, `cgroup`, or similar isolation mechanisms are direct signals.
@@ -108,7 +108,7 @@ Exit criteria: The reproduction passes. The full affected test suite passes. Ass
 2. **Update documentation** if the bug exposed a gap.
 3. **Flag structural issues**: file them. Do not scope-creep the fix, but do not let findings evaporate.
 4. **Prevention check**: run phronithm:static-analysis on the affected area to find similar issues.
-5. **Commit** per [agent-protocols § Commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/agent-protocols.md). Commit the fix and regression test together.
+5. **Commit** — see [Commit discipline](#commit-discipline).
 
 **Exit gate**: Phase 6 is not complete until the fix is committed.
 
@@ -126,6 +126,10 @@ Exit criteria: The reproduction passes. The full affected test suite passes. Ass
 
 **Stop conditions**: root cause fixed; bug outside your control with tactical patch or upstream report; evidence exhausted without convergence (escalate with documentation); three backtrack cycles without new evidence (the [investigation loop](${CLAUDE_PLUGIN_ROOT}/docs/investigation-loop.md)'s bounded-retry, instantiated for debugging).
 
+## Commit discipline
+
+See [agent-protocols § Commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/agent-protocols.md). Commit the fix and regression test together.
+
 ## Principles
 
 The general investigation mechanics — observe-first, multiple live hypotheses, cheapest-falsification-first, predict-then-verify — are the [investigation loop](${CLAUDE_PLUGIN_ROOT}/docs/investigation-loop.md); see it for the full loop. The principles below specialise it for fault isolation.
@@ -141,14 +145,13 @@ Optional analysis when the bug suggests a pattern, reveals systemic problems, or
 **Gather:**
 
 1. Bug history for the affected area:
-   - `git log --all --grep="fix\|bug" -- path/to/file.ext` — fixes touching this file
-   - `git log -p --follow path/to/file.ext` — full change history
+   - [fix-history](${CLAUDE_PLUGIN_ROOT}/docs/vcs.md#fix-history) and [full-history](${CLAUDE_PLUGIN_ROOT}/docs/vcs.md#full-history) for the file
    - Search issue tracker for file/module name; check PR comments for disputed or revised fixes
 2. Related bugs with similar symptoms:
    - Search issue tracker for error messages, exception types
-   - `git log --all --grep="revert\|rollback"` — failed fixes indicate complexity
+   - [failed-fixes](${CLAUDE_PLUGIN_ROOT}/docs/vcs.md#failed-fixes) — reverted fixes indicate complexity
 3. Change frequency and author churn:
-   - `git log --oneline --since="6 months ago" -- path/` — high churn suggests instability
+   - [churn](${CLAUDE_PLUGIN_ROOT}/docs/vcs.md#churn) over a six-month window — high churn suggests instability
 
 **Indicators**: bug clustering, fix-refix cycles, cross-cutting failures, defensive coding accumulation, test gaps, author turnover.
 

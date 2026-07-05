@@ -58,7 +58,7 @@ Follow the [pre-flight](${CLAUDE_PLUGIN_ROOT}/docs/pre-flight.md) check. Do not 
 
 - Run a grep for `TODO|WIP|FIXME` across all target files (including body and header comments, function names, and file-level notes).
 - Check for a coverage heuristic: if no test file in the project references the target module or file by name, treat it as having no runnable tests.
-- Check git log for the target files — if there has been no recent activity (no commits in the last 90 days) combined with no test coverage, treat this as a signal the code is parked.
+- Check the target files' [last-activity](${CLAUDE_PLUGIN_ROOT}/docs/vcs.md#last-activity) — no commits in the last 90 days combined with no test coverage signals parked code.
 
 If any target file or function matches two or more of these indicators (WIP markers present, no test coverage, no recent git activity), flag as:
 
@@ -222,7 +222,6 @@ After the pattern terminates, perform a documentation check: check whether the r
 
 See [agent-protocols § Commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/agent-protocols.md). Additional refactor-specific guidance:
 
-- Branch naming: `git checkout -b refactor/<scope-description>`.
 - After each commit, check whether a stop condition has been reached before continuing.
 - After context compaction, treat all prior file reads as stale — re-read any file before editing, even if it was read earlier in the session.
 

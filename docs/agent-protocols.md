@@ -38,10 +38,16 @@ Do not use `git checkout -b <branch-name>` without an explicit base — this bra
 whatever local HEAD is checked out, which may be ahead of `origin/HEAD` with unrelated local
 commits, contaminating the PR diff.
 
-**No force push.** Never use `git push --force` or `git push --force-with-lease`. If `git push`
-is rejected (non-fast-forward), halt and report to the escalation target — the rejection means
-another agent or process has pushed to the same branch, and force-pushing would destroy their
-work. The escalation target will resolve the conflict.
+**Force push.** Force-pushing (`git push --force` or `--force-with-lease`) is permitted only on
+a branch this agent created and has exclusively owned since — no push to it has ever been
+rejected as non-fast-forward, meaning no other agent or process has pushed to it in the
+meantime. Prefer `--force-with-lease`: it aborts rather than overwriting if the remote ref moved
+since your last fetch. Never force-push `origin/HEAD` or any other shared/default branch.
+
+If a push — forced or not — is rejected as non-fast-forward, halt and report to the escalation
+target. The rejection means another agent or process has pushed to the same branch since you
+last fetched it, and force-pushing would destroy their work. The escalation target will resolve
+the conflict.
 
 ## Pre-flight test baseline
 

@@ -18,7 +18,7 @@ Serves human teams planning work and agent teams needing structured task assignm
   - An architecture document path (from `/phronithm:large-scale-feature` Phase 2 — requirements and design already settled; Phase 1 step 1 is abbreviated)
   - A list of existing work items to re-plan (issue numbers, TODO items, or equivalent)
 
-**Pre-flight check**: Before beginning analysis, verify the goal is specific enough to decompose. A valid goal must have a clear done condition — you must be able to answer "how would we know this is complete?" If the goal is too vague to answer that question, stop and ask for clarification. Do not begin analysis on an underspecified goal.
+**Goal specificity check**: Before beginning analysis, verify the goal is specific enough to decompose. A valid goal must have a clear done condition — you must be able to answer "how would we know this is complete?" If the goal is too vague to answer that question, stop and ask for clarification. Do not begin analysis on an underspecified goal.
 
 ### Produces
 
@@ -140,7 +140,7 @@ Follow the [pre-flight](${CLAUDE_PLUGIN_ROOT}/docs/pre-flight.md) check. Do not 
 
 Read `CLAUDE.md` for the target project. Check dependency manifests to identify the tech stack.
 
-**Goal validation**: Confirm the goal passes the pre-flight check stated in [Requires](#requires). If the goal is a vague description that cannot pass the "how would we know this is complete?" test, stop here and ask for clarification before proceeding.
+**Goal validation**: Confirm the goal passes the goal specificity check stated in [Requires](#requires). If the goal is a vague description that cannot pass the "how would we know this is complete?" test, stop here and ask for clarification before proceeding.
 
 ### Phase 1: Analyse
 
@@ -249,4 +249,10 @@ Build the execution plan from the analysis.
 
    If the requester requests changes: apply them and re-present. If after two rounds of revision the goal itself is changing materially (new components, changed scope), re-run Phase 1 on the revised goal rather than patching the plan incrementally. If running non-interactively, proceed directly to Phase 3 after the quality check.
 
-7. **Commit** the decomposition plan document to the repo on the current branch. Commit message should summarise: number of work units, critical path length, and key risks identified.
+7. **Commit** the decomposition plan document — see [Commit discipline](#commit-discipline).
+
+## Commit discipline
+
+See [agent-protocols § Commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/agent-protocols.md). Additional breakdown-specific guidance:
+
+- Commit message should summarise: number of work units, critical path length, and key risks identified.

@@ -52,6 +52,10 @@ When in doubt, start Phase 1. The model size tells you which path you're on.
 
 ## Workflow
 
+### Startup
+
+Follow the [pre-flight](${CLAUDE_PLUGIN_ROOT}/docs/pre-flight.md) check. Do not continue until it passes. This analysis is read-only through Phase 2; the check matters once Phase 3 stress-test harnesses or fixes are committed.
+
 ### Phase 1: Model
 
 Build a concurrency model:

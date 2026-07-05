@@ -42,6 +42,8 @@ Phases can be entered independently:
 
 ### Startup
 
+Follow the [pre-flight](${CLAUDE_PLUGIN_ROOT}/docs/pre-flight.md) check. Do not continue until it passes.
+
 Read the persona in full. If it references other documents (critique frameworks, lens documents, pre-flight checks, referenced skills), read those too — defects sometimes live in consumed documents rather than the persona itself.
 
 ### Phase 1: Identify
@@ -125,6 +127,10 @@ Common defect types for natural-language instruction specs:
 - **Suppressed escape**: The agent satisfies the formal exit condition of an escape hatch (produces a test file, writes output, calls a function) without achieving the intended outcome. The escape hatch checks for an action, not for the quality or correctness of that action. Fix: tighten the escape hatch to check for the intended outcome, not mere existence of the output.
 
 - **Instruction conflict**: Two instructions produce contradictory guidance for the triggering case. The agent follows one (often the more specific or later-appearing) and ignores the other. Fix: reconcile — determine which is authoritative and remove or subordinate the other.
+
+## Commit discipline
+
+See [agent-protocols § Commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/agent-protocols.md). Commit the fixed persona/skill file once Phase 4 verification passes. There is no automated regression test for an instruction-spec change — the verification-result is the regression evidence; record the triggering case and outcome in the commit message.
 
 ## Principles
 

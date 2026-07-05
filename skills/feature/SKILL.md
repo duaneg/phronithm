@@ -32,14 +32,14 @@ Deliver a feature from initial idea to working, tested, documented code.
   - Dependency ordering and parallelisation opportunities
   - Handoff footer — required text defined in Phase 3, step 5
 - **implementation-summary** (Phase 4): Phase 4 structured output document. Must contain:
-  - Branch name
+  - Working branch
   - Reference to the implementation-plan (filename or path)
   - Files modified (list of paths changed during implementation)
   - Per-step record: decisions taken, deviations from plan, surprises encountered
   - Per-step critique subagent findings: severity-tagged with dispositions (addressed before exit / noted for Phase 5)
   - Success criteria verification: each criterion from Phase 1 with pass/fail status, its target and achieved rigour level with evidence, and — when achieved is below target — an explicit upgrade path
   - Handoff footer — required text defined in Phase 4
-- **changes** (Phase 4): Code modifications, tests, and commit history. Phase 5 entry condition: a git checkout of the feature branch must be accessible.
+- **changes** (Phase 4): Code modifications, tests, and commit history. Phase 5 entry condition: the committed Phase 4 changes must be accessible to the Phase 5 session.
 - **documentation** (Phase 5, optional): Documentation a future maintainer needs that is not obvious from the code or existing project docs. Produced when Phase 5 steps 3–4 identify gaps; absent otherwise.
 - **retrospective** (Phase 5): A short workflow retrospective — consolidated serialisation-readiness ratings and any skill-friction observed during the workflow — folded into the PR description / final commit. Not a separately persisted artefact.
 
@@ -187,7 +187,7 @@ Break the design into implementable steps. **Do not use the Task tool in this ph
    ## Implementation-summary fields
    The implementation-summary must be saved to: docs/plans/<name>-implementation.md
    It must include:
-   - Branch name
+   - Working branch
    - Reference to this plan file (filename or path)
    - Files modified (list of paths changed during implementation)
    - Per-step record: decisions taken, deviations from plan, surprises encountered
@@ -219,7 +219,8 @@ Execute the plan. Test after each step.
 1. **Implement** one step at a time. When parallelising by category (e.g. lint rule, component, concern), assign each file to exactly one agent — the one whose category has the most planned edits to that file (tie: first-listed category in the plan wins). For files that also need secondary-category fixes, include those in that agent's initial Task prompt rather than dispatching a second agent to the same file. Last-write-wins silently drops fixes from losing agents.
    When delegating steps to agents, include in the task prompt: (a) an explicit completion requirement — "Continue through to completion, including commit and any cleanup — do not stop mid-task to wait for further instruction"; and (b) before reporting done, the agent must run the project's formatter and type-checker on all changed files and fix any new errors.   **For features integrating unfamiliar external APIs**: validate auth with one minimal call before building full provisioning logic. Add one resource type at a time. Expect 3–5 discovery round-trips for niche or poorly-documented APIs — this is normal, not a sign of a flawed approach. Auth format, required fields, field validity constraints, and resource interdependencies are typically not in training data and must be discovered empirically.
 2. **Test** the step against its acceptance criteria. Run the full affected test suite — regressions are easier to fix immediately. Consider running phronithm:static-analysis periodically to catch mechanical issues (null safety, type errors, resource leaks) early. For non-code changes: mentally execute at least one concrete example. If the change is conditional (prose with branches, config with overrides), cover all decision paths or document which are untestable and why. Record each criterion's **achieved rigour level** against its Phase 1 target, not just pass/fail: when the achieved level is below target (e.g. demonstrated once but not yet held by an automated check), note the upgrade path rather than treating the criterion as fully done.
-3. **Commit** with a message that summarises the step, decisions taken, and anything surprising encountered. Before staging, run the project's formatter on changed files — pre-commit hooks catch format violations, but catching them before staging avoids a fix-restage-recommit cycle.4. **Critique** the step's changes by spawning a Sonnet Agent (`model: "sonnet"`) to invoke `/phronithm:critique` with [critique-code](${CLAUDE_PLUGIN_ROOT}/docs/critique/critique-code.md). Critique must run in a separate context from the code author — never invoke it directly in this session. Spawn the agent immediately after the commit; while it runs, proceed to execute the next step concurrently. Critique is slow; you may complete several steps before an earlier critique finishes.
+3. **Commit** with a message that summarises the step, decisions taken, and anything surprising encountered. Before staging, run the project's formatter on changed files — pre-commit hooks catch format violations, but catching them before staging avoids a fix-restage-recommit cycle.
+4. **Critique** the step's changes by spawning a Sonnet Agent (`model: "sonnet"`) to invoke `/phronithm:critique` with [critique-code](${CLAUDE_PLUGIN_ROOT}/docs/critique/critique-code.md). Critique must run in a separate context from the code author — never invoke it directly in this session. Spawn the agent immediately after the commit; while it runs, proceed to execute the next step concurrently. Critique is slow; you may complete several steps before an earlier critique finishes.
 5. **Reassess** after each step. Has the implementation revealed something the design missed? If the gap is small, note it and continue. If it changes the approach, return to the appropriate earlier phase. When the target is a *finding* rather than a known deliverable (a spike, a root-cause question, an unfamiliar-API probe), this reassess-and-re-plan step *is* the [investigation loop](${CLAUDE_PLUGIN_ROOT}/docs/investigation-loop.md) — let results reshape the question rather than treating discovery as a deviation; reach for `/phronithm:investigate` when discovery is the product.
 
 Before the exit gate, wait for any outstanding critique subagents to complete. Integrate findings: address blockers before proceeding, note minor issues for Phase 5 clean-up.
@@ -261,14 +262,13 @@ Validate the complete feature.
 3. **Document** anything a future maintainer needs to know that isn't obvious from the code.
 4. **Update project docs**: check whether the changes affect concepts documented in CLAUDE.md or project design docs. For structural changes (files added, moved, or renamed), update key-file listings. For behavioural changes (new data shapes, changed contracts, modified mechanics), check whether existing docs reference the modified concepts and update if stale.
 5. **Clean up**: remove dead code, temporary scaffolding, debugging artefacts.
-6. **Tidy commit history**: clean the branch history before merge. Run `git log --oneline <base>..HEAD` to list commits since the base branch. Identify fixup/cleanup commits that should be folded into their parent — these are typically critique-fix commits, lint-iteration commits, and precommit-failure retries. If the branch already has a clean linear history (1–2 commits with no fixups), skip this step. Otherwise, perform an interactive rebase to squash, fixup, or reorder commits so the history reads as a coherent narrative. After rebasing, verify: tests pass, precommit checks are clean, and the history is readable. Force-push the feature branch after rebase — this is safe on a feature branch not shared with others.
-7. **Retrospective** (lightweight). Reflect briefly on how the *workflow* ran, not the feature:
+6. **Retrospective** (lightweight). Reflect briefly on how the *workflow* ran, not the feature:
    - **Serialisation-readiness**: judge firsthand whether the implementation-summary you ran Phase 5 from carried enough context, and consolidate any earlier per-gate ratings (`sufficient` / `partial` / `insufficient`) that survived into this session. For anything rated `partial` or `insufficient`, note what context was missing; flag any gate whose rating did not survive the handoff.
    - **Skill friction**: note where this skill's instructions were ambiguous, missing, mis-ordered, or forced backtracking. If agent teams were used, fold in the team-activity summary captured at the start of Phase 5 (see the agent-team pitfall).
    - **Disposition**: apply trivial project-doc fixes now. Friction in the phronithm skills themselves cannot be fixed here (they are installed read-only) — surface it as a suggested follow-up for the plugin maintainers. Note larger items as future work.
    - Fold the summary into the PR description / final commit. Keep no separate record; a clean run is two or three lines.
 
-Exit criteria: Code is reviewed, tested, documented, and ready to merge. Commit history is tidy. The retrospective has run.
+Exit criteria: Code is reviewed, tested, documented, and ready to merge. The retrospective has run.
 
 ## Review gates
 
