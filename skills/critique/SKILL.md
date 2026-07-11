@@ -79,9 +79,9 @@ For large artefacts, split by component or section and critique each independent
 
 ## Iterative use
 
-When critique is run repeatedly on the same artefact — applying fixes between passes — the following guidance applies. At the start of each pass, state the current round number. If the user has not provided it, derive from the number of prior critique passes visible in conversation context; if unknown, ask before proceeding.
+When critique is run repeatedly on the same artefact — applying fixes between passes — the following guidance applies. At the start of each pass, state the current round number: use the round number the caller supplies if one is given — required when running as the `phronithm:critic` subagent, since a fresh spawn has no conversation context to derive it from. Otherwise, derive it from the number of prior critique passes visible in conversation context; if unknown, ask before proceeding.
 
-**Convergence profile**: Critique loops converge at different rates depending on artefact type and stakes. For complex phronithms (autonomous agent prompts, multi-axis skill documents) governing high-stakes behaviour, expect Significant or Critical findings through rounds 6–8, with Minor findings persisting through rounds 8–10; diminishing returns from round 11 onward. For code artefacts and simpler documents, convergence typically occurs earlier (rounds 4–6). After each round, the bar rises: only downgrade a finding's severity if a fix has been applied that partially addresses the concern — not merely because a later round has been reached.
+**Convergence profile**: Critique loops converge at different rates depending on artefact type and stakes. For complex phronithms (autonomous agent prompts, multi-axis skill documents) governing high-stakes behaviour, expect Significant or Critical findings through round 2, with Minor findings persisting into round 3; diminishing returns by round 4. For code artefacts and simpler documents, convergence typically occurs by round 1–2. After each round, the bar rises: only downgrade a finding's severity if a fix has been applied that partially addresses the concern — not merely because a later round has been reached.
 
 **Stopping criteria**: Stop the loop when either condition is met:
 - All remaining findings are Minor severity.
@@ -89,11 +89,11 @@ When critique is run repeatedly on the same artefact — applying fixes between 
 
 When the loop terminates, output a summary: all remaining findings (severity and location), and a convergence verdict — one of: "converged" (all Minor), "recurring disagreement on [finding]", or "stopped: non-convergence signal — [cause]".
 
-**Non-convergence signal**: If Significant or Critical findings persist past round 8, treat this as a signal to stop. Two causes:
-- (a) The artefact has systemic issues that require redesign, not incremental fixes. Stop the loop and report: "Persistent significant findings after 8 rounds suggest a structural problem. Consider redesigning [specific aspect] rather than continuing to iterate."
+**Non-convergence signal**: If Significant or Critical findings persist past round 3, treat this as a signal to stop. Two causes:
+- (a) The artefact has systemic issues that require redesign, not incremental fixes. Stop the loop and report: "Persistent significant findings after 3 rounds suggest a structural problem. Consider redesigning [specific aspect] rather than continuing to iterate."
 - (b) The critique framework is generating false positives for this artefact type. Signal: the same axes produce structurally identical findings across 2+ rounds without corresponding defects in the artefact. Flag this to the user — the framework may need calibration for this context.
 
-**Human judgment cap**: Do not continue an iterative loop beyond round 12 without explicit user instruction to proceed. Before each round beyond round 6, report the current finding severity distribution and note diminishing returns explicitly. Ask the user explicitly whether to continue.
+**Human judgment cap**: Do not continue an iterative loop beyond round 4 without explicit user instruction to proceed. Before each round beyond round 2, report the current finding severity distribution and note diminishing returns explicitly. Ask the user explicitly whether to continue — or, when running as the `phronithm:critic` subagent (which cannot ask the user), report that the cap is reached and let the orchestrating skill's [critique-gate](${CLAUDE_PLUGIN_ROOT}/docs/critique-gate.md) iteration policy decide.
 
 ## Relationship to other skills
 

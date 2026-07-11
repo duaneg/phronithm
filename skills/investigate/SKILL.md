@@ -160,16 +160,19 @@ writes](${CLAUDE_PLUGIN_ROOT}/docs/subagent-protocol.md#file-writes)).
 
 ### Settle / Review
 
-1. **Critique** each load-bearing claim: run the [critique gate](${CLAUDE_PLUGIN_ROOT}/docs/critique-gate.md) — it
-   runs off this session's window and returns only findings, so the gate costs the
-   orchestrating session little. The orchestrating session owns this gate (rather
-   than a data-gathering test subagent) because it is what acts on the findings and
-   re-runs critique after fixes. Pass `critique-design` always; add `critique-maths` + the `numerical`
-   lens when the claim is mathematical. The highest-risk surface for computational claims is the
+1. **Critique** each load-bearing claim: run the [critique gate](${CLAUDE_PLUGIN_ROOT}/docs/critique-gate.md), applying its
+   default iteration policy — it runs off this session's window and returns only
+   findings, so the gate costs the orchestrating session little. The orchestrating
+   session owns this gate (rather than a data-gathering test subagent) because it
+   is what acts on the findings and re-runs critique after fixes. Pass
+   `critique-design` always; add `critique-maths` + the `numerical` lens when the
+   claim is mathematical. The highest-risk surface for computational claims is the
    formal↔computational bridge and verification independence — does each path
    actually check the claim, and is the trusted base explicit? Address findings
-   and re-run critique after material fixes (as `phronithm:feature` does),
-   or record the residual explicitly as an open obligation with an upgrade path.
+   and re-run until the gate passes; at the point the iteration policy would
+   otherwise escalate to a requester, record the residual explicitly as an open
+   obligation with an upgrade path instead — an investigation has no synchronous
+   requester waiting on this loop.
 2. **Finalise** investigation-results into the **result**: mark each load-bearing
    claim settled at its achieved rigour, and list the sharpened open obligations.
    When achieved rigour is below target, the upgrade path *is* the next

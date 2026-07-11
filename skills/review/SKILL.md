@@ -1,6 +1,6 @@
 ---
 description: "Focused code review through one or more composable lenses (error-handling, complexity, style, comments, io, numerical, general, data-structures). Use when reviewing a diff or PR with specific concerns in mind, rather than open-ended evaluation."
-allowed-tools: Read, Grep, Glob, Task
+allowed-tools: Read, Grep, Glob, Task, Agent
 ---
 
 # Review: Focused Code Review
@@ -53,7 +53,7 @@ Examine code through one or more focused lenses. Each lens targets a specific cl
    - If static-analysis findings were consumed and comprehensively cover the scope, note the mechanical concerns already addressed — Phase 2 can skip those.
 3. **Select lenses**: choose from the lens catalogue below based on the code's characteristics. Default: all applicable lenses. The reviewer or requester may narrow the selection.
    - Code with concurrency → use the phronithm:concurrency skill instead. Concurrency requires diagnostic reasoning, not checklist review.
-   - Diff includes LLM instruction artefacts → always apply the phronithmic critique: [critique](${CLAUDE_PLUGIN_ROOT}/docs/critique.md) + [critique-skill](${CLAUDE_PLUGIN_ROOT}/docs/critique/critique-skill.md) + [critique-phronithm](${CLAUDE_PLUGIN_ROOT}/docs/critique/critique-phronithm.md), plus the [docs-style](${CLAUDE_PLUGIN_ROOT}/docs/lenses/docs-style.md) lens for prose economy. Detection: files matching `agents/*.md`, `skills/*/SKILL.md`, `*protocol*.md`, or files containing system-prompt-like instruction patterns (imperative directives to an LLM, role assignments, behavioural constraints). This catches obedience failure modes, triggering clarity issues, and adversarial edge cases that standard code review lenses miss.
+   - Diff includes LLM instruction artefacts → run the [critique gate](${CLAUDE_PLUGIN_ROOT}/docs/critique-gate.md) with `critique-skill` + `critique-phronithm` (Phase 2's LLM-artefact gate step below), and additionally select the [docs-style](${CLAUDE_PLUGIN_ROOT}/docs/lenses/docs-style.md) lens for prose economy. Detection: files matching `agents/*.md`, `skills/*/SKILL.md`, `*protocol*.md`, or files containing system-prompt-like instruction patterns (imperative directives to an LLM, role assignments, behavioural constraints). This catches obedience failure modes, triggering clarity issues, and adversarial edge cases that standard code review lenses miss.
 4. **Read** the code. Understand what it does before looking for what's wrong.
 
 Exit criteria: Scope is defined. Lenses are selected. The code is understood.
@@ -61,6 +61,8 @@ Exit criteria: Scope is defined. Lenses are selected. The code is understood.
 ### Phase 2: Examine
 
 **Optional pre-scan**: Run phronithm:static-analysis with `--format=json` to gather automated findings. Filter by severity and integrate with manual review. Static analysis catches mechanical issues (null safety, type errors, resource leaks) that would otherwise consume manual review time. For languages not covered by the phronithm:static-analysis skill (TypeScript, Go, Rust, etc.), substitute the project's own type-check and lint commands — check `package.json` scripts, `Makefile`, or project docs for the equivalents (e.g. `npm run typecheck && npm run lint` for TypeScript).
+
+**LLM-artefact gate**: When Phase 1 selected the LLM-instruction-artefact critique, run the [critique gate](${CLAUDE_PLUGIN_ROOT}/docs/critique-gate.md) with `critique-skill` + `critique-phronithm`, applying its default iteration policy. This runs in a separate context from the reviewer — self-review of a skill or agent file in the same session that is reading it is exactly the failure mode the gate exists to avoid. Run it from the orchestrating review session, never from a nested data-gathering subagent — see [nesting](${CLAUDE_PLUGIN_ROOT}/docs/subagent-protocol.md#nesting). Fold its findings into Phase 3 synthesis alongside the lens findings below.
 
 For each selected lens:
 
@@ -83,7 +85,7 @@ Cross-cutting: if a finding from one lens is relevant to another, note it. Do no
 
 ### Phase 3: Synthesise
 
-1. **Deduplicate**: the same code site may appear under multiple lenses. Consolidate into a single finding with the highest applicable severity.
+1. **Deduplicate**: the same code site may appear under multiple lenses, or under both a lens and the critique gate. Consolidate into a single finding with the highest applicable severity.
 2. **Validate**: for each critical or significant finding, construct the concrete failure scenario. If you cannot produce one, downgrade to minor or discard. When validating 5+ findings, run validations in parallel using lightweight subagents — each receives only the finding and its code context, and must be told not to spawn further subagents.
 3. **Prioritise**: order findings by severity, then by locality (clustered findings in one area may indicate a deeper structural problem).
 4. **Assess**: step back. Is the code fundamentally sound with localised issues, or is there a systemic problem? Flag systemic concerns separately from individual findings.

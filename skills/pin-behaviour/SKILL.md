@@ -179,13 +179,20 @@ rather than paraphrasing it:
 >   but absent from BOTH the manifest's `pinned[]` and `unpinnable[]` lists.
 
 The gate passes on **no Critical or Significant findings** under this calibration.
-**Disposition rule for each finding**: if it can be resolved by controlling the
-seam or quarantining the behaviour, do so and re-run critique **once**. If the
-same finding recurs after that single re-run and the seam cannot be controlled,
-record it as a residual gap in `unpinnable[]` and proceed — do not iterate further
-on that finding. This bounds the gate to at most one re-run per finding family. A
-finding recorded as a residual gap is documented debt, not a blocker: only an
-unresolved *and unrecorded* Critical or Significant finding blocks the gate.
+
+**Deviation from the default iteration policy**: this phase caps re-runs at one
+per finding family instead of applying [critique-gate.md](${CLAUDE_PLUGIN_ROOT}/docs/critique-gate.md)'s
+round-based default. The default's round budget assumes findings converge
+through diminishing-returns iteration; a characterisation finding doesn't —
+whether a seam can be controlled or quarantined is a binary fact established on
+the first attempt, and further critique rounds cannot discover new information
+about it. **Disposition rule for each finding**: if it can be resolved by
+controlling the seam or quarantining the behaviour, do so and re-run critique
+**once** to confirm. If the same finding recurs after that single re-run and the
+seam cannot be controlled, record it as a residual gap in `unpinnable[]` and
+proceed — do not iterate further on that finding. A finding recorded as a
+residual gap is documented debt, not a blocker: only an unresolved *and
+unrecorded* Critical or Significant finding blocks the gate.
 
 ### Phase 5 — Report
 
