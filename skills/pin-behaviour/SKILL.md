@@ -154,11 +154,10 @@ critique agent reads it from there.
 
 ### Phase 4 — Critique (gated)
 
-Spawn a Sonnet Agent (`model: "sonnet"`) to invoke `/phronithm:critique` on **the
-suite + manifest** with the `critique-code` appendix, in a separate context —
-never inline. The orchestrating session owns this gate because it acts on the findings
-and re-runs critique after fixes. This gate is the **primary quality defence**
-so its snapshot scrutiny is critical.
+Run the [critique gate](${CLAUDE_PLUGIN_ROOT}/docs/critique-gate.md) on **the
+suite + manifest** with the `critique-code` appendix. The orchestrating session owns
+this gate because it acts on the findings and re-runs critique after fixes. This
+gate is the **primary quality defence** so its snapshot scrutiny is critical.
 
 **Calibration** is critical: if it is dropped or mis-stated, the critique agent
 fires on the *intentional* absence of correctness judgement and on

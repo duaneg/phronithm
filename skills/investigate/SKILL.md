@@ -155,23 +155,20 @@ the same Task/Agent split `phronithm:feature` draws (Task for delegation, the
 context-separating Agent only for the critique gate below). Include an explicit
 completion requirement ("continue through to completion — do not stop mid-task to
 wait for further instruction"), tell it not to spawn further subagents, and have
-it return results inline (subagents cannot reliably write files — see the project
-conventions).
+it return results inline (subagents cannot reliably write files — see [file
+writes](${CLAUDE_PLUGIN_ROOT}/docs/subagent-protocol.md#file-writes)).
 
 ### Settle / Review
 
-1. **Critique** each load-bearing claim through `phronithm:critique` in a **separate
-   context**. Spawn a Sonnet Agent (`model: "sonnet"`) to invoke `/phronithm:critique` — it
-   runs the analysis in its own context, off this session's window, and returns
-   only findings, so the gate costs the orchestrating session little. The
-   orchestrating session owns this gate (rather than a data-gathering test
-   subagent) because it is what acts on the findings and re-runs critique after
-   fixes. Pass `critique-design` always; add `critique-maths` + the `numerical`
+1. **Critique** each load-bearing claim: run the [critique gate](${CLAUDE_PLUGIN_ROOT}/docs/critique-gate.md) — it
+   runs off this session's window and returns only findings, so the gate costs the
+   orchestrating session little. The orchestrating session owns this gate (rather
+   than a data-gathering test subagent) because it is what acts on the findings and
+   re-runs critique after fixes. Pass `critique-design` always; add `critique-maths` + the `numerical`
    lens when the claim is mathematical. The highest-risk surface for computational claims is the
    formal↔computational bridge and verification independence — does each path
-   actually check the claim, and is the trusted base explicit? Critique *passes*
-   when it returns no Critical or Significant findings on a load-bearing claim;
-   address findings and re-run critique after material fixes (as `phronithm:feature` does),
+   actually check the claim, and is the trusted base explicit? Address findings
+   and re-run critique after material fixes (as `phronithm:feature` does),
    or record the residual explicitly as an open obligation with an upgrade path.
 2. **Finalise** investigation-results into the **result**: mark each load-bearing
    claim settled at its achieved rigour, and list the sharpened open obligations.
