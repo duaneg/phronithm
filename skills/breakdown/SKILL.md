@@ -253,6 +253,6 @@ Build the execution plan from the analysis.
 
 ## Commit discipline
 
-See [agent-protocols § Commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/agent-protocols.md). Additional breakdown-specific guidance:
+See [commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/vcs.md#commit-discipline). Additional breakdown-specific guidance:
 
 - Commit message should summarise: number of work units, critical path length, and key risks identified.

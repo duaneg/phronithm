@@ -128,7 +128,7 @@ Exit criteria: The reproduction passes. The full affected test suite passes. Ass
 
 ## Commit discipline
 
-See [agent-protocols § Commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/agent-protocols.md). Commit the fix and regression test together.
+See [commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/vcs.md#commit-discipline). Commit the fix and regression test together.
 
 ## Principles
 

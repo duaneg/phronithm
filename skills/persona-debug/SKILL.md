@@ -130,7 +130,7 @@ Common defect types for natural-language instruction specs:
 
 ## Commit discipline
 
-See [agent-protocols § Commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/agent-protocols.md). Commit the fixed persona/skill file once Phase 4 verification passes. There is no automated regression test for an instruction-spec change — the verification-result is the regression evidence; record the triggering case and outcome in the commit message.
+See [commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/vcs.md#commit-discipline). Commit the fixed persona/skill file once Phase 4 verification passes. There is no automated regression test for an instruction-spec change — the verification-result is the regression evidence; record the triggering case and outcome in the commit message.
 
 ## Principles
 

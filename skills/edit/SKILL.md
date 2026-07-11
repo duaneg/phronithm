@@ -40,7 +40,7 @@ phronithm:critique's critique-phronithm appendix flags verbosity in skill and CL
 
 ## Commit discipline
 
-See [agent-protocols § Commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/agent-protocols.md). Applies only when edits were applied directly to a file in a git working tree (step 4, Edit/Write available) — commit the edited file(s) together, referencing the pattern(s) corrected. When the artefact was literal text, or Edit/Write were unavailable and a change log was returned instead, there is nothing for this skill to commit — the caller applies and commits it.
+See [commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/vcs.md#commit-discipline). Applies only when edits were applied directly to a file in a git working tree (step 4, Edit/Write available) — commit the edited file(s) together, referencing the pattern(s) corrected. When the artefact was literal text, or Edit/Write were unavailable and a change log was returned instead, there is nothing for this skill to commit — the caller applies and commits it.
 
 ## Scaling
 

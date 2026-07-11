@@ -242,6 +242,6 @@ in the phase noted; this section is the index, not the definition):
 
 ## Commit discipline
 
-See [agent-protocols § Commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/agent-protocols.md).
+See [commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/vcs.md#commit-discipline).
 The suite and its manifest are committed together — the manifest is the record of
 what the suite does and does not pin, and is meaningless apart from it.

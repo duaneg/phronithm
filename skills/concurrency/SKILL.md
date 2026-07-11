@@ -198,7 +198,7 @@ Cross-model defect categories:
 
 ## Commit discipline
 
-See [agent-protocols § Commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/agent-protocols.md). Additional concurrency-specific guidance:
+See [commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/vcs.md#commit-discipline). Additional concurrency-specific guidance:
 
 - Commit fixes with their tests.
 - Commit the concurrency model as code comment or design document if the system warrants it.

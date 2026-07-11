@@ -220,7 +220,7 @@ After the pattern terminates, perform a documentation check: check whether the r
 
 ## Commit discipline
 
-See [agent-protocols § Commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/agent-protocols.md). Additional refactor-specific guidance:
+See [commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/vcs.md#commit-discipline). Additional refactor-specific guidance:
 
 - After each commit, check whether a stop condition has been reached before continuing.
 - After context compaction, treat all prior file reads as stale — re-read any file before editing, even if it was read earlier in the session.

@@ -184,7 +184,7 @@ finalised investigation-results (the result) is self-contained.
 
 ## Commit discipline
 
-See [agent-protocols § Commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/agent-protocols.md). The
+See [commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/vcs.md#commit-discipline). The
 problem-statement and investigation-results documents are the primary record;
 commit them as findings land, not only at the end.
 

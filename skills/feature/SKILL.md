@@ -296,7 +296,7 @@ When the requester is unavailable, document provisional assumptions prominently 
 
 ## Commit discipline
 
-See [agent-protocols § Commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/agent-protocols.md). Additional feature-specific guidance:
+See [commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/vcs.md#commit-discipline). Additional feature-specific guidance:
 
 - Commit after each step in Phase 4 and after completing each phase's documentation.
 - The commit history is the primary record. Design documents and plans may live as documents or in issue trackers — match the project's conventions.
