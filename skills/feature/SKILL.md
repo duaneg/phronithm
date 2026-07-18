@@ -30,7 +30,7 @@ Deliver a feature from initial idea to working, tested, documented code.
   - Ordered steps, each with inputs, outputs, and acceptance criteria
   - Success criteria from Phase 1 (embedded or referenced)
   - Dependency ordering and parallelisation opportunities
-  - Handoff footer — required text defined in Phase 3, step 5
+  - Handoff footer — required text defined in Phase 3, step 7
 - **implementation-summary** (Phase 4): Phase 4 structured output document. Must contain:
   - Working branch
   - Reference to the implementation-plan (filename or path)
@@ -41,7 +41,6 @@ Deliver a feature from initial idea to working, tested, documented code.
   - Handoff footer — required text defined in Phase 4
 - **changes** (Phase 4): Code modifications, tests, and commit history. Phase 5 entry condition: the committed Phase 4 changes must be accessible to the Phase 5 session.
 - **documentation** (Phase 5, optional): Documentation a future maintainer needs that is not obvious from the code or existing project docs. Produced when Phase 5 steps 3–4 identify gaps; absent otherwise.
-- **retrospective** (Phase 5): A short workflow retrospective — consolidated serialisation-readiness ratings and any skill-friction observed during the workflow — folded into the PR description / final commit. Not a separately persisted artefact.
 
 ### Consumes
 
@@ -59,11 +58,9 @@ Deliver a feature from initial idea to working, tested, documented code.
 
 A pipeline of phases, each with a review gate. Any gate can send you back to an earlier phase. Prefer asking for clarification over making assumptions — the cost of building the wrong thing dwarfs the cost of a question.
 
-**Session model.** Phases 1–3 (brainstorm, design, plan) run in a single session that accumulates context. Phases 4–5 (implement, review) each start with a cleared context window (`/clear`), receiving the previous phase's output document as their primary input. Each phase's output must therefore carry enough context — including a handoff footer listing remaining phases — for the next phase to proceed without access to earlier history.
+**Session model.** Phases 1–3 (brainstorm, design, plan) run in a single session that accumulates context. Phase 4 starts in a **fresh context** after `/clear` — see the Phase 4 handoff block at the end of Phase 3 — reading the implementation-plan as its primary input. Phase 5 continues in the **same session** as Phase 4: there is no further `/clear`. The implementation-plan must therefore carry enough context — including its handoff footer — for Phase 4 to proceed without access to the planning session's history.
 
-**Serialisation discipline**: save each phase output document to disk immediately on completion — do not defer until Phase 3. If you observe that your prior conversation history has been replaced by a summary — indicating context compaction occurred — reload the most recently saved phase document and continue from that phase's exit gate. If the summary shows you were mid-phase with no document yet saved, return to the start of that phase and re-run it. If compaction recurs within that same phase before the document is saved — the most recently saved document is unchanged from the previous recovery — the session cannot safely complete planning. Switch to agent team integration (see [Agent team integration](#agent-team-integration) below). If agent teams are unavailable (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` not set), stop and report to the requester: the planning phases cannot complete in a standalone session due to context pressure.
-
-For an alternative that reduces context pressure, see [Agent team integration](#agent-team-integration) below.
+**Serialisation discipline**: save each phase output document to disk immediately on completion — do not defer until Phase 3. If you observe that your prior conversation history has been replaced by a summary — indicating context compaction occurred — reload the most recently saved phase document and continue from that phase's exit gate. If the summary shows you were mid-phase with no document yet saved, return to the start of that phase and re-run it. If compaction recurs within that same phase before the document is saved — the most recently saved document is unchanged from the previous recovery — the session cannot safely complete planning. Stop and report to the requester: the planning phases cannot complete in a standalone session due to context pressure.
 
 ### Tool usage during the workflow
 
@@ -71,44 +68,7 @@ Use subagents (the Task tool) only for **data-gathering**: codebase exploration,
 
 Do **not** delegate design, planning, or reasoning to a subagent. These phases depend on the full accumulated context of the session — requirements, codebase findings, requester answers — which a subagent cannot inherit. Design done in a subagent requires manually serialising that context into a prompt (expensive, lossy) and returns opaque text that severs the reasoning thread. Do the thinking yourself with direct tool calls (Glob, Grep, Read) for any targeted lookups you need mid-reasoning.
 
-This prohibition applies to the Task tool (subagents). Agent team teammates are different — they are full independent sessions that support direct user interaction and can appropriately run Phases 1–3. See [Agent team integration](#agent-team-integration).
-
-**Subagent nesting**: Subagents can spawn their own subagents, but by policy data-gathering Task subagents must not spawn further agents (see [nesting](${CLAUDE_PLUGIN_ROOT}/docs/subagent-protocol.md#nesting)). The critique gate needs a subagent for context separation, so spawn it from the orchestrating session — this lead, or an exempt Planning/implementer teammate — never from a data-gathering Task subagent. Skills that compose other skills must account for this: run the critique gate and other Agent-dependent skills from the orchestrating session.
-
-**Running as a teammate**: A teammate executing a batched work item is a full orchestration session and is exempt from the no-nesting policy — it runs the critique gate and phronithm:review the phases require (critique in Phases 2–4, review and critique in Phase 5) exactly as the lead would, in their own separate contexts. No inline fallback or confidence reduction is needed. The only residual fallback is the degenerate case of this skill being driven from an ordinary data-gathering subagent (not a teammate): there the no-nesting policy forbids spawning, so run the evaluative steps inline, note the reduced confidence from missing context separation, and flag for the orchestrating session or a later review pass.
-
-### Agent team integration
-
-An optional alternative when context pressure is a concern. Requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`. Agent teams are experimental — see the [Claude Code docs](https://code.claude.com/docs/en/agent-teams) for current limitations.
-
-**When to use.** When the lead session has significant prior context, Phases 1–3 run in that cluttered window and Phase 4 starts fresh with only the serialised Phase 3 document. Running Phases 1–4 in a teammate instead keeps the planning context isolated from the lead's history and gives Phase 4 the full live design reasoning rather than a snapshot. Also consider agent teams when starting from a fresh session if the project has a large `CLAUDE.md` (over ~100 lines) or an extensive codebase requiring broad exploration — planning context for such projects routinely fills the window before Phase 4 even without prior lead history.
-
-**Setup.** From the lead, spawn a Planning Teammate:
-
-```
-Spawn a Planning Teammate. Load the phronithm:feature skill and begin Phase 1 with
-this request: [feature request].
-```
-
-The teammate's context starts fresh — the lead's prior conversation does not carry over. After Phase 3, the teammate proceeds directly to Phase 4 in the same context window rather than starting a new session.
-
-**Interaction patterns.** Choose based on spec richness and ambiguity:
-
-- **Direct** (default): interact with the teammate via Shift+Down. Use when requirements need back-and-forth clarification.
-- **Present-and-review**: provide a rich spec in the spawn prompt and let the teammate run Phases 1–3 autonomously, making provisional assumptions where needed and flagging them explicitly. The teammate presents the Phase 3 output for review rather than interrupting mid-reasoning. Use when the spec is detailed and acceptance criteria are clear.
-- **Hybrid**: teammate runs autonomously but surfaces genuine blockers — conflicting requirements, go/no-go decisions that would invalidate the approach — as messages to the lead. Resolves everything else provisionally.
-
-**Front-loading (for present-and-review and hybrid).** Include in the spawn prompt: feature request, scope boundaries, known constraints, measurable success criteria, and any decisions already made. The richer the spec, the fewer interruptions needed.
-
-**Phase 5.** After the teammate completes Phase 4, the lead must ensure Phase 5 (Review) runs — either in the same teammate session or handed off. Phase 5 includes the retrospective step. Do not treat Phase 4 completion as end of workflow. The handoff footer requirement stands — it provides resilience if the session needs resuming.
-
-**Known pitfalls.**
-
-- **Lead drops Phase 5.** The lead sees Phase 4 done and considers the feature complete. The handoff footer in Phase 4's output is the signal — act on it.
-- **`resume` loses context.** Resuming a team agent creates a new identity with no prior context. If a teammate session ends, spawn a fresh teammate with full context (phronithm:feature skill + current phase output) rather than resuming.
-- **Team activity lost to compaction.** The Phase 5 retrospective notes team activity (which teammate ran which phase, the interaction pattern used), but a compacted context may no longer show it. If team integration was used, output a brief team-activity summary at the *start* of Phase 5 — before further compression removes it. If the context is already fully compressed and the team data is unrecoverable, note the gap in the retrospective and move on.
-- **Permission stalls.** Use `dontAsk` mode on implementer teammates to avoid interactive permission prompts blocking autonomous execution.
-- **Scope changes.** Review Phase 2 and 3 outputs for design decisions that weren't in the original request — added scope, removed scope, or changed approach. Flag these for user confirmation before proceeding to Phase 4.
+**Subagent nesting**: Subagents can spawn their own subagents, but by policy data-gathering Task subagents must not spawn further agents (see [nesting](${CLAUDE_PLUGIN_ROOT}/docs/subagent-protocol.md#nesting)). The critique gate needs a subagent for context separation, so spawn it from the orchestrating session — never from a data-gathering Task subagent. Skills that compose other skills must account for this: run the critique gate and other Agent-dependent skills from the orchestrating session.
 
 ### Startup
 
@@ -122,7 +82,7 @@ Before entering plan mode, do a minimal orientation to the project:
 3. Check `package.json` or equivalent to identify the tech stack and runtime dependencies.
 4. Call `EnterPlanMode`.
 
-This takes under a minute and ensures plan mode starts with basic grounding rather than cold.
+This is cheap and ensures plan mode starts with basic grounding rather than cold.
 
 ### Phase 1: Brainstorm
 
@@ -182,7 +142,7 @@ Break the design into implementable steps. **Do not use the Task tool in this ph
    ```
    ## Remaining phases
    This plan was generated by the phronithm:feature skill. After implementing the steps above,
-   complete Phase 5 (Review, including retrospective) as defined in the phronithm:feature skill.
+   complete Phase 5 (Review) as defined in the phronithm:feature skill.
 
    ## Implementation-summary fields
    The implementation-summary must be saved to: docs/plans/<name>-implementation.md
@@ -210,6 +170,8 @@ Exit criteria: Every step has clear inputs, outputs, and acceptance criteria. Th
 
 Do not call ExitPlanMode until all three are satisfied. This checklist exists because the most common workflow failure is calling ExitPlanMode immediately after writing the plan, skipping the critique step.
 
+**Phase 4 handoff.** The transition to Phase 4 happens through the standard `ExitPlanMode` flow — approving the plan and clearing context to implement it, not a bespoke step this skill constructs. The cleared session has no conversation history, so the saved plan document (with its handoff footer, step 7 above) is what Phase 4 reads to recover the design and requirements.
+
 ### Phase 4: Implement
 
 Execute the plan. Test after each step.
@@ -226,51 +188,31 @@ Execute the plan. Test after each step.
 
 Before the exit gate, wait for any outstanding critique subagents to complete. Integrate findings: address Critical and Significant findings, re-running the gate per its default iteration policy until it passes or escalates; note Minor findings for Phase 5 clean-up.
 
-Produce the **implementation-summary** document (see Produces for required contents). This is the Phase 4 handoff artefact — a fresh Phase 5 session receives it as primary input. Include the handoff footer:
+Produce the **implementation-summary** document (see Produces for required contents). This is the Phase 4 handoff artefact, kept for resilience — if context compaction forces a reload, or Phase 5 is picked up in a different session (see **Partial-plan sessions** below), it is read as the primary input. Include the handoff footer:
 ```
 ## Remaining phases
-Complete Phase 5 (Review, including retrospective) as defined in the phronithm:feature skill.
+Complete Phase 5 (Review) as defined in the phronithm:feature skill.
 ```
-Save to `docs/plans/<feature>-implementation.md` (create the directory if absent). Do not rely on commit messages as the primary save location; a fresh session has no mechanism to discover the relevant commit hash.
+Save to `docs/plans/<feature>-implementation.md` (create the directory if absent). Do not rely on commit messages as the primary save location; a session recovering from compaction has no mechanism to discover the relevant commit hash.
 
-**Exit gate**: Phase 4 is complete only when the implementation is committed, Phase 5 handoff has been provided (see below), and all steps pass: tests green, per-step critiques addressed or noted, requirements from Phase 1 met. When an implementation-summary was produced, it must include the handoff footer.
+**Exit gate**: Phase 4 is complete only when the implementation is committed, the implementation-summary includes the handoff footer, and all steps pass: tests green, per-step critiques addressed or noted, requirements from Phase 1 met.
 
-**Phase 5 handoff.** The handoff mechanism depends on whether an implementation-summary was produced:
-
-- **With implementation-summary** (default): Phase 5 runs in a **fresh context** — do not invoke `/phronithm:review` inline in this session. End Phase 4 by presenting the user with a ready-to-use Phase 5 startup block:
-
-  > Run `/clear` to flush this session's context, then paste:
-  > ```
-  > Load the phronithm:feature skill and begin Phase 5. Implementation summary: docs/plans/<feature>-implementation.md
-  > ```
-
-  Substitute the actual feature name and path. The user runs `/clear`, pastes the startup prompt, and Phase 5 begins with a clean context window. A Phase 4 session that ends without presenting this startup block is a workflow defect.
-
-- **Without implementation-summary** (compressed/batched items — see [Scaling](#scaling)): Phase 5 runs inline in the current session. The `/clear` handoff is not required because there is no implementation-summary document to hand off to a fresh context.
-
-  **Critical: context separation still required.** Review and critique must run in subagents even when Phase 5 is inline. An LLM reviewing its own output in the same context that produced it is unreliable. The `/clear` handoff exists partly to enforce this separation; when the handoff is skipped, the subagent requirement is the only remaining safeguard. Do not run `/phronithm:review`, `/phronithm:critique`, or any evaluative step directly in this session unless nested spawning is prohibited — see the **Running as a teammate** clause above for when that exception applies.
+**Phase 5 continues in this same session** — there is no `/clear` between Phase 4 and Phase 5. **Context separation is still required**: review and critique must run in subagents regardless. An LLM reviewing its own output in the same context that produced it is unreliable, and with no `/clear` boundary here, subagent dispatch is the only mechanism enforcing that separation. Do not run `/phronithm:review`, `/phronithm:critique`, or any evaluative step directly in this session.
 
 **Partial-plan sessions**: When entering at Phase 4 from a pre-written plan, the plan's handoff footer covers only the phase being executed — it does not supersede the remaining phases. The full phase sequence (through Phase 5) applies regardless of entry point. List Phase 5 as an explicit next step in the implementation summary.
 
 ### Phase 5: Review
 
-**Context model.** When an implementation-summary was produced, Phase 5 runs with a cleared context window — use `/clear` after Phase 4 completes, then paste the startup prompt provided by Phase 4. The implementation-summary is the primary input; do not rely on Phase 4 conversation history. When no implementation-summary was produced (compressed/batched items), Phase 5 runs inline — see the Phase 4 **Phase 5 handoff** conditional.
-
 Validate the complete feature.
 
-1. **Review** the implementation by running the phronithm:review skill — scope is the full feature diff, all applicable lenses, static-analysis pre-scan required (not optional). Collect per-step critique findings from Phase 4 into the review scope. Additionally, run the [critique gate](${CLAUDE_PLUGIN_ROOT}/docs/critique-gate.md) with [critique-code](${CLAUDE_PLUGIN_ROOT}/docs/critique/critique-code.md) on the full diff to catch issues that emerge only at feature scope.
+1. **Review** the implementation by running the phronithm:review skill — scope is the full feature diff, all applicable lenses, static-analysis pre-scan required. Collect per-step critique findings from Phase 4 into the review scope. Additionally, run the [critique gate](${CLAUDE_PLUGIN_ROOT}/docs/critique-gate.md) with [critique-code](${CLAUDE_PLUGIN_ROOT}/docs/critique/critique-code.md) on the full diff to catch issues that emerge only at feature scope.
    This step is not a re-review of already-reviewed code. Each Phase 4 gate only sees its own step's diff, so none of them can catch a step invalidating an earlier step's assumption — this full-diff pass is the only point in the workflow positioned to catch that class of defect. Do not treat it as a formality because the steps were "already reviewed".
 2. **Test** end-to-end. Exercise edge cases identified in Phase 1.
 3. **Document** anything a future maintainer needs to know that isn't obvious from the code.
 4. **Update project docs**: check whether the changes affect concepts documented in CLAUDE.md or project design docs. For structural changes (files added, moved, or renamed), update key-file listings. For behavioural changes (new data shapes, changed contracts, modified mechanics), check whether existing docs reference the modified concepts and update if stale.
 5. **Clean up**: remove dead code, temporary scaffolding, debugging artefacts.
-6. **Retrospective** (lightweight). Reflect briefly on how the *workflow* ran, not the feature:
-   - **Serialisation-readiness**: judge firsthand whether the implementation-summary you ran Phase 5 from carried enough context, and consolidate any earlier per-gate ratings (`sufficient` / `partial` / `insufficient`) that survived into this session. For anything rated `partial` or `insufficient`, note what context was missing; flag any gate whose rating did not survive the handoff.
-   - **Skill friction**: note where this skill's instructions were ambiguous, missing, mis-ordered, or forced backtracking. If agent teams were used, fold in the team-activity summary captured at the start of Phase 5 (see the agent-team pitfall).
-   - **Disposition**: apply trivial project-doc fixes now. Friction in the phronithm skills themselves cannot be fixed here (they are installed read-only) — surface it as a suggested follow-up for the plugin maintainers. Note larger items as future work.
-   - Fold the summary into the PR description / final commit. Keep no separate record; a clean run is two or three lines.
 
-Exit criteria: Code is reviewed, tested, documented, and ready to merge. The retrospective has run.
+Exit criteria: Code is reviewed, tested, documented, and ready to merge.
 
 ## Review gates
 
@@ -279,7 +221,6 @@ After each phase, explicitly check:
 - Does the output meet the phase's exit criteria?
 - Have assumptions made in earlier phases been invalidated? Are requirements still valid?
 - Are there new ambiguities? Resolve them before proceeding.
-- **Serialisation-readiness**: Would this phase's produces be sufficient for the next phase to operate without session context? Rate `sufficient` / `partial` / `insufficient`. If partial or insufficient, note what is missing. This is noted for the Phase 5 retrospective.
 - **Handoff footer** (Phases 3–4): does the output document include the handoff footer for the next phase?
 
 If a gate reveals a problem, return to the earliest phase affected. Do not patch forward — a design flaw cannot be fixed in the plan, and a requirements misunderstanding cannot be fixed in the code. If the same phase is revisited more than twice, escalate to the requester — repeated returns signal a requirements or design problem that iteration will not resolve.
@@ -316,7 +257,5 @@ The workflow terminates when Phase 5's exit criteria are met. It can also termin
 For trivial features (single function, obvious implementation, no design ambiguity), phases 1-3 can be compressed into a brief confirmation with the requester before implementing. Do not skip them entirely — even trivial features benefit from a moment's thought about edge cases and testing.
 
 For trivial features (single-file prose changes, well-specified single-commit work), the implementation-summary may be omitted — record decisions and review findings in the commit message instead.
-
-For batched work items (e.g. pre-decomposed items from `/phronithm:breakdown` executing sequentially in one session), each item typically runs a compressed feature cycle where the implementation-summary is omitted. Phase 5 runs inline after each item rather than in a fresh context — the `/clear` handoff does not apply. See the **Phase 5 handoff** conditional in Phase 4 for the governing rule: the handoff mechanism follows from whether an implementation-summary was produced, not from a separate "batch mode" judgement.
 
 For large features, consider splitting into multiple passes through this workflow, each delivering an increment.
