@@ -30,15 +30,46 @@ must never present it as one — a pinned bug is a pinned bug, recorded faithful
   events, writes, stdout) and, crucially, what is *not* observable or *not*
   deterministic. When absent, the skill derives a first cut by inspecting the
   target and surfaces the gaps for awareness.
+- **manifest-path** (optional; defaults to `characterisation-manifest.json` in
+  `working-dir`): where the manifest is read from and written to. Lets a
+  caller namespace its own manifest — e.g. one path per module — to avoid two
+  independently-run suites landing on the same file.
+- **manifest-label** (optional; derived from `target` if absent): identifies this
+  run's suite within the manifest's `suites[]` array (see Produces). Two runs
+  sharing a `manifest-path` must use distinct labels.
+- **working-dir** (optional; defaults to the primary working directory): the
+  repo this run targets. Pass an absolute path when invoking from a context
+  where the ambient cwd is not already there — e.g. a caller under a no-cd
+  invariant that would otherwise need to spawn a sub-agent purely to establish
+  one. All shell commands, file reads, and file writes below (including
+  `manifest-path` and the generated suite) are rooted at `working-dir`, per
+  [pre-flight](${CLAUDE_PLUGIN_ROOT}/docs/pre-flight.md)'s
+  additional-working-directory guidance: absolute paths throughout, since the
+  shell cwd can reset between calls.
+- **on-dirty-tree** (optional): pre-supplied answer (`commit` / `stash` /
+  `proceed`) to the pre-flight dirty-tree halt — see
+  [pre-flight](${CLAUDE_PLUGIN_ROOT}/docs/pre-flight.md#pre-supplied-dirty-tree-decision).
+  Lets a non-interactive caller skip the round-trip. Absent by default; the
+  halt fires and blocks as normal.
+- **on-label-collision** (optional): pre-supplied answer (`overwrite` /
+  `new-label`) to the manifest-label collision halt (Phase 3). Absent by
+  default; the halt fires and blocks as normal.
 
 ### Produces
 
 - **characterisation-suite**: the generated tests, green against current code, in
-  the working directory. Labelled as pinning *current behaviour*, not a spec.
-- **manifest** (structured): written as JSON to `characterisation-manifest.json`,
-  co-located with the generated test suite. It is a file, not an in-session data
+  `working-dir`. Labelled as pinning *current behaviour*, not a spec.
+- **manifest** (structured): written as JSON to `manifest-path`, co-located with
+  the generated test suite by default. It is a file, not an in-session data
   structure — the Phase 4 critique agent runs in a separate context and must be
-  able to read it. Shape:
+  able to read it. Top-level shape is `{"suites": [...]}` — one entry per pin
+  run that has written to this path, keyed by `label`. This run appends its own
+  entry rather than replacing the file (see Phase 3), so two suites pinned
+  against the same manifest-path — including on independently-completed
+  branches later merged together — accumulate instead of colliding. Each suite
+  entry:
+  - `label`: this run's `manifest-label`.
+  - `target`: this run's `target` input, for traceability.
   - `pinned[]`: `{entry-point, oracle, capture-kind, evidence}` where
     `capture-kind` is one of `value | snapshot | exception | event` — distinct
     oracle shapes (a return value, a golden-master snapshot, a thrown error, an
@@ -66,8 +97,12 @@ must never present it as one — a pinned bug is a pinned bug, recorded faithful
   before deduplication or decomposition.
 - **consumed by → extension adapters**: thin callers (e.g. module-scale or rewrite
   refactoring extensions) that supply an `oracle-inventory` derived from their own
-  analysis. The adapter owns the extension's concerns (environment/cwd setup, run
-  lifecycle); this skill stays generic and stateless and owns neither.
+  analysis. Pass `working-dir` explicitly rather than relying on ambient cwd — this
+  lets a disciplined adapter call the skill directly, including from a context
+  (e.g. a per-item sub-agent) that cannot itself change directory. The adapter still
+  owns run lifecycle (when to invoke, how to sequence with its own steps); this
+  skill stays generic and stateless and owns neither that nor any cwd-establishing
+  mechanism of its own.
 
 ### Complexity drivers
 
@@ -85,8 +120,11 @@ must never present it as one — a pinned bug is a pinned bug, recorded faithful
 
 ### Startup
 
-Follow the [pre-flight](${CLAUDE_PLUGIN_ROOT}/docs/pre-flight.md) check. Do not
-continue until it passes.
+Follow the [pre-flight](${CLAUDE_PLUGIN_ROOT}/docs/pre-flight.md) check,
+scoped to `working-dir` when supplied (absolute paths throughout — see that
+input's definition above). Do not continue until it passes. If `on-dirty-tree`
+was supplied, use it per pre-flight's pre-supplied-decision note instead of
+halting.
 
 ### Phase 0 — Confirm the runtime
 
@@ -149,8 +187,16 @@ with `reason: non-determinism` and remove the test.
 
 Compute **surface coverage**: which entry points were pinned, which were not, and
 why. This populates `surface-coverage` and the `unpinnable[]` list. **Write the
-manifest** to `characterisation-manifest.json` now, before the Phase 4 gate — the
-critique agent reads it from there.
+manifest** to `manifest-path` now, before the Phase 4 gate — the critique agent
+reads it from there.
+
+If a manifest already exists at `manifest-path`, read it first: append this
+run's suite entry to its `suites[]` array rather than overwriting the file. If
+`manifest-label` already matches an entry already in `suites[]`: if
+`on-label-collision` was supplied, apply it directly (`overwrite` replaces the
+existing entry, `new-label` derives a distinct label — e.g. appending a
+numeric suffix — and uses that instead); otherwise halt and ask the user to
+choose. Never silently overwrite another run's suite.
 
 ### Phase 4 — Critique (gated)
 
@@ -176,7 +222,8 @@ rather than paraphrasing it:
 >   observable; an uncontrolled non-deterministic assertion, OR a snapshot
 >   embedding uncontrolled non-determinism (timestamp / address / iteration-order
 >   → will flake); an entry point silently left unpinned — present in the target
->   but absent from BOTH the manifest's `pinned[]` and `unpinnable[]` lists.
+>   but absent from BOTH this run's suite entry's `pinned[]` and `unpinnable[]`
+>   lists.
 
 The gate passes on **no Critical or Significant findings** under this calibration.
 
@@ -196,13 +243,13 @@ unrecorded* Critical or Significant finding blocks the gate.
 
 ### Phase 5 — Report
 
-Report: the suite path, the surface-coverage summary, the gap list, and the
-critique verdict. **Flag every `capture-kind: snapshot` entry as
-auto-accepted** — "review the snapshot diff before relying on this oracle". The
-snapshots auto-accept, so the report must not imply they were human-vetted. In
-fully-autonomous or adapter mode with no downstream reviewer, that review
-obligation passes to the caller; say so. Reiterate the
-current-behaviour-not-spec label.
+Report: the suite path, the manifest path and label, the surface-coverage
+summary, the gap list, and the critique verdict. **Flag every
+`capture-kind: snapshot` entry as auto-accepted** — "review the snapshot diff
+before relying on this oracle". The snapshots auto-accept, so the report must
+not imply they were human-vetted. In fully-autonomous or adapter mode with no
+downstream reviewer, that review obligation passes to the caller; say so.
+Reiterate the current-behaviour-not-spec label.
 
 Commit the suite and manifest together (see Commit discipline).
 

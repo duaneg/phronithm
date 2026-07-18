@@ -12,6 +12,12 @@ Improve internal code structure without changing external behaviour. Two pattern
 ### Requires
 
 - **scope**: What to refactor. One of: a file list, a directory, a module, a description of the code region, or an escalation context from phronithm:diagnose — a `root_causes` entry: `{file, lines: [start, end], description}`. Full schema: phronithm:diagnose skill Structured Output.
+- **scope-confirmed** (optional): pre-supplied answer to the WIP/parked-code
+  scope halt (Startup, Step 1) — the caller already obtained user confirmation
+  to proceed with the scope as-is despite flagged targets. Lets a
+  non-interactive caller (e.g. a sub-agent dispatch that cannot itself surface
+  an interactive halt) skip the round-trip. Absent by default; the halt fires
+  and blocks as normal.
 
 ### Produces
 
@@ -60,11 +66,11 @@ Follow the [pre-flight](${CLAUDE_PLUGIN_ROOT}/docs/pre-flight.md) check. Do not 
 - Check for a coverage heuristic: if no test file in the project references the target module or file by name, treat it as having no runnable tests.
 - Check the target files' [last-activity](${CLAUDE_PLUGIN_ROOT}/docs/vcs.md#last-activity) — no commits in the last 90 days combined with no test coverage signals parked code.
 
-If any target file or function matches two or more of these indicators (WIP markers present, no test coverage, no recent git activity), flag as:
+If any target file or function matches two or more of these indicators (WIP markers present, no test coverage, no recent git activity), and `scope-confirmed` was not supplied, flag as:
 
 > Target contains parked/WIP code with no tests — high risk to decompose. Confirm scope with user before proceeding, or down-scope to exclude these targets.
 
-Do not proceed with refactoring until the user either confirms the scope explicitly or provides a narrowed scope that excludes the flagged targets.
+Do not proceed with refactoring until the user either confirms the scope explicitly or provides a narrowed scope that excludes the flagged targets. If `scope-confirmed` was supplied, treat it as that confirmation and proceed without prompting.
 
 ### Assessment Phase
 
@@ -76,11 +82,11 @@ Expand the scope to a flat file list. Exclude:
 - Generated, vendored, and build-output paths (`node_modules/`, `dist/`, `__pycache__/`, `build/`, `.git/`, etc.)
 - Files under ~30 lines — too small to have meaningful refactoring opportunities.
 
-Before proceeding, check for WIP markers (TODO/WIP/FIXME in function or class names, or file-level status comments) and test coverage. If any file in scope is WIP or has no runnable tests covering it, flag as:
+Before proceeding, check for WIP markers (TODO/WIP/FIXME in function or class names, or file-level status comments) and test coverage. If any file in scope is WIP or has no runnable tests covering it, and `scope-confirmed` was not supplied, flag as:
 
 > Target contains parked/WIP code with no tests — high risk to decompose. Confirm scope with user before proceeding, or down-scope to exclude these targets.
 
-Do not begin the assessment until the user confirms or narrows the scope. Refactoring untestable code cannot be verified and risks silent regressions.
+Do not begin the assessment until the user confirms or narrows the scope. Refactoring untestable code cannot be verified and risks silent regressions. If `scope-confirmed` was supplied, treat it as that confirmation and proceed without prompting.
 
 **Step 2 — Parallel assessment**
 
