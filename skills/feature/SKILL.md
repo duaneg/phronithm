@@ -50,6 +50,7 @@ Deliver a feature from initial idea to working, tested, documented code.
   - Discoveries affecting sibling or downstream units: interface changes, new dependencies, invalidated assumptions
   - Status of each standing obligation the unit carries
   - External-gate re-verification results (pins confirmed, or drift found and how it was resolved)
+  - Execution signals: context consumption at completion (comfortable, or near exhaustion), and any design decisions taken mid-implementation rather than at a design pass — breakdown's re-plan treats distress here as a trigger to re-examine remaining units' sizes
   - Footer: "Run `/phronithm:breakdown` in re-plan mode with the decomposition plan and this report before starting any dependent unit."
 
 ### Consumes

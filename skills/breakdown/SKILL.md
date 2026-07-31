@@ -38,7 +38,7 @@ Serves human teams planning work and agent teams needing structured task assignm
 
 - **architecture-document** (from phronithm:large-scale-feature Phase 2): When present, requirements and design are already settled — Phase 1 step 1 is abbreviated to reading the document and extracting components. Steps 2–5 run in full.
 - **impact-map** (from phronithm:impact-analysis): When present, informs scope boundaries and identifies cross-cutting concerns.
-- **completion-report** (from the unit's executor — `phronithm:feature` Phase 5 produces one in work-unit mode; free-form from other executors): the deviations, deferrals, and discoveries recorded when a unit completed. Required for re-plan mode — the re-plan diff runs off it.
+- **completion-report** (from the unit's executor — `phronithm:feature` Phase 5 produces one in work-unit mode; free-form from other executors): the deviations, deferrals, discoveries, and execution signals (context consumption, decisions taken mid-implementation) recorded when a unit completed. Required for re-plan mode — the re-plan diff runs off it.
 
 ### Complexity drivers
 
@@ -58,10 +58,10 @@ Each work unit is classified on five axes:
 | Type | Description |
 |------|-------------|
 | `foundation` | Other units depend on it — types, interfaces, plumbing |
-| `phronithm:feature` | Independent functionality |
+| `feature` | Independent functionality |
 | `integration` | Connects other units or systems |
 | `design` | A decision that must be resolved before dependent units proceed |
-| `phronithm:refactor` | Restructuring existing code to support the feature |
+| `refactor` | Restructuring existing code to support the feature |
 | `bug-fix` | Fixing a latent bug exposed or required by the feature |
 | `polish` | Iterative tuning, visual/UX refinement |
 
@@ -71,7 +71,7 @@ Each work unit is classified on five axes:
 - `specified`: Clear done condition, known implementation approach
 - `exploratory`: Requires investigation, prototyping, or design work before the implementation approach is clear
 
-Exploratory units have higher effort variance. When a unit is exploratory, consider whether a preceding `design` unit should resolve the uncertainty first.
+A unit carrying an open design decision is `exploratory`, however settled the rest of its approach. Exploratory units have higher effort variance. When a unit is exploratory, consider whether a preceding `design` unit should resolve the uncertainty first.
 
 **Iteration profile** — `write-once` vs. `iterative`:
 - `write-once`: Implement and done. The initial implementation is the final form.
@@ -88,12 +88,25 @@ Iterative units are systematically underestimated. When a unit is marked `iterat
 
 If the project already has tuning infrastructure that covers this need, the design unit may collapse to a verification note.
 
-*Structural iteration* is better addressed by the `exploratory` clarity flag, higher effort estimates, and risk flagging. Pre-designing away structural iteration is often wasted effort — you're designing before you have the information that drives the changes. Structural iteration in a unit that others consume usually signals consumer-determined content — apply the mechanism/content split from Phase 1 step 2; the flag alone only adjusts the effort estimate.
+*Structural iteration* is better addressed by the `exploratory` clarity flag, higher effort estimates, and risk flagging. Pre-designing away structural iteration is often wasted effort — you're designing before you have the information that drives the changes. This covers only decisions that cannot surface until implementation: a question identifiable at planning time counts against the [size budget](#unit-size-budget)'s open-design-decision bound, whose extraction rule governs. Structural iteration in a unit that others consume usually signals consumer-determined content — apply the mechanism/content split from Phase 1 step 2; the flag alone only adjusts the effort estimate.
 
 **Effort** — rough guide, not a commitment:
 - `small`: <1h focused work
 - `medium`: 1–4h
 - `large`: 4h+
+
+Effort is wall-clock, a planning convenience. The binding session bound is the [size budget](#unit-size-budget), which is context, not hours — the two do not convert.
+
+### Unit size budget
+
+A unit must complete within one agent context window. The budget is context, not output volume or wall-clock hours: a large port with a behavioural reference costs less context than a smaller unit holding several surfaces in view with none. Judge it by structural load factors:
+
+- **Surfaces written**: at most two of the modules, packages, or directories in the unit's [Scope](#scope) are written to; surfaces only read do not count.
+- **Open design decisions**: at most one — a unit with one open question can take it carefully; a unit with several takes the rest under context pressure. An open decision is a question identifiable now with no designed answer in the plan or its inputs. Decisions beyond the first are extracted into a preceding `design` unit.
+- **Planned steps**: at most about six.
+- **Behavioural reference**: a unit with no existing implementation or oracle to code against spends context faster at the same output size — apply the other factors more strictly.
+
+These are drafting-time proxies, not hard thresholds. A unit exceeding one may instead carry a flag with rationale where the excess is wall-clock rather than context (work paced by an external review cadence, say); exceeding the design-decision budget is repaired by extraction, never flagged. Where completed units with comparable commit discipline exist — always the case in re-plan mode — calibrate numeric backstops (line counts against context consumed) from them rather than assuming universal numbers.
 
 ### Dependency types
 
@@ -127,7 +140,7 @@ Every work unit must have a verifiable done condition — a statement that can b
 
 A done condition must also be **evaluable in position**: every artefact it names is produced by the unit itself, by a declared dependency, or by a declared external gate. If it names anything else, either a dependency is missing or the condition belongs to a different unit — check both directions, since the done condition records what the unit needs while the dependency list records what its author remembered. Where a condition cannot be made evaluable in position, split it: assert now what is checkable at the unit's position, defer the rest to a named later unit, and flag the deferral on this unit.
 
-Exploratory units may have a process done condition: "Spike complete: approach decided and documented." The decision itself is the artefact.
+Exploratory units may have a process done condition: "Spike complete: approach decided, documented, and exercised through one end-to-end path." The decision plus the driven path is the artefact.
 
 ### Scope
 
@@ -161,13 +174,13 @@ Understand the feature's structure before decomposing it.
    - *Existing plan plus completion reports*: re-plan mode — skip Phases 1 and 2 and go directly to [Re-plan on unit completion](#re-plan-on-unit-completion).
 
 2. **Identify work units**. Each unit must be:
-   - **Individually completable**: bounded session — roughly a half-day or single agent context window
+   - **Individually completable**: within the [size budget](#unit-size-budget) — one agent context window, judged by the load factors there
    - **Verifiable**: done condition stated now (see [Work unit done conditions](#work-unit-done-conditions))
    - **Clearly scoped**: files/modules enumerable upfront (see [Scope](#scope))
 
    Record testing dependencies explicitly in step 4 — a unit may be implementable without others but not verifiable until a dependency is complete.
 
-   Split on **responsibility boundaries**, not size. Prefer fewer, larger units — coordination overhead grows faster than task-size overhead.
+   Split on **responsibility boundaries**, not size — up to the size budget. Prefer fewer, larger units — coordination overhead grows faster than task-size overhead — but a unit over budget splits regardless, on the best available seam: a preceding `design` unit extracting its open decisions, or the mechanism/content split below.
 
    When a unit's completeness is determined by its consumers (schemas, vocabularies, plugin protocols, public APIs), split it on the mechanism/content seam: a mechanism unit with a fixture-checkable done condition and an extension protocol; a content contribution in each consumer's scope and done condition; and a closure unit that owns the completeness criterion, depending on every consumer. Record each consumer's contribution and the deferred completeness criterion in the plan's Standing Obligations section.
 
@@ -204,10 +217,11 @@ Build the execution plan from the analysis.
 
 3. **Build the critical path**. The longest chain of dependent units — the minimum wall-clock time regardless of parallelism. Flag it explicitly.
 
-4. **Quality check** before drafting the document. A check that cannot be satisfied may instead be discharged by an explicit flag on the affected unit stating what is unresolved — a flagged unknown directs executor judgement, a silent gap misdirects it. Two checks must be satisfied and never flagged: acyclicity, and the overlap status of every parallel-stream pair — disjoint (verified per step 2), serialised, or under a concrete coordination protocol, never left open. Verify:
+4. **Quality check** before drafting the document. A check that cannot be satisfied may instead be discharged by an explicit flag on the affected unit stating what is unresolved — a flagged unknown directs executor judgement, a silent gap misdirects it — unless the item states its own repair, in which case only the repair discharges it. Two checks must always be satisfied outright: acyclicity, and the overlap status of every parallel-stream pair — disjoint (verified per step 2), serialised, or under a concrete coordination protocol, never left open. Verify:
    - Every major component identified in Phase 1 is covered by at least one work unit.
    - The union of all dependency edges — logical, testing, design, knowledge, external — is acyclic. Check mechanically (`tsort` or a short script over the edge list), not by eyeballing the diagram. Where a logical edge and a testing edge oppose each other between two units, resolve it: split the producer on a mechanism/content or protocol/implementation seam, merge the pair, or define a vertical-slice protocol (one end-to-end path through both units before either completes). Recording both edges and choosing an order is not a resolution.
    - Every work unit has a verifiable done condition, evaluable in position from the unit's own output plus its declared dependencies' and external gates' outputs (see [Work unit done conditions](#work-unit-done-conditions)). A condition failing this check is repaired by the split procedure there — a flag without the split does not discharge it.
+   - Every work unit is within the [size budget](#unit-size-budget), including units whose scope an amendment has enlarged since they were drafted. A unit over the open-design-decision budget is repaired by extracting a preceding `design` unit — a flag does not discharge it. Other excesses are flaggable only with rationale that the excess is wall-clock, not context.
    - Every artefact named in a `Depends on` entry is published by exactly one unit, positioned no later than its first consumer.
    - Every success criterion or acceptance measure in the governing goal is named in at least one unit's done condition, at the scale it will be judged. Where a later audit unit measures a criterion from data produced earlier, the producing units' done conditions carry the obligation to produce it — data that must be collected while work happens cannot be reconstructed by the unit that consumes it. Record such obligations in Standing Obligations, naming the carrying units.
    - Every `high`-risk unit is either placed early in execution order or has a risk mitigation note in the Risk Registry.
@@ -284,6 +298,8 @@ Build the execution plan from the analysis.
 ### Re-plan on unit completion
 
 When a unit completes, diff its recorded deviations, deferrals, and discoveries against every downstream unit's scope, dependencies, and done condition. A deviation that adds work to a later unit, reassigns work between units, or leaves an interface unimplemented is a plan change, not an implementation note: amend the plan, re-run the Phase 2 step 4 quality check over the remaining units, and record the amendment in Plan Maintenance. Deferrals are the highest-yield case: "X is deliberately not here, it belongs to unit Y" is simultaneously a scope addition to Y, a possible new edge, and — if Y shares a file with a unit scheduled beside it — a broken parallel-stream claim.
+
+Execution signals are a trigger in their own right. A completion report showing distress — context near exhaustion, design decisions taken mid-implementation, a heavy deviation or deferral count — triggers this step even when no deviation touches downstream scope: re-run the quality check over the remaining units, examining the [size budget](#unit-size-budget) item first for units that resemble the completed one on its load factors, and record the outcome in Plan Maintenance.
 
 Invoked with an existing plan and completion reports (re-plan mode), this step is the whole workflow: apply the diff, re-run the quality check, re-present.
 
