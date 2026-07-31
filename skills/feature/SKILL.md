@@ -1,6 +1,6 @@
 ---
 description: "Deliver a feature end-to-end: brainstorm, design, plan, implement, review. Use when adding new functionality. For very large multi-session features needing architectural research first, use `phronithm:large-scale-feature` instead."
-allowed-tools: Read, Grep, Glob, Bash, Edit, Write, Task, Agent, Skill, ExitPlanMode
+allowed-tools: Read, Grep, Glob, Bash, Edit, Write, Task, Agent, Skill, ToolSearch, EnterPlanMode, ExitPlanMode
 ---
 
 # Feature: Add New Functionality
@@ -20,6 +20,7 @@ Deliver a feature from initial idea to working, tested, documented code.
   - Scope boundaries and constraints
   - Candidate approaches — minimum two; if only one is documented, an explicit justification statement explaining why alternatives are infeasible or unreasonable (not merely that one approach is dominant): for each candidate, tradeoffs, risks, and relevant existing patterns or code
   - Exploration findings: key files, integration points, codebase patterns relevant to the change
+  - Work-unit mode: the unit entry, reproduced verbatim from the decomposition plan
 - **design-document** (Phase 2): Phase 2 output document. Must contain:
   - Selected approach with rationale; rejected alternatives with reasons
   - Concrete design artefacts: interfaces, data structures, key algorithms, error handling strategy, integration points
@@ -38,14 +39,25 @@ Deliver a feature from initial idea to working, tested, documented code.
   - Per-step record: decisions taken, deviations from plan, surprises encountered
   - Per-step critique subagent findings: severity-tagged with dispositions (addressed before exit / noted for Phase 5)
   - Success criteria verification: each criterion from Phase 1 with pass/fail status, its target and achieved rigour level with evidence, and — when achieved is below target — an explicit upgrade path
+  - Work-unit mode: the external-gate re-probe outcome from Phase 4 entry (pins confirmed, or drift found and its resolution)
   - Handoff footer — required text defined in Phase 4
 - **changes** (Phase 4): Code modifications, tests, and commit history. Phase 5 entry condition: the committed Phase 4 changes must be accessible to the Phase 5 session.
 - **documentation** (Phase 5, optional): Documentation a future maintainer needs that is not obvious from the code or existing project docs. Produced when Phase 5 steps 3–4 identify gaps; absent otherwise.
+- **completion-report** (Phase 5, work-unit mode only): The unit's completion recorded against the decomposition plan's unit entry — not against the implementation-plan, whose per-step deviations the implementation-summary already records. Saved to `docs/plans/<unit-name>-completion.md`. Consumed by `phronithm:breakdown` re-plan mode. Must contain:
+  - Done-condition verdict with achieved rigour level
+  - Deviations from the unit entry's scope and publishes
+  - Deferrals, each naming the receiving unit: "X deliberately not implemented — belongs to unit Y"
+  - Discoveries affecting sibling or downstream units: interface changes, new dependencies, invalidated assumptions
+  - Status of each standing obligation the unit carries
+  - External-gate re-verification results (pins confirmed, or drift found and how it was resolved)
+  - Footer: "Run `/phronithm:breakdown` in re-plan mode with the decomposition plan and this report before starting any dependent unit."
 
 ### Consumes
 
 - **static-analysis-findings** (from phronithm:static-analysis): Used in Phases 4–5 to catch mechanical issues during and after implementation. When absent, relies on test results and manual review.
 - **impact-map** (from phronithm:impact-analysis): Consumed in Phase 1 when the change involves renaming, type-changing, or removing exported or serialized fields — run before identifying candidate approaches. Also useful in Phase 5 review to verify all affected code has been considered. When absent, review scopes from the diff.
+- **architecture-document** (from phronithm:large-scale-feature Phase 2): Primary design input when this feature executes part of a larger plan. Replaces Phase 1 exploration of whatever it has settled. Usually accompanies a work-unit-entry.
+- **work-unit-entry** (from a phronithm:breakdown decomposition plan; passed by phronithm:large-scale-feature Phase 3 or supplied directly): the unit's plan entry — done condition, scope, publishes, depends-on artefacts, external gates with their plan-time pins — plus the decomposition-plan path, any standing obligations naming the unit, and optionally a continuation prompt to present on completion. When present, this feature is one work unit of a larger plan and the workflow runs in **work-unit mode**: Phase 1 is scope confirmation, the unit's done condition joins the success criteria, Phase 4 re-verifies the external gates, and Phase 5 produces the completion-report. When absent, the workflow is unchanged and no completion-report is produced.
 
 ### Complexity drivers
 
@@ -80,13 +92,15 @@ Before entering plan mode, do a minimal orientation to the project:
 
 2. Read `CLAUDE.md` (project instructions — often contains architecture overview, conventions, key files).
 3. Check `package.json` or equivalent to identify the tech stack and runtime dependencies.
-4. Call `EnterPlanMode`.
+4. Call `EnterPlanMode`. If its schema is deferred (the tool is listed but not loaded), load it first via `ToolSearch` (`select:EnterPlanMode`) — do not skip plan mode because the tool is not visible.
 
 This is cheap and ensures plan mode starts with basic grounding rather than cold.
 
 ### Phase 1: Brainstorm
 
 Understand the problem before exploring solutions.
+
+**Work-unit mode**: Phase 1 is scope confirmation, not requirements discovery. Load the work-unit entry and the architecture document; confirm the unit's scope and publishes with the requester; adopt the unit's done condition verbatim as a success criterion, tagged with a target rigour level per step 2 — the done condition is what the decomposition plan certifies for this unit, so what this workflow verifies must be that condition, not a re-derived approximation. Reproduce the unit entry verbatim in the problem-statement: it is the committed source from which the Phase 3 footer and Phase 4 gate re-probe later copy it, and a paraphrase breaks the pin re-verification. Any scope adjustment agreed during confirmation is already a deviation from the entry — record it for the completion-report. Each standing obligation the unit carries is a requirement: carry it into the success criteria or a plan step — data that must be collected while work happens cannot be reconstructed afterwards. Do not re-explore what the decomposition plan and architecture document have settled; run steps 1–4 only to the extent the unit entry leaves open.
 
 1. **Capture** the request. Restate it in your own words. Confirm understanding with the requester.
 2. **Clarify** ambiguities. Ask about: scope boundaries, edge cases, performance requirements, compatibility constraints, affected users. Establish **measurable success criteria**: what specific, observable outcomes distinguish "done" from "not done"? Do not proceed with unresolved ambiguities — flag them explicitly.
@@ -157,6 +171,21 @@ Break the design into implementable steps. **Do not use the Task tool in this ph
    ```
    This ensures the executing session — which may not have access to earlier session context — knows that Phase 5 is still required and has a complete checklist for the implementation-summary.
 
+   **Work-unit mode**: additionally append a work-unit context section. The implementing session's only link to the decomposition plan is this footer — the loop that selected this unit does not survive the session boundary, so everything it needs must be here:
+   ```
+   ## Work-unit context
+   This plan implements work unit <unit-name> of <decomposition-plan path>.
+   Unit entry, verbatim (Phase 4 re-verifies the external gates against these
+   pins before implementing, recording the outcome in the implementation-summary):
+   <unit entry: scope, publishes, depends-on, external gates, done condition,
+    standing obligations naming this unit>
+   After Phase 5, produce the completion-report (contents per the
+   phronithm:feature skill's Produces) at docs/plans/<unit-name>-completion.md,
+   then present this continuation prompt to the requester:
+   <the continuation prompt supplied with the work-unit-entry; when none was
+    supplied, the completion-report footer's re-plan instruction>
+   ```
+
 Exit criteria: Every step has clear inputs, outputs, and acceptance criteria. The plan covers the full design. **Plan critique has run** and no Critical or Significant findings remain — do not call ExitPlanMode without completing the critique step. API spec / code block consistency check passed (or not applicable — plan has only one of spec or code block).
 
 **Handoff footer required.** The plan document must include the handoff footer before this phase is considered complete. If it is missing, the phase exit gate fails.
@@ -166,7 +195,7 @@ Exit criteria: Every step has clear inputs, outputs, and acceptance criteria. Th
 **Before calling ExitPlanMode**, verify all three:
 1. Critique has run (Phase 3 step 5, or Phase 2 step 5 in non-compressed mode) — no Critical or Significant findings remain
 2. API spec / code block consistency check passed (step 6) or is not applicable
-3. Handoff footer is present in the plan document
+3. Handoff footer is present in the plan document (in work-unit mode, including the work-unit context section)
 
 Do not call ExitPlanMode until all three are satisfied. This checklist exists because the most common workflow failure is calling ExitPlanMode immediately after writing the plan, skipping the critique step.
 
@@ -178,6 +207,10 @@ Execute the plan. Test after each step.
 
 **Assess implementation complexity before beginning.** Complex implementations — parsers, multi-file transformations, unfamiliar APIs, or tasks requiring extended coherent reasoning across many files — should target Opus. If the current session is running a lighter model, flag this to the user before starting Phase 4 rather than discovering capability limits mid-implementation.
 
+**Work-unit mode** (active in Phases 4–5 whenever the loaded plan document contains a Work-unit context section): before step 1, re-verify every external gate in that section against its plan-time pin. Probe environment gates mechanically — binaries and their versions, fonts, services, accounts, data sets. Confirm organisational and release gates (a person or team's sign-off, a shipped release) with the requester — they cannot be probed from the machine. The pins were recorded when the decomposition plan was written, possibly sessions ago in a different environment, and a pin prevents drift only if it is checked when it matters. Record the outcome in the implementation-summary. A drifted gate is a plan-level change, not an implementation note — surface it to the requester before implementing against the changed environment, and resolve it one of two ways:
+   - The requester restores the environment to match the pin, or accepts the drift as harmless for this unit: record the resolution and continue.
+   - The drift requires a plan change: write a completion-report recording the unit as blocked by the drift (nothing implemented), present the continuation prompt or re-plan instruction per Phase 5 step 6, and stop. Breakdown's re-plan amends the pin; the unit is re-attempted afterwards.
+
 1. **Implement** one step at a time. When parallelising by category (e.g. lint rule, component, concern), assign each file to exactly one agent — the one whose category has the most planned edits to that file (tie: first-listed category in the plan wins). For files that also need secondary-category fixes, include those in that agent's initial Task prompt rather than dispatching a second agent to the same file. Last-write-wins silently drops fixes from losing agents.
    When delegating steps to agents, include in the task prompt: (a) an explicit completion requirement — "Continue through to completion, including commit and any cleanup — do not stop mid-task to wait for further instruction"; and (b) before reporting done, the agent must run the project's formatter and type-checker on all changed files and fix any new errors.   **For features integrating unfamiliar external APIs**: validate auth with one minimal call before building full provisioning logic. Add one resource type at a time. Expect 3–5 discovery round-trips for niche or poorly-documented APIs — this is normal, not a sign of a flawed approach. Auth format, required fields, field validity constraints, and resource interdependencies are typically not in training data and must be discovered empirically.
 2. **Test** the step against its acceptance criteria. Run the full affected test suite — regressions are easier to fix immediately. Consider running phronithm:static-analysis periodically to catch mechanical issues (null safety, type errors, resource leaks) early. For non-code changes: mentally execute at least one concrete example. If the change is conditional (prose with branches, config with overrides), cover all decision paths or document which are untestable and why. Record each criterion's **achieved rigour level** against its Phase 1 target, not just pass/fail: when the achieved level is below target (e.g. demonstrated once but not yet held by an automated check), note the upgrade path rather than treating the criterion as fully done.
@@ -185,6 +218,7 @@ Execute the plan. Test after each step.
 4. **Critique** the step's changes: run the [critique gate](${CLAUDE_PLUGIN_ROOT}/docs/critique-gate.md) with [critique-code](${CLAUDE_PLUGIN_ROOT}/docs/critique/critique-code.md). Spawn it immediately after the commit; while it runs, proceed to execute the next step concurrently. Critique is slow; you may complete several steps before an earlier critique finishes.
    This gate sees only this step's diff — it cannot detect a later step invalidating an assumption an earlier step made. That cross-increment check is Phase 5's job (step 1), not a duplicate of this one.
 5. **Reassess** after each step. Has the implementation revealed something the design missed? If the gap is small, note it and continue. If it changes the approach, return to the appropriate earlier phase. When the target is a *finding* rather than a known deliverable (a spike, a root-cause question, an unfamiliar-API probe), this reassess-and-re-plan step *is* the [investigation loop](${CLAUDE_PLUGIN_ROOT}/docs/investigation-loop.md) — let results reshape the question rather than treating discovery as a deviation; reach for `/phronithm:investigate` when discovery is the product.
+   In work-unit mode the reassessment also faces outward. Record for the completion-report, as each arises rather than reconstructed at Phase 5: a discovery that adds work to, reassigns work between, or invalidates an assumption of a sibling or downstream unit; a deferral — work inside this unit's scope deliberately not implemented, naming the unit it belongs to; and any deviation from the unit entry's scope or publishes. None of these is resolved by returning to an earlier phase of *this* workflow — the decomposition plan is amended by `phronithm:breakdown`'s re-plan mode, not by this session.
 
 Before the exit gate, wait for any outstanding critique subagents to complete. Integrate findings: address Critical and Significant findings, re-running the gate per its default iteration policy until it passes or escalates; note Minor findings for Phase 5 clean-up.
 
@@ -211,8 +245,9 @@ Validate the complete feature.
 3. **Document** anything a future maintainer needs to know that isn't obvious from the code.
 4. **Update project docs**: check whether the changes affect concepts documented in CLAUDE.md or project design docs. For structural changes (files added, moved, or renamed), update key-file listings. For behavioural changes (new data shapes, changed contracts, modified mechanics), check whether existing docs reference the modified concepts and update if stale.
 5. **Clean up**: remove dead code, temporary scaffolding, debugging artefacts.
+6. **Work-unit mode**: produce the completion-report — all contents per Produces, footer included; the report's contents never vary — save it to `docs/plans/<unit-name>-completion.md`, and commit it. Then present the continuation prompt from the plan's work-unit context in a fenced code block — or, when none was supplied, instruct the requester to run `/phronithm:breakdown` in re-plan mode with the decomposition plan and this report before starting any dependent unit. The either/or governs only what is said to the requester, not what the report contains. Do not end the session without presenting one or the other: the report and prompt are the only path back to the decomposition plan's loop.
 
-Exit criteria: Code is reviewed, tested, documented, and ready to merge.
+Exit criteria: Code is reviewed, tested, documented, and ready to merge. In work-unit mode: the completion-report is saved and committed, and the continuation prompt (or re-plan instruction) has been presented.
 
 ## Review gates
 
@@ -256,6 +291,6 @@ The workflow terminates when Phase 5's exit criteria are met. It can also termin
 
 For trivial features (single function, obvious implementation, no design ambiguity), phases 1-3 can be compressed into a brief confirmation with the requester before implementing. Do not skip them entirely — even trivial features benefit from a moment's thought about edge cases and testing.
 
-For trivial features (single-file prose changes, well-specified single-commit work), the implementation-summary may be omitted — record decisions and review findings in the commit message instead.
+For trivial features (single-file prose changes, well-specified single-commit work), the implementation-summary may be omitted — record decisions and review findings in the commit message instead. The completion-report is never omitted in work-unit mode, whatever the unit's size — it is the loop's only path back to the decomposition plan.
 
-For large features, consider splitting into multiple passes through this workflow, each delivering an increment.
+For large features, consider splitting into multiple passes through this workflow, each delivering an increment. Not in work-unit mode: decomposition belongs to `phronithm:breakdown` — scope growth beyond the unit is a discovery for the completion-report, not grounds for splitting here.

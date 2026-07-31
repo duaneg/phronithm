@@ -120,7 +120,14 @@ Turn a question into an attackable shape.
    factor is *dependency structure*, not rung count. When used, `/phronithm:breakdown`
    *decomposes and dependency-orders* the candidates; then re-rank that output by
    cost-to-falsify — breakdown supplies the decomposition, the kill-cost ordering
-   is this skill's specialisation and is not what breakdown produces.
+   is this skill's specialisation and is not what breakdown produces. The re-rank
+   moves rungs only within the dependency graph's topological freedom: breakdown
+   certifies each done condition evaluable in position against *its* ordering, so
+   a rung must not move ahead of any rung whose artefacts its done condition or
+   dependencies name — reordering beyond that freedom invalidates the
+   certification. Verify the re-ranked order against the edge list mechanically
+   (`tsort` or a short script — the same approach as breakdown's own acyclicity
+   check), not by eyeballing.
 5. **Save** the problem-statement. It is the framing snapshot — frozen here; the
    living record from now on is investigation-results.
 

@@ -38,7 +38,7 @@ Serves human teams planning work and agent teams needing structured task assignm
 
 - **architecture-document** (from phronithm:large-scale-feature Phase 2): When present, requirements and design are already settled — Phase 1 step 1 is abbreviated to reading the document and extracting components. Steps 2–5 run in full.
 - **impact-map** (from phronithm:impact-analysis): When present, informs scope boundaries and identifies cross-cutting concerns.
-- **completion-report** (from the unit's executor; free-form): the deviations, deferrals, and discoveries recorded when a unit completed. Required for re-plan mode — the re-plan diff runs off it.
+- **completion-report** (from the unit's executor — `phronithm:feature` Phase 5 produces one in work-unit mode; free-form from other executors): the deviations, deferrals, and discoveries recorded when a unit completed. Required for re-plan mode — the re-plan diff runs off it.
 
 ### Complexity drivers
 

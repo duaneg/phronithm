@@ -11,9 +11,10 @@ data-gathering, `phronithm:critic`, and verify subagents must not spawn
 further subagents — they return findings inline and leave delegation to the
 orchestrating session.
 
-Full-workflow orchestrators (phronithm:feature / phronithm:large-scale-feature
-teammates) are exempt: they may spawn the specific critique/review agents
-their skill prescribes, but must not recurse beyond that.
+Full-workflow orchestrators (sessions running phronithm:feature /
+phronithm:large-scale-feature) are exempt: they may spawn the specific
+critique/review agents their skill prescribes, but must not recurse beyond
+that.
 
 Enforce this with an explicit prohibition in agent persona files and subagent
 spawn prompts. Invoke Agent-dependent skills (e.g. the [critique

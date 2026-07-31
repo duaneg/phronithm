@@ -1,11 +1,11 @@
 ---
 description: "Multi-session feature delivery: parallel research, iterated architecture document, then per-increment implementation. Use when the feature spans multiple systems, the design space is open, or scope exceeds a single `phronithm:feature` invocation."
-allowed-tools: Read, Grep, Glob, Bash, Edit, Write, Task, Agent, Skill, AskUserQuestion
+allowed-tools: Read, Grep, Glob, Bash, Edit, Write, Task, Agent, Skill, AskUserQuestion, ToolSearch, EnterPlanMode, ExitPlanMode
 ---
 
 # Large-Scale Feature
 
-Deliver a large, complex, multi-session feature from initial idea to architecture document and implementation plan. Distinct from `/phronithm:feature` in three ways: parallel research before design (subagents for domain investigation), an architecture document phase (standalone design doc iterated until critique findings diminish to marginal), and an explicit multi-session structure (deliberate context handoffs between phases prevent accumulated brainstorming context from contaminating design thinking).
+Deliver a large, complex, multi-session feature from initial idea to architecture document and implementation plan. Distinct from `/phronithm:feature` in three ways: parallel research before design (subagents for domain investigation), an architecture document phase (standalone design doc iterated until critique findings diminish to marginal), and an explicit multi-session structure (deliberate context handoffs between phases prevent accumulated brainstorming context from contaminating design thinking; Phase 3 loops per work unit through committed-document handoffs).
 
 Use this skill when: the feature requires architectural decisions that span multiple existing systems, the design space is genuinely open (not just applying an established pattern), or the scope is large enough that a single `/phronithm:feature` invocation would be impractical.
 
@@ -20,13 +20,16 @@ Use this skill when: the feature requires architectural decisions that span mult
 - **architecture-brief** (Phase 1): Structured writing plan for the architecture document — requirements, research synthesis, candidate approaches, and architectural direction. Self-contained enough for Phase 2 to proceed from it alone. Committed to the project repo at `docs/architecture/<name>-brief.md` or project equivalent.
 - **research-notes** (Phase 1): Findings from parallel research subagents, addressing specific unknowns identified during brainstorming. Committed to the project repo under `docs/research/` or project equivalent.
 - **architecture-document** (Phase 2): High-level architecture overview, iterated until critique findings diminish to marginal. Committed to version control under `docs/architecture/` or project equivalent.
-- **decomposition-plan** (Phase 2): Work decomposition with dependency ordering, parallelism analysis, and execution guidance. Produced by `/phronithm:breakdown`. Committed to the repo.
-- **implementation-plan** (Phase 3): Via `/phronithm:feature` Phases 1–3 for the first increment.
+- **decomposition-plan** (Phase 2): Work decomposition produced by `/phronithm:breakdown`: work units with done conditions, external gates with plan-time pins, dependency graph, execution order, parallel streams, critical path, meta-tasks, standing obligations, risk registry, and a plan-maintenance record. Committed to the repo. A living document through Phase 3 — amended by breakdown's re-plan mode as units complete.
+- **implementation-plan** (Phase 3): Via `/phronithm:feature` Phases 1–3, one per work unit, each carrying the unit's work-unit context in its handoff footer.
+- **completion-report** (Phase 3): One per completed work unit, produced by `/phronithm:feature` Phase 5 in work-unit mode. Input to breakdown's re-plan mode at the next Phase 3 pass.
 
 ### Consumes
 
 - **architecture-brief** (Phase 2 input): Primary design input for the architecture document.
 - **architecture-document** (Phase 3 input): Design input for `/phronithm:feature`.
+- **decomposition-plan** (Phase 3 input): Source of work units, execution order, and completion state (via its plan-maintenance record).
+- **completion-report** (Phase 3 re-entry input, from `/phronithm:feature` Phase 5): Consumed by `/phronithm:breakdown` re-plan mode before the next unit is selected.
 - **impact-map** (from phronithm:impact-analysis): Consumed in Phase 1 when the change involves renaming, type-changing, or removing exported or serialised fields — run before identifying candidate approaches.
 
 ### Complexity drivers
@@ -108,7 +111,7 @@ Substitute the actual feature name and path. Wait for user confirmation before c
 3. **Critique the architecture document** — this step catches structural bugs that are expensive to discover during implementation. Do not skip or compress it. Run the [critique gate](${CLAUDE_PLUGIN_ROOT}/docs/critique-gate.md) on the document with `critique-design`, applying its default iteration policy. Present critical and significant findings to the requester and confirm the proposed fixes before implementing them — this skill's multi-session, higher-stakes structure warrants requester sign-off on fixes that the single-session `phronithm:feature` doesn't require. Minor findings may be fixed without review.
 4. **Update** existing project documentation for consistency: check whether the architecture affects concepts in `CLAUDE.md`, existing design docs, or key-file listings. Update stale references.
 5. **Commit** the architecture document and any updated project docs.
-6. **Decompose into work plan**: Invoke `/phronithm:breakdown` with the architecture document as the goal input. If gaps in the architecture document prevent decomposition, stop and report the gaps rather than proceeding with assumptions. Review the decomposition plan, then confirm it with the requester before proceeding to Phase 3.
+6. **Decompose into work plan**: Invoke `/phronithm:breakdown` with the architecture document as the goal input. If gaps in the architecture document prevent decomposition, stop and report the gaps rather than proceeding with assumptions. Review the decomposition plan — including any quality-check discharge flags on units, which mark unresolved unknowns left to direct executor judgement: confirm each flagged unknown is acceptable to carry into execution or send it back for resolution. Then confirm the plan with the requester before proceeding to Phase 3.
 
 Exit criteria: Architecture document committed. Decomposition plan committed. **Architecture document critique has run** (step 3) and no Critical or Significant findings remain — do not proceed to handoff without completing the critique step. The architecture document addresses any concerns flagged during the Phase 1 critique of the architecture brief.
 
@@ -122,37 +125,48 @@ Load the phronithm:large-scale-feature skill and begin Phase 3. Architecture doc
 
 Substitute the actual feature name and path. Wait for user confirmation before continuing.
 
-### Phase 3: Plan MVP
+### Phase 3: Implement work units
 
-**Begin this phase in a fresh session.** Load the architecture document and decomposition plan from Phase 2.
+**Begin this phase in a fresh session, and re-enter it in a fresh session after each unit completes.** Each pass through this phase plans one work unit; the phase repeats until the decomposition plan's execution order is exhausted. The loop's state lives entirely in committed documents — the decomposition plan's plan-maintenance record, each unit's completion-report, and each implementation-plan's work-unit context — because no session context survives the boundaries between passes.
 
-1. **Load** the architecture document and decomposition plan. Review the work units. The architecture document replaces `/phronithm:feature`'s Phase 1 exploration — do not re-explore what has already been settled.
-2. **Select** the first work unit from the decomposition plan's execution order — typically the most foundational unit, or the one that reduces the most risk early. The decomposition plan's ordering rationale should guide this choice.
-3. **Invoke `/phronithm:feature`** starting at Phase 1, using the architecture document as the primary design input. Phase 1 of `/phronithm:feature` here is scope confirmation only: load the architecture document, confirm the selected work-unit scope with the requester, and proceed to design. Requirements are already established — do not repeat codebase exploration that the architecture document has already covered.
-4. Complete `/phronithm:feature` through Phase 3 (implementation plan approved and saved).
-5. **Proceed** with `/phronithm:feature` Phases 4–5 for implementation and review.
+"Invoke" in this phase means loading the skill into the current session via the Skill tool — never a Task/Agent dispatch: subagents cannot reliably write files (see [file writes](${CLAUDE_PLUGIN_ROOT}/docs/subagent-protocol.md#file-writes)), and every artefact this loop depends on is a file write.
 
-Exit criteria: Implementation plan is approved, saved to a durable location, and self-contained — a fresh session can implement from it without referencing the transcript.
+This loop is serial — one unit per pass. The plan's parallel-stream analysis serves multi-worker execution outside this skill's loop; when units are executed concurrently by other workers, gather all their completion-reports into a single re-plan invocation (breakdown accepts one or more) before selecting any dependent unit.
 
-**Phase 3 complete. Recommend starting a new session for implementation.**
+1. **Load** the architecture document and decomposition plan. Establish completion state: a unit is complete iff a plan-maintenance completion entry names it. The just-completed unit will not yet appear there — its identity and completion-report path come from the continuation prompt that opened this session; absent that, glob `docs/plans/*-completion.md` and diff against the record. If every unit is complete **and** every completion's re-plan is recorded, go to Phase termination below; if a completion's re-plan is outstanding — including the last unit's — run step 2 for it first.
+2. **Re-plan** (on re-entry with a completed unit): invoke `/phronithm:breakdown` in re-plan mode with the decomposition plan and the unit's completion-report, review the amended plan, and confirm it is committed before proceeding — an uncommitted amendment is invisible to the next pass. Do this before selecting further work — a deferral or discovery in the report may change scope, dependencies, or ordering of the remaining units. Skip only if the plan-maintenance record already shows this completion re-planned; that state occurs when a pass crashed or compacted between re-plan and unit selection, in which case the committed documents are the recovery state — reload them and continue from the first unsatisfied step.
+3. **Select** the next work unit from the (possibly amended) execution order — on the first pass, typically the most foundational unit or the one that reduces the most risk early. The plan's ordering rationale guides the choice.
+4. **Invoke `/phronithm:feature`** with the architecture document as the primary design input and the unit's plan entry as its **work-unit-entry**: the entry verbatim (scope, publishes, depends-on, external gates with pins, done condition), the decomposition-plan path, any standing obligations naming the unit, and the continuation prompt below. `/phronithm:feature` Phase 1 runs in work-unit mode — scope confirmation only; requirements are settled by the architecture document and the unit entry.
+5. Complete `/phronithm:feature` through Phase 3 (implementation plan approved, saved, and carrying the work-unit context in its handoff footer). `/phronithm:feature`'s session model then governs implementation and review: its Phase 4 re-verifies the unit's external gates, and its Phase 5 produces the completion-report and presents the continuation prompt that re-enters this phase.
 
-Present the following startup prompt to the requester in a fenced code block:
+Exit criteria (per pass): implementation plan approved, saved, self-contained, and carrying the work-unit context — a fresh session can implement from it without referencing the transcript.
+
+**Recommend starting a new session for implementation.** The transition itself is `/phronithm:feature`'s standard ExitPlanMode flow — this skill adds no bespoke step — but feature presents no startup prompt for the cleared session, so after plan approval present this one to the requester in a fenced code block:
 
 ```
 Load the phronithm:feature skill and begin Phase 4. Implementation plan: docs/plans/<name>-plan.md
 ```
 
-Substitute the actual feature name and path. Wait for user confirmation before continuing.
+Substitute the actual plan path. Wait for user confirmation before continuing.
 
-Proceed with `/phronithm:feature` Phases 4–5 for implementation and review. `/phronithm:feature` Phase 5 includes the retrospective — ensure it runs. If Phase 5 will not begin in this session, explicitly instruct the requester: "Phase 5 (Review, including retrospective) must be run before this feature is complete."
+The continuation prompt supplied in step 4 — what `/phronithm:feature` Phase 5 presents when the unit completes (substitute actual names and paths):
+
+```
+Load the phronithm:large-scale-feature skill and continue Phase 3.
+Architecture document: docs/architecture/<name>.md
+Decomposition plan: docs/plans/<name>-breakdown.md
+Completed unit: <unit-name> (completion report: docs/plans/<unit-name>-completion.md)
+```
+
+**Phase termination**: when step 1 finds every unit complete and re-planned, run the plan's remaining meta-tasks — substantial ones (integration testing, tuning infrastructure) as work units through `/phronithm:feature` in work-unit mode, deriving a plan entry with a done condition from the Meta-Tasks section; small ones (documentation updates) directly in this session. Then confirm every standing obligation is discharged. The feature is complete.
 
 ## Review gates
 
-After each phase:
+After each phase — and after every Phase 3 pass, not once for the phase:
 
 - Does the output meet the phase's exit criteria?
 - Is the handoff document self-contained — could a fresh session proceed from it alone? Rate `sufficient` / `partial` / `insufficient`.
-- Have assumptions made in earlier phases been invalidated?
+- Have assumptions made in earlier phases been invalidated? In Phase 3, specifically: do the completed unit's discoveries invalidate the architecture document? Re-plan amends only the decomposition plan and cannot catch that — return to Phase 2 if so.
 - Are there new ambiguities? Resolve before proceeding.
 
 If a gate reveals a problem, return to the earliest affected phase. Do not patch forward.
@@ -176,6 +190,10 @@ Memory is for environmental and ephemeral learnings: tooling quirks, session-spe
 For features where the architecture is already settled (e.g. adding a new module to a well-established pattern), Phase 2 can be abbreviated to a targeted design review rather than a full architecture document. Do not abbreviate Phase 1 research — even familiar codebases have integration surprises at scale.
 
 If Phase 2 architecture work reveals new questions that require targeted research, return to Phase 1 for a focused research pass before completing the architecture document. One such return is expected for complex domains; more than one signals the architecture brief underspecified the problem.
+
+## Termination
+
+The workflow terminates when Phase 3's termination condition is met. It can also terminate early: the requester withdraws the feature, investigation reveals it infeasible, or scope grows beyond what was agreed. On early exit, commit whatever exists and record the stop — with the state of any in-flight unit — in the plan-maintenance record; a later re-entry starts from the committed documents, exactly as a normal Phase 3 pass does.
 
 ## Commit discipline
 
