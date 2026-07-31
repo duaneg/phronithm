@@ -17,6 +17,7 @@ Serves human teams planning work and agent teams needing structured task assignm
   - A feature description or goal statement (most general — the skill does the full analysis)
   - An architecture document path (from `/phronithm:large-scale-feature` Phase 2 — requirements and design already settled; Phase 1 step 1 is abbreviated)
   - A list of existing work items to re-plan (issue numbers, TODO items, or equivalent)
+  - An existing decomposition plan plus one or more unit completion reports (re-plan mode — see [Re-plan on unit completion](#re-plan-on-unit-completion))
 
 **Goal specificity check**: Before beginning analysis, verify the goal is specific enough to decompose. A valid goal must have a clear done condition — you must be able to answer "how would we know this is complete?" If the goal is too vague to answer that question, stop and ask for clarification. Do not begin analysis on an underspecified goal.
 
@@ -28,13 +29,16 @@ Serves human teams planning work and agent teams needing structured task assignm
   - Execution order with rationale
   - Parallel streams for 2-worker and N-worker scenarios
   - Critical path analysis
-  - Meta-tasks (test harness, debug tooling, verification checkpoints)
+  - Meta-tasks (test harness, debug tooling, integration testing)
+  - Standing obligations spanning units
   - Risk registry
+  - Plan maintenance record
 
 ### Consumes
 
 - **architecture-document** (from phronithm:large-scale-feature Phase 2): When present, requirements and design are already settled — Phase 1 step 1 is abbreviated to reading the document and extracting components. Steps 2–5 run in full.
 - **impact-map** (from phronithm:impact-analysis): When present, informs scope boundaries and identifies cross-cutting concerns.
+- **completion-report** (from the unit's executor; free-form): the deviations, deferrals, and discoveries recorded when a unit completed. Required for re-plan mode — the re-plan diff runs off it.
 
 ### Complexity drivers
 
@@ -84,7 +88,7 @@ Iterative units are systematically underestimated. When a unit is marked `iterat
 
 If the project already has tuning infrastructure that covers this need, the design unit may collapse to a verification note.
 
-*Structural iteration* is better addressed by the `exploratory` clarity flag, higher effort estimates, and risk flagging. Pre-designing away structural iteration is often wasted effort — you're designing before you have the information that drives the changes.
+*Structural iteration* is better addressed by the `exploratory` clarity flag, higher effort estimates, and risk flagging. Pre-designing away structural iteration is often wasted effort — you're designing before you have the information that drives the changes. Structural iteration in a unit that others consume usually signals consumer-determined content — apply the mechanism/content split from Phase 1 step 2; the flag alone only adjusts the effort estimate.
 
 **Effort** — rough guide, not a commitment:
 - `small`: <1h focused work
@@ -100,7 +104,7 @@ Dependencies between work units come in several forms. The first four are always
 | Type | Description | Example |
 |------|-------------|---------|
 | **Logical** | A defines types/APIs that B consumes. Strict ordering. | Types & plumbing → arena physics |
-| **Testing** | A must be functional to *verify* B, even if B doesn't logically depend on A's internals. Plans that look parallel on paper but are serial in practice create false expectations — record testing dependencies and plan around them, don't wish them away. | Transitions → arena physics (can't test arena without entering it) |
+| **Testing** | A must be functional to *verify* B, even if B doesn't logically depend on A's internals. Plans that look parallel on paper but are serial in practice create false expectations — record testing dependencies and plan around them, don't wish them away. A mechanism whose only realistic verifier is its first consumer puts a testing edge against the logical edge — a cycle. Treat that as a signal to split the producer (Phase 2 step 4), not an order to pick. | Transitions → arena physics (can't test arena without entering it) |
 | **Design** | A decision must be made before B can proceed. | Visual effects design → renderer changes |
 | **Knowledge** | Completing A produces understanding needed to design/implement B. | Prototype/spike → production implementation |
 
@@ -112,7 +116,7 @@ Dependencies between work units come in several forms. The first four are always
 | **Release** | "Do any units depend on a prior release or deployment?" |
 | **Data** (runtime state, migrations, infrastructure) | "Do any units depend on migrations, data pipelines, or environment setup?" |
 
-These cannot be discovered from the codebase — ask explicitly in Phase 1 step 4. If running non-interactively, record as unknown and flag as risks.
+Organisational and release gates cannot be discovered from the codebase — ask explicitly, per unit, in Phase 1 step 4. Environment gates often can be: probe the machine (step 4) rather than asking.
 
 ### Work unit done conditions
 
@@ -121,11 +125,15 @@ Every work unit must have a verifiable done condition — a statement that can b
 - "The configuration schema validates against the fixture suite with zero errors"
 - "Design question resolved and decision recorded in plan document"
 
+A done condition must also be **evaluable in position**: every artefact it names is produced by the unit itself, by a declared dependency, or by a declared external gate. If it names anything else, either a dependency is missing or the condition belongs to a different unit — check both directions, since the done condition records what the unit needs while the dependency list records what its author remembered. Where a condition cannot be made evaluable in position, split it: assert now what is checkable at the unit's position, defer the rest to a named later unit, and flag the deferral on this unit.
+
 Exploratory units may have a process done condition: "Spike complete: approach decided and documented." The decision itself is the artefact.
 
 ### Scope
 
-Each work unit lists the files, modules, or directories it will touch. For teams (human or agent), scope boundaries determine:
+Each work unit lists the files, modules, or directories it will touch, and names what it **publishes** — the APIs, protocols, schemas, formats, or measured constants other units code against. For each dependency edge, name the artefact that crosses it and the unit that owns it. An artefact more than one unit reads is a named deliverable of exactly one unit. An artefact more than one unit writes is either a unit of its own or a scope conflict requiring a coordination protocol.
+
+For teams (human or agent), scope boundaries determine:
 - Which units can be worked on concurrently without conflicts
 - The boundary of responsibility for a given worker
 - What to review when the unit is complete
@@ -150,25 +158,30 @@ Understand the feature's structure before decomposing it.
    - *Feature description*: Read relevant project documentation and codebase. Identify the major components, integration points, and boundaries.
    - *Architecture document*: Read the document. Extract the component list, data model, and integration points. The requirements and design are settled — proceed directly to step 2.
    - *Existing work items*: Fetch each item with full history. Build a picture of the intended scope and decisions already taken.
+   - *Existing plan plus completion reports*: re-plan mode — skip Phases 1 and 2 and go directly to [Re-plan on unit completion](#re-plan-on-unit-completion).
 
 2. **Identify work units**. Each unit must be:
    - **Individually completable**: bounded session — roughly a half-day or single agent context window
    - **Verifiable**: done condition stated now (see [Work unit done conditions](#work-unit-done-conditions))
-   - **Clearly scoped**: files/modules enumerable upfront
+   - **Clearly scoped**: files/modules enumerable upfront (see [Scope](#scope))
 
    Record testing dependencies explicitly in step 4 — a unit may be implementable without others but not verifiable until a dependency is complete.
 
    Split on **responsibility boundaries**, not size. Prefer fewer, larger units — coordination overhead grows faster than task-size overhead.
 
+   When a unit's completeness is determined by its consumers (schemas, vocabularies, plugin protocols, public APIs), split it on the mechanism/content seam: a mechanism unit with a fixture-checkable done condition and an extension protocol; a content contribution in each consumer's scope and done condition; and a closure unit that owns the completeness criterion, depending on every consumer. Record each consumer's contribution and the deferred completeness criterion in the plan's Standing Obligations section.
+
    **Convergence**: Complete when every component from step 1 has at least one unit and every integration point is covered. If new components keep surfacing after 2–3 passes, the feature needs splitting into phases.
 
 3. **Classify each unit** on all five axes (type, risk, clarity, iteration profile, effort). For each unit marked `iterative`, determine whether the iteration is tuning or structural, and whether a companion `design` unit is needed for tuning infrastructure.
 
-4. **Map dependencies**. For each unit, check which other units it depends on across all four always-analysed types. For small decompositions (≤8 units), check all pairs. For larger decompositions, check each unit against all units that logically precede it — full pairwise checking at scale is impractical.
+4. **Map dependencies**. For each unit, check which other units it depends on across all four always-analysed types. For small decompositions (≤8 units), check all pairs. For larger decompositions, scope logical-edge checking to the units that logically precede each unit — full pairwise checking at scale is impractical. Only logical edges are precedence-scoped. For every unit, regardless of position, ask: what must be functional to verify this (testing)? what decision or understanding must exist first (design, knowledge)? Reverse-direction edges are what form cycles, and precedence-scoped checking cannot find them. External gates are per-unit by construction (below).
 
-   Then ask: "Are any of these units gated by external factors — specific people or teams, prior releases, data migrations, or environment setup?" If running non-interactively, record external dependency types as unknown and flag them in the risk registry.
+   Ask the external-factor question per unit, as each done condition is written, not once for the decomposition: is this unit gated by specific people or teams, a prior release, a data migration, or environment setup? A done condition that invokes a binary, a service, an account, an installed font or data set, or another team's environment has an external gate whatever the decomposition-wide answer is. Record each gate in that unit's External gates field and as a node in the dependency graph — the risk registry holds only residual risk.
 
-5. **Identify meta-tasks**. Debug tooling, test harnesses, and verification checkpoints are real work — anticipating them prevents surprise scope growth and ensures they're budgeted. Work that falls outside any single unit but is necessary:
+   Probe environment gates now rather than recording them on trust: check that the binaries, versions, fonts, services, and data sets the done conditions rely on exist and behave as assumed, and pin versions in the plan. If running non-interactively and a gate cannot be resolved, record it as unknown on the unit and flag it in the risk registry.
+
+5. **Identify meta-tasks**. Debug tooling, test harnesses, and verification checkpoints are real work — anticipating them prevents surprise scope growth and ensures they're budgeted. A verification checkpoint that gates a specific unit is not a meta-task — it is that unit's dependency and a clause of its done condition; only work belonging to no single unit stays here. Work that falls outside any single unit but is necessary:
    - Test harness or debug tooling (e.g. shortcuts to reach the feature under development)
    - Manual verification checkpoints (when automated testing is insufficient)
    - Integration testing after units are combined
@@ -187,13 +200,16 @@ Build the execution plan from the analysis.
 2. **Identify parallel streams**. Group units that can be executed concurrently:
    - **Minimum parallelism** (2 workers): Which two streams give the best wall-clock improvement? Usually: critical path in one stream, everything else in the other.
    - **Full parallelism**: Maximum concurrent units at each phase. Note synchronisation points where streams must reconverge.
-   - For each stream, state the **scope boundary**. Streams with overlapping scope must be either serialised or assigned a concrete coordination protocol — do not leave overlap unresolved.
+   - For each stream, state the **scope boundary**. Streams with overlapping scope must be either serialised or assigned a concrete coordination protocol — do not leave overlap unresolved. Disjointness claims are load-bearing: concurrent executors cannot see each other's adaptations, so verify disjointness against both files touched and artefacts published.
 
 3. **Build the critical path**. The longest chain of dependent units — the minimum wall-clock time regardless of parallelism. Flag it explicitly.
 
-4. **Quality check** before drafting the document. Verify:
+4. **Quality check** before drafting the document. A check that cannot be satisfied may instead be discharged by an explicit flag on the affected unit stating what is unresolved — a flagged unknown directs executor judgement, a silent gap misdirects it. Two checks must be satisfied and never flagged: acyclicity, and the overlap status of every parallel-stream pair — disjoint (verified per step 2), serialised, or under a concrete coordination protocol, never left open. Verify:
    - Every major component identified in Phase 1 is covered by at least one work unit.
-   - Every work unit has a verifiable done condition.
+   - The union of all dependency edges — logical, testing, design, knowledge, external — is acyclic. Check mechanically (`tsort` or a short script over the edge list), not by eyeballing the diagram. Where a logical edge and a testing edge oppose each other between two units, resolve it: split the producer on a mechanism/content or protocol/implementation seam, merge the pair, or define a vertical-slice protocol (one end-to-end path through both units before either completes). Recording both edges and choosing an order is not a resolution.
+   - Every work unit has a verifiable done condition, evaluable in position from the unit's own output plus its declared dependencies' and external gates' outputs (see [Work unit done conditions](#work-unit-done-conditions)). A condition failing this check is repaired by the split procedure there — a flag without the split does not discharge it.
+   - Every artefact named in a `Depends on` entry is published by exactly one unit, positioned no later than its first consumer.
+   - Every success criterion or acceptance measure in the governing goal is named in at least one unit's done condition, at the scale it will be judged. Where a later audit unit measures a criterion from data produced earlier, the producing units' done conditions carry the obligation to produce it — data that must be collected while work happens cannot be reconstructed by the unit that consumes it. Record such obligations in Standing Obligations, naming the carrying units.
    - Every `high`-risk unit is either placed early in execution order or has a risk mitigation note in the Risk Registry.
    - Every `foundation`-type unit appears before its dependants in the execution order.
    - All overlapping-scope parallel streams have a coordination protocol.
@@ -215,14 +231,17 @@ Build the execution plan from the analysis.
    - **Iteration**: write-once | iterative (tuning | structural)
    - **Effort**: small | medium | large
    - **Scope**: <files/modules>
-   - **Depends on**: <unit-names (dependency-type) or "none">
+   - **Publishes**: <artefacts other units code against, or "none">
+   - **Depends on**: <unit-name (dependency-type, artefact consumed) or "none">
+   - **External gates**: <named gates — binary and version, service, person/team, environment — or "none">
    - **Done condition**: <verifiable statement>
    - **Description**: <what this unit does>
 
    ## Dependency Graph
    <Mermaid diagram preferred. Mark dependency types: solid arrows for logical,
-    dashed for testing, dotted for design/knowledge. ASCII acceptable when Mermaid
-    is not renderable in the target context.>
+    dashed for testing, dotted for design/knowledge. Draw external gates as nodes
+    with solid arrows to the units they gate. ASCII acceptable when Mermaid is not
+    renderable in the target context.>
 
    ## Execution Order
    <Ordered list with rationale for non-obvious ordering choices.>
@@ -239,17 +258,34 @@ Build the execution plan from the analysis.
    <longest dependency chain with total effort estimate>
 
    ## Meta-Tasks
-   <test harness, debug tooling, tuning infrastructure, verification checkpoints>
+   <test harness, debug tooling, tuning infrastructure — work belonging to no
+    single unit>
+
+   ## Standing Obligations
+   <obligations spanning units — data kept while work happens, content
+    contributions, deferred completeness criteria — each naming the units that
+    carry it>
 
    ## Risk Registry
-   <per-unit risks and cross-cutting risks that span multiple units>
+   <residual per-unit and cross-cutting risks — gates recorded as edges do not
+    repeat here>
+
+   ## Plan Maintenance
+   <amendment record: date, completing unit, deviations, downstream edits. On
+    each unit completion, run the re-plan step before starting its dependants.>
    ```
 
 6. **Present to the requester** for review if running interactively. The plan is the primary output — work items derive from it, not the other way around.
 
-   If the requester requests changes: apply them and re-present. If after two rounds of revision the goal itself is changing materially (new components, changed scope), re-run Phase 1 on the revised goal rather than patching the plan incrementally. If running non-interactively, proceed directly to Phase 3 after the quality check.
+   If the requester requests changes: apply them and re-present. If after two rounds of revision the goal itself is changing materially (new components, changed scope), re-run Phase 1 on the revised goal rather than patching the plan incrementally. If running non-interactively, proceed directly to step 7 (Commit) after the quality check.
 
 7. **Commit** the decomposition plan document — see [Commit discipline](#commit-discipline).
+
+### Re-plan on unit completion
+
+When a unit completes, diff its recorded deviations, deferrals, and discoveries against every downstream unit's scope, dependencies, and done condition. A deviation that adds work to a later unit, reassigns work between units, or leaves an interface unimplemented is a plan change, not an implementation note: amend the plan, re-run the Phase 2 step 4 quality check over the remaining units, and record the amendment in Plan Maintenance. Deferrals are the highest-yield case: "X is deliberately not here, it belongs to unit Y" is simultaneously a scope addition to Y, a possible new edge, and — if Y shares a file with a unit scheduled beside it — a broken parallel-stream claim.
+
+Invoked with an existing plan and completion reports (re-plan mode), this step is the whole workflow: apply the diff, re-run the quality check, re-present.
 
 ## Commit discipline
 
