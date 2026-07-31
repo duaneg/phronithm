@@ -15,10 +15,10 @@ A Claude Code plugin (`phronithm`) shipping workflow skills for LLM-assisted pro
 
 - `.claude-plugin/plugin.json`: Plugin manifest. `.claude-plugin/marketplace.json`: Marketplace metadata.
 - `skills/<name>/SKILL.md`: Workflow skills. Each skill is a directory with a `SKILL.md` file. See `docs/skill-catalogue.md` for the full inventory and design decisions.
-- `agents/<name>.md`: Plugin subagents (auto-discovered, namespaced `phronithm:<name>` on install). `phronithm:critic` runs the phronithm:critique skill as a read-only subagent. `phronithm:editor` runs the phronithm:edit skill, returning a change log inline.
+- `agents/<name>.md`: Plugin subagents (auto-discovered, namespaced `phronithm:<name>` on install). `phronithm:critic` runs the phronithm:critique skill as a read-only subagent. `phronithm:editor` runs the phronithm:edit skill, returning a change log inline. `phronithm:adversary` runs a requester-directed presumption-of-defect adversarial pass (not a critique-gate step), returning cited cases inline for the caller to adjudicate.
 - `docs/lenses/`: Review lens documents loaded by the phronithm:review skill.
 - `docs/critique.md`: Core critique template. Compose with a type appendix from `docs/critique/`: `critique-code`, `critique-design`, `critique-phronithm`, `critique-skill`, `critique-maths`.
-- `docs/critique-gate.md`: How skills invoke `phronithm:critique` as a quality gate on their own output — spawn mechanics, model pin, pass bar. Referenced by phronithm:feature, phronithm:large-scale-feature, phronithm:investigate, and phronithm:pin-behaviour.
+- `docs/critique-gate.md`: How skills invoke `phronithm:critique` as a quality gate on their own output — spawn mechanics, pass bar, what a pass does and doesn't license, the (optional, requester-directed) adversarial pass, and iteration policy. Referenced by phronithm:feature, phronithm:large-scale-feature, phronithm:investigate, phronithm:pin-behaviour, and phronithm:review.
 - `docs/subagent-protocol.md`: Nesting and file-write policy for Task/Agent subagents, shared across skills.
 - `docs/code-patterns.md`: Structural duplication patterns. Referenced by phronithm:refactor and phronithm:review lenses.
 - `docs/investigation-loop.md`: Canonical, domain-general investigation micro-loop (observe → multi-hypothesis → cheapest-falsify-first → update → verify). Referenced (not re-described) by phronithm:diagnose, phronithm:feature, phronithm:investigate, and phronithm:persona-debug.

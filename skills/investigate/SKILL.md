@@ -180,13 +180,40 @@ writes](${CLAUDE_PLUGIN_ROOT}/docs/subagent-protocol.md#file-writes)).
    otherwise escalate to a requester, record the residual explicitly as an open
    obligation with an upgrade path instead — an investigation has no synchronous
    requester waiting on this loop.
-2. **Finalise** investigation-results into the **result**: mark each load-bearing
+2. **Verify** each load-bearing claim's *fidelity to its referent* before it can
+   be marked settled — a narrower guarantee than premise soundness, which
+   remains the Critique step's job (see [what a pass does not
+   mean](${CLAUDE_PLUGIN_ROOT}/docs/critique-gate.md#what-a-pass-does-not-mean)).
+   - A claim anchored to an executed referent (a run's raw output, a computation,
+     a proof — the `evidenced`/`proven` rungs): quote the exact figures or lines
+     from the referent, then compare them value-for-value against what
+     investigation-results states. A quote-and-compare check is concrete enough
+     to resist the same-session confirmation bias a judgement-based re-read
+     would carry; it catches transcription and misreporting errors, not a flawed
+     premise or experimental design — that remains the Critique step's job.
+   - A claim with no executed referent (`conjectured` — inferred from reading or
+     reasoning alone): there is nothing to quote against. Default to recording it
+     as an open obligation. The session may instead direct an explicit
+     `phronithm:adversary` pass at `model: "opus"`, using the [requester-directed
+     exception](${CLAUDE_PLUGIN_ROOT}/docs/critique-gate.md#adversarial-pass) — investigate
+     is its own requester here — when the claim is the sole basis for a headline
+     result and no cheaper falsification remains. Adjudicate any
+     finding independently against its cited referent, per the same rules: never
+     trust the confidence field, discard findings citing no checkable referent,
+     never let an unadjudicated finding block settlement. A clean run does not
+     confer verified status — it only lowers the claim's residual risk before
+     recording it as an open obligation regardless.
+
+   A claim that fails the fidelity check is a defect: fix it and re-enter the
+   loop at the Critique step.
+3. **Finalise** investigation-results into the **result**: mark each load-bearing
    claim settled at its achieved rigour, and list the sharpened open obligations.
    When achieved rigour is below target, the upgrade path *is* the next
    investigation's first ladder rung. Commit the finalised document.
 
-Exit criteria: every load-bearing claim is rigour-tagged and has passed critique,
-or is explicitly recorded as an open obligation with an upgrade path. The
+Exit criteria: every load-bearing claim is rigour-tagged, has passed critique, and
+has passed its referent fidelity check — or, when there is no referent to check
+against, is explicitly recorded as an open obligation with an upgrade path. The
 finalised investigation-results (the result) is self-contained.
 
 ## Commit discipline

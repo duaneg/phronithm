@@ -92,7 +92,7 @@ Before entering plan mode, do a minimal orientation to the project:
 
 2. Read `CLAUDE.md` (project instructions — often contains architecture overview, conventions, key files).
 3. Check `package.json` or equivalent to identify the tech stack and runtime dependencies.
-4. Call `EnterPlanMode`. If its schema is deferred (the tool is listed but not loaded), load it first via `ToolSearch` (`select:EnterPlanMode`) — do not skip plan mode because the tool is not visible.
+4. Call `EnterPlanMode`. If its schema is deferred (the tool is listed but not loaded), load it first via `ToolSearch` (`select:EnterPlanMode`) — do not skip plan mode because the tool is not visible. If plan mode still cannot be entered, stop and report to the requester.
 
 This is cheap and ensures plan mode starts with basic grounding rather than cold.
 
@@ -197,7 +197,7 @@ Exit criteria: Every step has clear inputs, outputs, and acceptance criteria. Th
 2. API spec / code block consistency check passed (step 6) or is not applicable
 3. Handoff footer is present in the plan document (in work-unit mode, including the work-unit context section)
 
-Do not call ExitPlanMode until all three are satisfied. This checklist exists because the most common workflow failure is calling ExitPlanMode immediately after writing the plan, skipping the critique step.
+Do not call ExitPlanMode until all three are satisfied. This checklist exists because the most common workflow failure is calling ExitPlanMode immediately after writing the plan, skipping the critique step. Load the `ExitPlanMode` schema first if deferred.
 
 **Phase 4 handoff.** The transition to Phase 4 happens through the standard `ExitPlanMode` flow — approving the plan and clearing context to implement it, not a bespoke step this skill constructs. The cleared session has no conversation history, so the saved plan document (with its handoff footer, step 7 above) is what Phase 4 reads to recover the design and requirements.
 
