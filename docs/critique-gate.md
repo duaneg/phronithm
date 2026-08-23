@@ -28,9 +28,11 @@ guidance (see Iteration policy) without being told which round it's on.
 
 ## Pass bar
 
-Default: no Critical or Significant findings remain. A skill needing a different
-bar — the severity threshold itself — must state so explicitly, with why. This is
-the exception, not the norm: no current gate consumer needs one, and none does it.
+Default: no Critical findings remain. Significant and Minor findings are
+reported alongside the pass, not fixed-and-re-run: in practice they are mostly
+documentation nits and corner-case clarifications, cheaper to resolve if and
+when hit than to verify exhaustively up front. A skill needing a different bar
+must state so explicitly, with why.
 
 **Calibration** is a separate, narrower thing: telling the critic what does or
 doesn't count as a finding for this artefact type, without changing the severity
@@ -132,11 +134,12 @@ from [phronithm:critique](${CLAUDE_PLUGIN_ROOT}/skills/critique/SKILL.md)'s
 Iterative use section — one source for round-count expectations, not one invented
 per skill:
 
-- **Pass**: no Critical or Significant findings remain.
+- **Pass**: no Critical findings remain (see Pass bar). Report any Significant
+  or Minor findings; do not fix-and-re-run on them.
 - **Escalate immediately** if a pass's summary reports a systemic problem —
   iterating will not resolve a structural defect.
-- **Escalate** if the non-convergence signal fires (Significant or Critical
-  findings persisting past round 3).
+- **Escalate** if the non-convergence signal fires (Critical findings
+  persisting past round 3).
 - **Hard cap**: do not iterate past round 4 without explicit requester
   instruction to continue.
 

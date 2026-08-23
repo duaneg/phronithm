@@ -187,14 +187,14 @@ Break the design into implementable steps. **Do not use the Task tool in this ph
     supplied, the completion-report footer's re-plan instruction>
    ```
 
-Exit criteria: Every step has clear inputs, outputs, and acceptance criteria. The plan covers the full design. **Plan critique has run** and no Critical or Significant findings remain — do not call ExitPlanMode without completing the critique step. API spec / code block consistency check passed (or not applicable — plan has only one of spec or code block).
+Exit criteria: Every step has clear inputs, outputs, and acceptance criteria. The plan covers the full design. **Plan critique has run** and no Critical findings remain — do not call ExitPlanMode without completing the critique step. API spec / code block consistency check passed (or not applicable — plan has only one of spec or code block).
 
 **Handoff footer required.** The plan document must include the handoff footer before this phase is considered complete. If it is missing, the phase exit gate fails.
 
 **Save the approved plan** to a durable, human-readable location (project memory, `docs/plans/<name>-plan.md`, or project-appropriate equivalent). The plan file must be self-contained — a new session should be able to resume from the file alone without consulting the original transcript.
 
 **Before calling ExitPlanMode**, verify all three:
-1. Critique has run (Phase 3 step 5, or Phase 2 step 5 in non-compressed mode) — no Critical or Significant findings remain
+1. Critique has run (Phase 3 step 5, or Phase 2 step 5 in non-compressed mode) — no Critical findings remain
 2. API spec / code block consistency check passed (step 6) or is not applicable
 3. Handoff footer is present in the plan document (in work-unit mode, including the work-unit context section)
 
@@ -221,7 +221,7 @@ Execute the plan. Test after each step.
 5. **Reassess** after each step. Has the implementation revealed something the design missed? If the gap is small, note it and continue. If it changes the approach, return to the appropriate earlier phase. When the target is a *finding* rather than a known deliverable (a spike, a root-cause question, an unfamiliar-API probe), this reassess-and-re-plan step *is* the [investigation loop](${CLAUDE_PLUGIN_ROOT}/docs/investigation-loop.md) — let results reshape the question rather than treating discovery as a deviation; reach for `/phronithm:investigate` when discovery is the product.
    In work-unit mode the reassessment also faces outward. Record for the completion-report, as each arises rather than reconstructed at Phase 5: a discovery that adds work to, reassigns work between, or invalidates an assumption of a sibling or downstream unit; a deferral — work inside this unit's scope deliberately not implemented, naming the unit it belongs to; and any deviation from the unit entry's scope or publishes. None of these is resolved by returning to an earlier phase of *this* workflow — the decomposition plan is amended by `phronithm:breakdown`'s re-plan mode, not by this session.
 
-Before the exit gate, wait for any outstanding critique subagents to complete. Integrate findings: address Critical and Significant findings, re-running the gate per its default iteration policy until it passes or escalates; note Minor findings for Phase 5 clean-up.
+Before the exit gate, wait for any outstanding critique subagents to complete. Integrate findings: address Critical findings, re-running the gate per its default iteration policy until it passes or escalates; note Significant and Minor findings for Phase 5 clean-up.
 
 Produce the **implementation-summary** document (see Produces for required contents). This is the Phase 4 handoff artefact, kept for resilience — if context compaction forces a reload, or Phase 5 is picked up in a different session (see **Partial-plan sessions** below), it is read as the primary input. Include the handoff footer:
 ```

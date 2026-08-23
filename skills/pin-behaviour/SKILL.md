@@ -218,14 +218,14 @@ rather than paraphrasing it:
 > - Do NOT flag these deliberate decisions as omissions: no separate
 >   workspace/write-isolation step; golden-master snapshots auto-accepted rather
 >   than human-approved inline.
-> - DO flag (Significant or worse): an asserted behaviour that is not actually
+> - DO flag (Critical): an asserted behaviour that is not actually
 >   observable; an uncontrolled non-deterministic assertion, OR a snapshot
 >   embedding uncontrolled non-determinism (timestamp / address / iteration-order
 >   → will flake); an entry point silently left unpinned — present in the target
 >   but absent from BOTH this run's suite entry's `pinned[]` and `unpinnable[]`
 >   lists.
 
-The gate passes on **no Critical or Significant findings** under this calibration.
+The gate passes on **no Critical findings** under this calibration.
 
 **Deviation from the default iteration policy**: this phase caps re-runs at one
 per finding family instead of applying [critique-gate.md](${CLAUDE_PLUGIN_ROOT}/docs/critique-gate.md)'s
@@ -239,7 +239,7 @@ controlling the seam or quarantining the behaviour, do so and re-run critique
 seam cannot be controlled, record it as a residual gap in `unpinnable[]` and
 proceed — do not iterate further on that finding. A finding recorded as a
 residual gap is documented debt, not a blocker: only an unresolved *and
-unrecorded* Critical or Significant finding blocks the gate.
+unrecorded* Critical finding blocks the gate.
 
 ### Phase 5 — Report
 
