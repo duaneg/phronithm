@@ -661,11 +661,20 @@ function digest(ledger, { unitsPerWave = {} } = {}) {
 //   ledgerPath          default docs/plans/<name>-signals.md
 //   config              overrides for scheduling DEFAULT_CONFIG
 //   maxWaves            default 20
-//   models              { critic: 'sonnet' } per-role model overrides
+//   tiers               per-role { model, effort } overrides; roles: gate
+//                       (critique and review), planning (unit plan, re-plan,
+//                       termination), default (everything else)
 
 const WORKFLOW = 'lsf-implement';
 const GATE_MAX_ROUNDS = 4; // critique gate hard cap
 const DEFAULT_MAX_WAVES = 20;
+// Model and effort per role. Static analysis inherits the session model.
+const DEFAULT_TIERS = Object.freeze({
+  gate: { model: 'opus' },
+  planning: { model: 'fable', effort: 'medium' },
+  default: { model: 'sonnet' },
+});
+const tier = (ctx, role) => ctx.tiers[role] ?? ctx.tiers.default;
 
 // Review lenses per unit type. Design units produce a decision record, which
 // gets critique-design rather than lens review.
@@ -1061,10 +1070,10 @@ async function runUnit(rt, ctx, plan, unit, wave) {
   const collect = (ret, stage) => signals.push(...signalsFromStageReturn(ret, stageCtx(stage)));
   const result = { unit: unit.id, type: unit.type, branch: null, completionPath: null, distress: null, signals, aborted: null };
   const abort = (stage) => { result.aborted = stage; return result; };
-  const opts = (label, extra = {}) => ({ label: `${label}:${unit.id}`, phase: 'Units', ...extra });
+  const opts = (label, extra = {}) => ({ label: `${label}:${unit.id}`, phase: 'Units', ...tier(ctx, 'default'), ...extra });
 
   // 1. plan
-  const planned = await rt.agent(unitPlanPrompt(ctx, plan, unit), opts('plan', { isolation: 'worktree', schema: UNIT_PLAN_SCHEMA }));
+  const planned = await rt.agent(unitPlanPrompt(ctx, plan, unit), opts('plan', { isolation: 'worktree', schema: UNIT_PLAN_SCHEMA, ...tier(ctx, 'planning') }));
   if (!planned) { signals.push(nullReturnSignal(stageCtx('plan'))); return abort('plan'); }
   collect(planned, 'plan');
   let branch = planned.result.branch;
@@ -1076,7 +1085,7 @@ async function runUnit(rt, ctx, plan, unit, wave) {
     round: async (n) => [{
       stage: 'critique-plan',
       ret: await rt.agent(planCritiquePrompt(ctx, plan, unit, planText, n),
-        opts(`critique-plan:r${n}`, { agentType: 'phronithm:critic', model: ctx.models.critic, schema: FINDINGS_SCHEMA })),
+        opts(`critique-plan:r${n}`, { agentType: 'phronithm:critic', schema: FINDINGS_SCHEMA, ...tier(ctx, 'gate') })),
     }],
     fix: (n, criticals) => rt.agent(fixPrompt(ctx, plan, unit, branch, 'plan', criticals, n),
       opts(`fix-plan:r${n}`, { isolation: 'worktree', schema: FIX_SCHEMA })),
@@ -1121,7 +1130,8 @@ async function runUnit(rt, ctx, plan, unit, wave) {
         ];
       const rets = await rt.parallel(reviewers.map(([stage, prompt]) => () =>
         rt.agent(prompt, opts(`${stage}:r${n}`, {
-          isolation: 'worktree', schema: FINDINGS_SCHEMA, model: stage === 'static-analysis' ? undefined : ctx.models.critic,
+          isolation: 'worktree', schema: FINDINGS_SCHEMA,
+          ...(stage === 'static-analysis' ? { model: undefined, effort: undefined } : tier(ctx, 'gate')),
         }))));
       return reviewers.map(([stage], i) => ({ stage, ret: rets[i] ?? null }));
     },
@@ -1173,7 +1183,7 @@ async function run(rt) {
     ledgerPath: args.ledgerPath ?? `docs/plans/${name}-signals.md`,
     config: { ...DEFAULT_CONFIG, ...(args.config ?? {}) },
     maxWaves: args.maxWaves ?? DEFAULT_MAX_WAVES,
-    models: { critic: 'sonnet', gate: undefined, ...(args.models ?? {}) }, // gate: inherit (see design, Open questions)
+    tiers: { ...DEFAULT_TIERS, ...(args.tiers ?? {}) },
   };
 
   const ledger = [];
@@ -1190,7 +1200,7 @@ async function run(rt) {
     const fresh = entries.filter((e) => !scribed.has(e));
     if (!fresh.length) return;
     for (const e of fresh) scribed.add(e);
-    const r = await agent(ledgerPrompt(ctx, plan, wave, fresh), { label: `ledger:w${wave}`, phase: 'Ledger', schema: SCRIBE_SCHEMA });
+    const r = await agent(ledgerPrompt(ctx, plan, wave, fresh), { label: `ledger:w${wave}`, ...tier(ctx, 'default'), phase: 'Ledger', schema: SCRIBE_SCHEMA });
     if (!r) log(`ledger scribe returned null for wave ${wave}; entries are in the return value only`);
   };
   // Every stop path: stamp, ledger, scribe, escalate. `stops` may already be
@@ -1209,14 +1219,14 @@ async function run(rt) {
   // Decisions handed back by the requester go into the repo first, so the
   // SHA can appear in every prompt they affect.
   if (Array.isArray(args.decisions) && args.decisions.length) {
-    const d = await agent(decisionLogPrompt(ctx, args.decisions), { label: 'decision-log', phase: 'Load', schema: DECISION_LOG_SCHEMA });
+    const d = await agent(decisionLogPrompt(ctx, args.decisions), { label: 'decision-log', ...tier(ctx, 'default'), phase: 'Load', schema: DECISION_LOG_SCHEMA });
     if (!d) return stopOn('decision-log', [nullReturnSignal({ stage: 'decision-log' })]);
     ctx.decisionLogSha = d.result.sha;
     ctx.decisionLogPath = d.result.path;
   }
 
   // Load.
-  const loaded = await agent(loadPrompt(ctx), { label: 'load', phase: 'Load', schema: LOAD_SCHEMA });
+  const loaded = await agent(loadPrompt(ctx), { label: 'load', ...tier(ctx, 'default'), phase: 'Load', schema: LOAD_SCHEMA });
   if (!loaded) return stopOn('load', [nullReturnSignal({ stage: 'load' })]);
   plan = loaded.result.plan;
   ctx.architectureSha = ctx.architectureSha ?? loaded.result.architectureSha;
@@ -1251,7 +1261,7 @@ async function run(rt) {
       if (terminationRan) break;
       // Termination stage: meta-tasks become units; small ones are direct edits.
       terminationRan = true;
-      const term = await agent(terminationPrompt(ctx, plan), { label: 'termination', phase: 'Termination', schema: TERMINATION_SCHEMA });
+      const term = await agent(terminationPrompt(ctx, plan), { label: 'termination', ...tier(ctx, 'planning'), phase: 'Termination', schema: TERMINATION_SCHEMA });
       if (!term) return stopOn('termination', [nullReturnSignal({ stage: 'termination' })]);
       const termSignals = signalsFromStageReturn(term, { stage: 'termination' });
       const problems = validatePlan(term.result.plan);
@@ -1261,7 +1271,7 @@ async function run(rt) {
       if (termEval.stop) return stopped('termination', termEval.stops);
       plan = term.result.plan;
       if (term.result.directEdits.length) {
-        const edits = await agent(directEditsPrompt(ctx, plan, term.result.directEdits), { label: 'direct-edits', phase: 'Termination', schema: SCRIBE_SCHEMA });
+        const edits = await agent(directEditsPrompt(ctx, plan, term.result.directEdits), { label: 'direct-edits', ...tier(ctx, 'default'), phase: 'Termination', schema: SCRIBE_SCHEMA });
         if (!edits) return stopOn('direct-edits', [nullReturnSignal({ stage: 'direct-edits' })]);
         ledger.push(...signalsFromStageReturn(edits, { stage: 'direct-edits' }).map((s) => ({ ...s, disposition: 'recorded' })));
       }
@@ -1292,7 +1302,7 @@ async function run(rt) {
     let merged = [];
     let conflicts = [];
     if (order.length) {
-      const m = await agent(mergePrompt(ctx, plan, wave, order), { label: `merge:w${wave}`, phase: 'Merge', schema: MERGE_SCHEMA });
+      const m = await agent(mergePrompt(ctx, plan, wave, order), { label: `merge:w${wave}`, ...tier(ctx, 'default'), phase: 'Merge', schema: MERGE_SCHEMA });
       if (!m) {
         waveSignals.push(nullReturnSignal({ stage: 'merge', wave }));
       } else {
@@ -1309,7 +1319,7 @@ async function run(rt) {
     // Review-gate questions for the wave.
     if (merged.length) {
       const assumptions = waveSignals.filter((s) => s.kind === 'assumption').map(({ unit, stage, statement, referent }) => ({ unit, stage, statement, referent }));
-      const g = await agent(gatePrompt(ctx, plan, wave, merged, assumptions), { label: `review-gate:w${wave}`, phase: 'Gate', model: ctx.models.gate, schema: GATE_SCHEMA });
+      const g = await agent(gatePrompt(ctx, plan, wave, merged, assumptions), { label: `review-gate:w${wave}`, ...tier(ctx, 'gate'), phase: 'Gate', schema: GATE_SCHEMA });
       if (!g) waveSignals.push(nullReturnSignal({ stage: 'review-gate', wave }));
       else {
         waveSignals.push(...signalsFromStageReturn(g, { stage: 'review-gate', wave, source: 'gate' }));
@@ -1345,7 +1355,7 @@ async function run(rt) {
 
     // Re-plan from the wave's completion reports.
     const recorded = evalA.records.map(({ unit, stage, kind, statement, referent }) => ({ unit, stage, kind, statement, referent }));
-    const rp = await agent(replanPrompt(ctx, plan, wave, merged, conflicts, recorded), { label: `replan:w${wave}`, phase: 'Re-plan', schema: REPLAN_SCHEMA });
+    const rp = await agent(replanPrompt(ctx, plan, wave, merged, conflicts, recorded), { label: `replan:w${wave}`, ...tier(ctx, 'planning'), phase: 'Re-plan', schema: REPLAN_SCHEMA });
     const replanSignals = [];
     let nextPlan = plan;
     if (!rp) {
@@ -1374,7 +1384,7 @@ async function run(rt) {
   }
 
   // Standing obligations.
-  const ob = await agent(obligationsPrompt(ctx, plan), { label: 'obligations', phase: 'Termination', schema: OBLIGATIONS_SCHEMA });
+  const ob = await agent(obligationsPrompt(ctx, plan), { label: 'obligations', ...tier(ctx, 'gate'), phase: 'Termination', schema: OBLIGATIONS_SCHEMA });
   if (!ob) return stopOn('obligations', [nullReturnSignal({ stage: 'obligations' })]);
   const obSignals = signalsFromStageReturn(ob, { stage: 'obligations' });
   for (const o of ob.result.obligations.filter((o) => !o.discharged)) {

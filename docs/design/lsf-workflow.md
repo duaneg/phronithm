@@ -395,12 +395,17 @@ run — run end-to-end and scored on whether each defect reaches an
 escalation record, at which wave, and from which source. Same shape as the
 critic-fidelity measurement. Not yet committed to.
 
+## Model tiers
+
+Each stage call carries a role tier (`args.tiers` overrides per role):
+gate (critique, lens review, architecture gate, obligations) runs opus;
+planning (unit plan, re-plan, termination) runs fable at medium effort;
+everything else runs sonnet. Static analysis inherits the session model.
+
 ## Open questions
 
 - Whether `phronithm:feature`'s work-unit mode should itself be restructured
   to match the five stages above, so the two paths stay one contract, or the
   workflow carries its own stage prompts.
-- Effort and model tiers per stage: the recall evidence argues for opus on
-  gate agents; everything else can inherit.
 - Whether the three workflows are exposed as separate plugin workflows or one
   with a phase argument.

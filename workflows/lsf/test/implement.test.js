@@ -307,11 +307,27 @@ test('fixed Critical findings reach the ledger on a passing gate', async () => {
   assert.match(ledger1.prompt, /critical-fixed/);
 });
 
-test('the critic model pin reaches every critique-class call; static analysis inherits', async () => {
+test('role tiers reach every call: gate opus, planning fable/medium, default sonnet; static analysis inherits', async () => {
   const { rt, calls } = runtime(twoWaves());
   await run(rt);
+  const seen = new Set();
   for (const c of calls) {
-    if (/^(critique-plan|critique-code|lens-review)/.test(c.label)) assert.equal(c.opts.model, 'sonnet', c.label);
-    if (/^static-analysis/.test(c.label)) assert.equal(c.opts.model, undefined, c.label);
+    const role = c.label.replace(/:.*$/, '');
+    seen.add(role);
+    if (/^static-analysis/.test(c.label)) { assert.equal(c.opts.model, undefined, c.label); continue; }
+    if (/^(critique-plan|critique-code|lens-review|review-gate|obligations)$/.test(role)) assert.equal(c.opts.model, 'opus', c.label);
+    else if (/^(plan|replan|termination)$/.test(role)) assert.deepEqual([c.opts.model, c.opts.effort], ['fable', 'medium'], c.label);
+    else assert.equal(c.opts.model, 'sonnet', c.label);
   }
+  for (const r of ['critique-code', 'plan', 'implement', 'merge', 'review-gate', 'replan']) assert.ok(seen.has(r), r);
+});
+
+test('args.tiers overrides a role without disturbing the others', async () => {
+  const { rt, calls } = runtime(twoWaves(), {}, { tiers: { gate: { model: 'sonnet' } } });
+  await run(rt);
+  const gate = calls.find((c) => c.label.startsWith('critique-code'));
+  const impl = calls.find((c) => c.label.startsWith('implement'));
+  assert.equal(gate.opts.model, 'sonnet');
+  assert.equal(impl.opts.model, 'sonnet');
+  assert.equal(calls.find((c) => c.label.startsWith('plan:')).opts.model, 'fable');
 });
