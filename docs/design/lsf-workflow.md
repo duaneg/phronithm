@@ -7,7 +7,8 @@ attention is spent only on meta-level signals — invalidated assumptions,
 contradictory or incomplete requirements, divergence, scope and goal ambiguity
 — never on procedural sign-off.
 
-Status: design. No script exists yet.
+Status: design. The scheduling module and shared schema exist
+(`workflows/lsf/`); no script yet.
 
 Detection of these meta-level signals by agents cannot be made reliable at
 present (measured, see Escalation). The design therefore treats surfacing as
@@ -359,10 +360,22 @@ The Workflow tool itself is not tested. What is tested is the script's own
 logic and the signal layer.
 
 **Scheduling logic** — ready-set computation, wave partitioning, merge order,
-stop rule — is written as a dependency-free JavaScript module, unit-tested
-outside Claude Code, and inlined into the script (the script cannot import).
-The inlining is a copy step and the only place drift can enter; the module
-file is the source of truth.
+stop rule — is a dependency-free JavaScript module (`workflows/lsf/scheduling.js`, with
+the shared schema in `schema.js`), unit-tested outside Claude Code with
+`node --test`, and inlined into the script (the script cannot import). The
+inlining is a copy step and the only place drift can enter; the module file
+is the source of truth.
+
+The module reads a plan reduced to its graph (`PLAN_SCHEMA`): unit ids,
+typed dependencies, written scope paths, gates, and execution order. Two
+units overlap when a scope path of one contains or equals a scope
+path of the other; they count as serialised when a dependency path of any
+type runs between them in either direction. Signals from `ambiguities` map by
+`about`: scope and goal to their STOP kinds, requirement to
+`requirement-incomplete`, design to a RECORD kind. Every `contradictions`
+entry is `assumption-invalidated`. Volume thresholds (per-unit signal count,
+distress deviation and design-decision counts) are the module's config
+object, overridable from the workflow's `args`.
 
 **Signal layer** (tentative): a synthetic feature in the bench repo with
 injected defects — a deferral, a claimed-disjoint conflict, a unit whose
