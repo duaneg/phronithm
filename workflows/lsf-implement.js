@@ -66,10 +66,6 @@ const SOURCES = Object.freeze(['structural', 'reported', 'gate']);
 
 const AMBIGUITY_ABOUT = Object.freeze(['scope', 'goal', 'requirement', 'design']);
 
-const DEPENDENCY_TYPES = Object.freeze([
-  'logical', 'testing', 'design', 'knowledge', 'organisational', 'release', 'data',
-]);
-
 const GATE_KINDS = Object.freeze(['environment', 'organisational', 'release', 'data']);
 
 // phronithm:breakdown's unit types, plus `meta` for units the termination
@@ -153,11 +149,8 @@ const PLAN_SCHEMA = Object.freeze({
             type: 'array',
             items: {
               type: 'object',
-              properties: {
-                unit: { type: 'string' },
-                type: { type: 'string', enum: DEPENDENCY_TYPES },
-              },
-              required: ['unit', 'type'],
+              properties: { unit: { type: 'string' } },
+              required: ['unit'],
             },
           },
           scope: {
@@ -796,7 +789,7 @@ const SCRIBE_SCHEMA = stageSchema(obj({ path: str, sha: str }));
 // ---------------------------------------------------------------- prompts
 
 const RETURN_FIELDS = `
-Besides \`result\`, return: \`assumptions\` — each thing you took as given that the inputs do not state, with the referent it concerns; \`ambiguities\` — each point where the inputs admit more than one reading, classified as scope, goal, requirement, or design; \`contradictions\` — each thing you observed that contradicts the architecture document, the request record, or the unit entry, citing the document path and SHA; \`commits\` — every commit you made, branch and SHA. Empty arrays are valid. Do not pad them and do not omit a real one.`;
+Besides \`result\`, return: \`assumptions\` — each thing you took as given that the inputs do not state, with the referent it concerns; \`ambiguities\` — each point where the inputs leave open what is built, in what order, or with what scope, classified as scope, goal, requirement, or design — a choice about how the inputs map onto this return schema (which enum value fits, how to type an edge, how to label a gate) is an assumption, never an ambiguity, and no item goes under both; \`contradictions\` — each thing you observed that contradicts the architecture document, the request record, or the unit entry, citing the document path and SHA; \`commits\` — every commit you made, branch and SHA. Empty arrays are valid. Do not pad them and do not omit a real one.`;
 
 function header(ctx, plan) {
   const lines = [
@@ -831,7 +824,7 @@ ${RETURN_FIELDS}`;
 function loadPrompt(ctx) {
   return `${header(ctx, { path: ctx.planPath, sha: ctx.planSha })}
 
-Load the decomposition plan and reduce it to its graph. For every work unit return: id; type, as the plan labels it; complete — true iff a Plan Maintenance completion entry names it; dependencies with their type; scope — every file, module, or directory the unit writes to, written \`file::symbol\` where the entry or a coordination protocol confines the unit to named functions or classes within a file other units also write; publishes; gates — every external gate with kind, whether the decision log records it cleared, and its plan-time pin; and the unit's entry verbatim. Return the \`## Execution Order\` section's list as unit ids in its literal order, not a sequence reconstructed from Plan Maintenance; a Plan Maintenance entry that selected a unit out of that order is an assumption if it affects what you return, not a contradiction. Every coordination protocol for overlapping-scope units must already be expressible as a dependency edge or as symbol-level scope; do not add edges yourself — report a protocol that is neither as an ambiguity about scope. Also return the branch the main checkout is on and the architecture document's commit SHA on ${ctx.integrationBranch}.
+Load the decomposition plan and reduce it to its graph. For every work unit return: id; type, as the plan labels it; complete — true iff a Plan Maintenance completion entry names it; dependencies — the units it depends on, of any dependency type; scope — every file, module, or directory the unit writes to, written \`file::symbol\` where the entry or a coordination protocol confines the unit to named functions or classes within a file other units also write; publishes; gates — every external gate with the kind its entry labels it (environment, organisational, release, or data; an unlabelled gate is an assumption, classified by what it names), whether the decision log records it cleared, and its plan-time pin; and the unit's entry verbatim. Return the \`## Execution Order\` section's list as unit ids in its literal order, not a sequence reconstructed from Plan Maintenance; a Plan Maintenance entry that selected a unit out of that order is an assumption if it affects what you return, not a contradiction. Every coordination protocol for overlapping-scope units must already be expressible as a dependency edge or as symbol-level scope; do not add edges yourself — report a protocol that is neither as an ambiguity about scope. Also return the branch the main checkout is on and the architecture document's commit SHA on ${ctx.integrationBranch}.
 ${RETURN_FIELDS}`;
 }
 

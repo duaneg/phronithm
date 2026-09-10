@@ -11,7 +11,7 @@ import { signal } from '../schema.js';
 const unit = (id, opts = {}) => ({
   id, type: 'feature', complete: false, dependencies: [], scope: [], gates: [], entry: id, ...opts,
 });
-const dep = (u, type = 'logical') => ({ unit: u, type });
+const dep = (u) => ({ unit: u });
 const plan = (units, executionOrder = units.map((u) => u.id)) => ({ sha: 'deadbeef', path: 'docs/plans/x.md', units, executionOrder });
 
 // A: foundation; B, C depend on A; D depends on B and C.

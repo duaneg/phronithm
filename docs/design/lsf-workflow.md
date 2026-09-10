@@ -380,12 +380,13 @@ inlining is a copy step and the only place drift can enter; the module file
 is the source of truth.
 
 The module reads a plan reduced to its graph (`PLAN_SCHEMA`): unit ids,
-typed dependencies, written scope entries, gates, and execution order. A
+dependencies (the plan's dependency types are not carried — a path of
+any type serialises), written scope entries, gates, and execution order. A
 scope entry is a path or `path::symbol`. Two units overlap when an entry of
 one contains or equals an entry of the other: a directory contains the paths
 under it, a bare file contains its symbols, and two symbols of one file
 overlap only when they are the same symbol. Completed units pair with
-nothing. Units count as serialised when a dependency path of any type runs
+nothing. Units count as serialised when a dependency path runs
 between them in either direction. Signals from `ambiguities` map by
 `about`: scope and goal to their STOP kinds, requirement to
 `requirement-incomplete`, design to a RECORD kind. Every `contradictions`

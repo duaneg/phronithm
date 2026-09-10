@@ -76,7 +76,7 @@ function runtime(plan, overrides = {}, args = {}) {
   return { rt, calls, logs, labels: () => calls.map((c) => c.label) };
 }
 
-const twoWaves = () => graph('plan0', [unit('A', { type: 'foundation' }), unit('B', { dependencies: [{ unit: 'A', type: 'logical' }] })]);
+const twoWaves = () => graph('plan0', [unit('A', { type: 'foundation' }), unit('B', { dependencies: [{ unit: 'A' }] })]);
 
 // ---------------------------------------------------------------- tests
 
@@ -230,7 +230,7 @@ test('termination appends meta units, which run as a further wave; direct edits 
     termination: (p, o, u, s) => {
       if (terminated) return ret({ plan: s.plan, appendedUnits: [], directEdits: [] });
       terminated = true;
-      const meta = unit('M', { type: 'meta', dependencies: [{ unit: 'A', type: 'logical' }] });
+      const meta = unit('M', { type: 'meta', dependencies: [{ unit: 'A' }] });
       return ret({
         plan: { ...s.plan, sha: 'term1', units: [...s.plan.units, meta], executionOrder: [...s.plan.executionOrder, 'M'] },
         appendedUnits: ['M'], directEdits: [{ path: 'README.md', description: 'mention M' }],

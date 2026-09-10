@@ -190,7 +190,7 @@ Understand the feature's structure before decomposing it.
 
 4. **Map dependencies**. For each unit, check which other units it depends on across all four always-analysed types. For small decompositions (≤8 units), check all pairs. For larger decompositions, scope logical-edge checking to the units that logically precede each unit — full pairwise checking at scale is impractical. Only logical edges are precedence-scoped. For every unit, regardless of position, ask: what must be functional to verify this (testing)? what decision or understanding must exist first (design, knowledge)? Reverse-direction edges are what form cycles, and precedence-scoped checking cannot find them. External gates are per-unit by construction (below).
 
-   Ask the external-factor question per unit, as each done condition is written, not once for the decomposition: is this unit gated by specific people or teams, a prior release, a data migration, or environment setup? A done condition that invokes a binary, a service, an account, an installed font or data set, or another team's environment has an external gate whatever the decomposition-wide answer is. Record each gate in that unit's External gates field and as a node in the dependency graph — the risk registry holds only residual risk.
+   Ask the external-factor question per unit, as each done condition is written, not once for the decomposition: is this unit gated by specific people or teams, a prior release, a data migration, or environment setup? A done condition that invokes a binary, a service, an account, an installed font or data set, or another team's environment has an external gate whatever the decomposition-wide answer is. Record each gate in that unit's External gates field, labelled with its kind, and as a node in the dependency graph — the risk registry holds only residual risk.
 
    Probe environment gates now rather than recording them on trust: check that the binaries, versions, fonts, services, and data sets the done conditions rely on exist and behave as assumed, and pin versions in the plan. If running non-interactively and a gate cannot be resolved, record it as unknown on the unit and flag it in the risk registry.
 
@@ -247,7 +247,7 @@ Build the execution plan from the analysis.
    - **Scope**: <files/modules; `file::symbol` for a function or class owned within a file other units also write>
    - **Publishes**: <artefacts other units code against, or "none">
    - **Depends on**: <unit-name (dependency-type, artefact consumed) or "none">
-   - **External gates**: <named gates — binary and version, service, person/team, environment — or "none">
+   - **External gates**: <named gates, each labelled `(environment | organisational | release | data)` — binary and version, service, person/team, migration — or "none">
    - **Done condition**: <verifiable statement>
    - **Description**: <what this unit does>
 

@@ -46,10 +46,6 @@ const SOURCES = Object.freeze(['structural', 'reported', 'gate']);
 
 const AMBIGUITY_ABOUT = Object.freeze(['scope', 'goal', 'requirement', 'design']);
 
-const DEPENDENCY_TYPES = Object.freeze([
-  'logical', 'testing', 'design', 'knowledge', 'organisational', 'release', 'data',
-]);
-
 const GATE_KINDS = Object.freeze(['environment', 'organisational', 'release', 'data']);
 
 // phronithm:breakdown's unit types, plus `meta` for units the termination
@@ -133,11 +129,8 @@ const PLAN_SCHEMA = Object.freeze({
             type: 'array',
             items: {
               type: 'object',
-              properties: {
-                unit: { type: 'string' },
-                type: { type: 'string', enum: DEPENDENCY_TYPES },
-              },
-              required: ['unit', 'type'],
+              properties: { unit: { type: 'string' } },
+              required: ['unit'],
             },
           },
           scope: {
@@ -227,7 +220,7 @@ function escalation({ workflow, planSha, wave, stage, signals, decisionNeeded })
 }
 
 export {
-  STOP_KINDS, RECORD_KINDS, SOURCES, AMBIGUITY_ABOUT, DEPENDENCY_TYPES, GATE_KINDS, UNIT_TYPES,
+  STOP_KINDS, RECORD_KINDS, SOURCES, AMBIGUITY_ABOUT, GATE_KINDS, UNIT_TYPES,
   STAGE_COMMON_PROPERTIES, STAGE_COMMON_REQUIRED, stageSchema,
   PLAN_SCHEMA, MERGE_RESULT_SCHEMA, DISTRESS_SCHEMA,
   signal, escalation,
