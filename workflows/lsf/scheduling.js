@@ -61,11 +61,21 @@ function ancestors(plan, id) {
   return seen;
 }
 
-// True when one path contains or equals the other.
+// A scope entry is a path, optionally narrowed to one symbol: `path::symbol`.
+function splitScope(entry) {
+  const i = entry.indexOf('::');
+  const path = (i < 0 ? entry : entry.slice(0, i)).replace(/\/+$/, '');
+  return { path, symbol: i < 0 ? null : entry.slice(i + 2) };
+}
+
+// True when one entry contains or equals the other. A directory contains the
+// paths under it; a bare file contains its symbols; two symbols of one file
+// overlap only when they are the same symbol.
 function pathsOverlap(a, b) {
-  const na = a.replace(/\/+$/, '');
-  const nb = b.replace(/\/+$/, '');
-  return na === nb || na.startsWith(nb + '/') || nb.startsWith(na + '/');
+  const sa = splitScope(a);
+  const sb = splitScope(b);
+  if (sa.path !== sb.path) return sa.path.startsWith(sb.path + '/') || sb.path.startsWith(sa.path + '/');
+  return sa.symbol === null || sb.symbol === null || sa.symbol === sb.symbol;
 }
 
 function scopesOverlap(a, b) {

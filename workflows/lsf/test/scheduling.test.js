@@ -35,6 +35,14 @@ test('pathsOverlap is containment or equality, not prefix', () => {
   assert.ok(!pathsOverlap('src/a', 'src/b'));
 });
 
+test('pathsOverlap treats file::symbol as a narrowing of the file', () => {
+  assert.ok(!pathsOverlap('src/svg.py::emit_solid', 'src/svg.py::emit_stairs'));
+  assert.ok(pathsOverlap('src/svg.py::emit_solid', 'src/svg.py::emit_solid'));
+  assert.ok(pathsOverlap('src/svg.py', 'src/svg.py::emit_solid'));
+  assert.ok(pathsOverlap('src/', 'src/svg.py::emit_solid'));
+  assert.ok(!pathsOverlap('src/other.py::f', 'src/svg.py::f'));
+});
+
 test('overlappingPairs reports serialisation via any dependency path', () => {
   const p = plan([
     unit('A', { scope: ['src/x'] }),

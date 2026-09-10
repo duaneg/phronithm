@@ -161,7 +161,7 @@ const PLAN_SCHEMA = Object.freeze({
           scope: {
             type: 'array',
             items: { type: 'string' },
-            description: 'Files, modules, or directories the unit writes to',
+            description: 'Files, modules, or directories the unit writes to; `file::symbol` when the unit owns one function or class within a file shared with other units',
           },
           publishes: { type: 'array', items: { type: 'string' } },
           gates: {
@@ -307,11 +307,21 @@ function ancestors(plan, id) {
   return seen;
 }
 
-// True when one path contains or equals the other.
+// A scope entry is a path, optionally narrowed to one symbol: `path::symbol`.
+function splitScope(entry) {
+  const i = entry.indexOf('::');
+  const path = (i < 0 ? entry : entry.slice(0, i)).replace(/\/+$/, '');
+  return { path, symbol: i < 0 ? null : entry.slice(i + 2) };
+}
+
+// True when one entry contains or equals the other. A directory contains the
+// paths under it; a bare file contains its symbols; two symbols of one file
+// overlap only when they are the same symbol.
 function pathsOverlap(a, b) {
-  const na = a.replace(/\/+$/, '');
-  const nb = b.replace(/\/+$/, '');
-  return na === nb || na.startsWith(nb + '/') || nb.startsWith(na + '/');
+  const sa = splitScope(a);
+  const sb = splitScope(b);
+  if (sa.path !== sb.path) return sa.path.startsWith(sb.path + '/') || sb.path.startsWith(sa.path + '/');
+  return sa.symbol === null || sb.symbol === null || sa.symbol === sb.symbol;
 }
 
 function scopesOverlap(a, b) {
@@ -814,7 +824,7 @@ ${RETURN_FIELDS}`;
 function loadPrompt(ctx) {
   return `${header(ctx, { path: ctx.planPath, sha: ctx.planSha })}
 
-Load the decomposition plan and reduce it to its graph. For every work unit return: id; type (foundation | feature | design | meta); complete — true iff a Plan Maintenance completion entry names it; dependencies with their type; scope — every file, module, or directory the unit writes to; publishes; gates — every external gate with kind, whether the decision log records it cleared, and its plan-time pin; and the unit's entry verbatim. Return the plan's execution order as a list of unit ids. Every coordination protocol for overlapping-scope units must already be encoded as a dependency edge; do not add edges yourself — report a protocol that is not an edge as an ambiguity about scope. Also return the branch the main checkout is on and the architecture document's commit SHA on ${ctx.integrationBranch}.
+Load the decomposition plan and reduce it to its graph. For every work unit return: id; type (foundation | feature | design | meta); complete — true iff a Plan Maintenance completion entry names it; dependencies with their type; scope — every file, module, or directory the unit writes to, written \`file::symbol\` where the entry or a coordination protocol confines the unit to named functions or classes within a file other units also write; publishes; gates — every external gate with kind, whether the decision log records it cleared, and its plan-time pin; and the unit's entry verbatim. Return the plan's execution order as a list of unit ids. Every coordination protocol for overlapping-scope units must already be expressible as a dependency edge or as symbol-level scope; do not add edges yourself — report a protocol that is neither as an ambiguity about scope. Also return the branch the main checkout is on and the architecture document's commit SHA on ${ctx.integrationBranch}.
 ${RETURN_FIELDS}`;
 }
 

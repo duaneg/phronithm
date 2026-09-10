@@ -147,11 +147,14 @@ loop:
 
 **The script reads only the dependency graph.** Breakdown may reconcile
 overlapping-scope parallel units by a prose coordination protocol; the
-workflow does not read prose. Every such protocol is encoded in the plan as a
-logical edge (serialise = an edge from the earlier unit to the later), and
-`load` checks that every pair of units with overlapping scope has an edge
-between them, stopping otherwise. This is a constraint on the plan
-`lsf-architecture` produces, stated in its breakdown prompt.
+workflow does not read prose. Every such protocol is encoded in the plan
+either as a logical edge (serialise = an edge from the earlier unit to the
+later) or as symbol-level scope (`file::symbol` for each function or class a
+unit owns within a shared file), and `load` checks that every pair of units
+with overlapping scope has an edge between them, stopping otherwise. This is
+a constraint on the plan `lsf-architecture` produces, stated in its breakdown
+prompt. Symbol ownership is a claim the plan makes; a merge conflict between
+two units the plan called disjoint surfaces as a plan defect at re-plan.
 
 **Termination stage.** When no units remain, a breakdown-mode agent reads the
 plan's Meta-Tasks and Standing Obligations sections and returns two lists:
@@ -377,10 +380,13 @@ inlining is a copy step and the only place drift can enter; the module file
 is the source of truth.
 
 The module reads a plan reduced to its graph (`PLAN_SCHEMA`): unit ids,
-typed dependencies, written scope paths, gates, and execution order. Two
-units overlap when a scope path of one contains or equals a scope
-path of the other; they count as serialised when a dependency path of any
-type runs between them in either direction. Signals from `ambiguities` map by
+typed dependencies, written scope entries, gates, and execution order. A
+scope entry is a path or `path::symbol`. Two units overlap when an entry of
+one contains or equals an entry of the other: a directory contains the paths
+under it, a bare file contains its symbols, and two symbols of one file
+overlap only when they are the same symbol. Completed units pair with
+nothing. Units count as serialised when a dependency path of any type runs
+between them in either direction. Signals from `ambiguities` map by
 `about`: scope and goal to their STOP kinds, requirement to
 `requirement-incomplete`, design to a RECORD kind. Every `contradictions`
 entry is `assumption-invalidated`. Volume thresholds (per-unit signal count,

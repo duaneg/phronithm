@@ -141,7 +141,7 @@ const PLAN_SCHEMA = Object.freeze({
           scope: {
             type: 'array',
             items: { type: 'string' },
-            description: 'Files, modules, or directories the unit writes to',
+            description: 'Files, modules, or directories the unit writes to; `file::symbol` when the unit owns one function or class within a file shared with other units',
           },
           publishes: { type: 'array', items: { type: 'string' } },
           gates: {
