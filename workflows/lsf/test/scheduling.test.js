@@ -158,9 +158,10 @@ test('signalsFromMerge distinguishes resolved from unresolvable conflicts', () =
       { unit: 'B', status: 'clean', files: [] },
       { unit: 'C', status: 'resolved', files: ['src/shared.js'] },
       { unit: 'D', status: 'unresolvable', files: ['src/shared.js'] },
+      { unit: 'E', status: 'regressed', files: ['test/e.test.js'] },
     ],
   }, { wave: 2 });
-  assert.deepEqual(sigs.map((s) => s.kind), ['claimed-disjoint-conflict', 'merge-conflict-unresolvable']);
+  assert.deepEqual(sigs.map((s) => s.kind), ['claimed-disjoint-conflict', 'merge-conflict-unresolvable', 'merge-regression']);
   assert.ok(sigs.every((s) => s.source === 'structural'));
 });
 

@@ -19,6 +19,11 @@ const STOP_KINDS = Object.freeze([
   'no-ready-unit',
   'standing-obligation-undischarged',
   'agent-null',
+  'merge-regression',
+  'handoff-insufficient',
+  'precondition',
+  'invalid-plan',
+  'unserialised-overlap',
   'execution-distress',
   'referent-recurrence',
   'signal-volume',
@@ -33,6 +38,8 @@ const RECORD_KINDS = Object.freeze([
   'new-edge',
   'claimed-disjoint-conflict',
   'over-budget-repaired',
+  'critical-fixed',
+  'handoff-partial',
 ]);
 
 const SOURCES = Object.freeze(['structural', 'reported', 'gate']);
@@ -171,7 +178,11 @@ const MERGE_RESULT_SCHEMA = Object.freeze({
         type: 'object',
         properties: {
           unit: { type: 'string' },
-          status: { type: 'string', enum: ['clean', 'resolved', 'unresolvable'] },
+          status: {
+            type: 'string',
+            enum: ['clean', 'resolved', 'unresolvable', 'regressed'],
+            description: 'regressed: merged cleanly but the test suite failed; the merge was undone',
+          },
           files: { type: 'array', items: { type: 'string' } },
           sha: { type: 'string' },
         },

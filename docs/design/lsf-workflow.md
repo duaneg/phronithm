@@ -7,8 +7,10 @@ attention is spent only on meta-level signals — invalidated assumptions,
 contradictory or incomplete requirements, divergence, scope and goal ambiguity
 — never on procedural sign-off.
 
-Status: design. The scheduling module and shared schema exist
-(`workflows/lsf/`); no script yet.
+Status: `lsf-implement` exists (`workflows/lsf/implement.js`, built into
+`workflows/lsf-implement.js`) and is tested against a stubbed runtime; it has
+not been run under the Workflow tool. `lsf-brief` and `lsf-architecture` do
+not exist yet.
 
 Detection of these meta-level signals by agents cannot be made reliable at
 present (measured, see Escalation). The design therefore treats surfacing as
@@ -89,8 +91,9 @@ the Escalation section measures as weakest. The residual risk — a
 requirement-altering fix misclassified as document-internal and applied
 silently — is not detectable by the run; the mitigation is that every Critical
 and its applied fix is written to the signal ledger (Surfacing below) so the
-requester can review the fixes the loop applied. It is the first thing the
-signal-layer measurement should target.
+requester can review the fixes the loop applied (kind `critical-fixed`,
+RECORD; also emitted by `lsf-implement`'s plan and code gates). It is the
+first thing the signal-layer measurement should target.
 
 Three workflows rather than one so each phase break stays a fresh-context
 boundary, which the skill already requires, and so that an escalation in one
@@ -223,7 +226,12 @@ STOP (return an escalation record): anything above the plan —
 - a re-plan producing a cycle, or a unit over budget that extraction cannot
   repair;
 - critique-gate non-convergence or hard cap;
-- an unresolvable merge conflict;
+- an unresolvable merge conflict, or a clean merge after which the test suite
+  fails (the merge stage undoes it and reports the unit regressed);
+- a review-gate handoff rated insufficient (partial is RECORD);
+- a plan that fails the load checks: unknown or duplicate units, an
+  overlapping-scope pair with no edge, or the main checkout not on the
+  integration branch;
 - an environment gate that has drifted from its plan-time pin, or a wave with
   no ready unit because of uncleared organisational or release gates;
 - an undischarged standing obligation at termination;

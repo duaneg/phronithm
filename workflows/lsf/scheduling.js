@@ -198,12 +198,12 @@ const AMBIGUITY_KIND = {
   design: 'design-ambiguity',
 };
 
-// Map a stage's shared-schema fields into signals. Returns [] for a null
-// return only if the caller handles nulls; a null stage return is a STOP the
-// caller raises via nullReturnSignal.
-function signalsFromStageReturn(ret, { stage, unit, wave }) {
+// Map a stage's shared-schema fields into signals. `source` defaults to
+// 'reported'; gate agents (critique, review-gate) pass 'gate'. A null stage
+// return is a STOP the caller raises via nullReturnSignal.
+function signalsFromStageReturn(ret, { stage, unit, wave, source = 'reported' }) {
   const out = [];
-  const base = { source: 'reported', stage, unit, wave, raisedBy: stage };
+  const base = { source, stage, unit, wave, raisedBy: stage };
   for (const a of ret.assumptions ?? []) {
     out.push(signal({ ...base, kind: 'assumption', statement: a.statement, referent: a.referent }));
   }
@@ -233,6 +233,11 @@ function signalsFromMerge(mergeResult, { wave }) {
       out.push(signal({
         kind: 'merge-conflict-unresolvable', source: 'structural', stage: 'merge', unit: m.unit, wave,
         statement: `merge of ${m.unit} conflicts in ${files}`, referent: files,
+      }));
+    } else if (m.status === 'regressed') {
+      out.push(signal({
+        kind: 'merge-regression', source: 'structural', stage: 'merge', unit: m.unit, wave,
+        statement: `merge of ${m.unit} was clean but the test suite failed in ${files}; merge undone`, referent: files,
       }));
     } else {
       out.push(signal({
