@@ -50,6 +50,17 @@ test('overlappingPairs reports serialisation via any dependency path', () => {
   assert.equal(byKey['C+D'], false);
 });
 
+test('overlappingPairs and validatePlan ignore completed units', () => {
+  const p = plan([
+    unit('A', { complete: true, scope: ['src/x'] }),
+    unit('B', { scope: ['src/x'] }),
+    unit('C', { scope: ['src/x'] }),
+  ]);
+  assert.deepEqual(overlappingPairs(p).map((pr) => pr.units), [['B', 'C']]);
+  assert.deepEqual(overlappingPairs(p, new Set(['C'])), []);
+  assert.equal(validatePlan(p).length, 1);
+});
+
 test('validatePlan accepts the diamond', () => {
   assert.deepEqual(validatePlan(diamond()), []);
 });

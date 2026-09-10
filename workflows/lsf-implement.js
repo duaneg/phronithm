@@ -318,16 +318,18 @@ function scopesOverlap(a, b) {
   return a.scope.some((pa) => b.scope.some((pb) => pathsOverlap(pa, pb)));
 }
 
-// Pairs of units with overlapping scope. Each pair is [earlierId, laterId] by
-// execution order, with `serialised` true when a dependency path in either
-// direction orders them.
-function overlappingPairs(plan) {
+// Pairs of incomplete units with overlapping scope. Each pair is
+// [earlierId, laterId] by execution order, with `serialised` true when a
+// dependency path in either direction orders them. A completed unit is
+// already merged and cannot conflict, so it pairs with nothing.
+function overlappingPairs(plan, completed = new Set()) {
   const order = new Map(plan.executionOrder.map((id, i) => [id, i]));
   const pairs = [];
   for (let i = 0; i < plan.units.length; i++) {
     for (let j = i + 1; j < plan.units.length; j++) {
       const a = plan.units[i];
       const b = plan.units[j];
+      if (isComplete(a, completed) || isComplete(b, completed)) continue;
       if (!scopesOverlap(a, b)) continue;
       const serialised = ancestors(plan, a.id).has(b.id) || ancestors(plan, b.id).has(a.id);
       const [x, y] = (order.get(a.id) ?? Infinity) <= (order.get(b.id) ?? Infinity) ? [a, b] : [b, a];
