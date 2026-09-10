@@ -151,7 +151,7 @@ For teams (human or agent), scope boundaries determine:
 - The boundary of responsibility for a given worker
 - What to review when the unit is complete
 
-Units with overlapping scope must either be serialised or have a concrete coordination protocol defined (e.g., "Unit B waits for Unit A's merge before starting", or "file X is owned by Unit A — Unit B uses the interface but does not modify the file"). Noting overlap without specifying the protocol is not sufficient.
+Units with overlapping scope must either be serialised or have a concrete coordination protocol defined (e.g., "Unit B waits for Unit A's merge before starting", or "file X is owned by Unit A — Unit B uses the interface but does not modify the file"). Noting overlap without specifying the protocol is not sufficient. Record an ownership protocol in each unit's Scope as `file::symbol` entries, so a scheduler reading only scope sees the units as disjoint.
 
 ## Workflow
 
@@ -244,7 +244,7 @@ Build the execution plan from the analysis.
    - **Clarity**: specified | exploratory
    - **Iteration**: write-once | iterative (tuning | structural)
    - **Effort**: small | medium | large
-   - **Scope**: <files/modules>
+   - **Scope**: <files/modules; `file::symbol` for a function or class owned within a file other units also write>
    - **Publishes**: <artefacts other units code against, or "none">
    - **Depends on**: <unit-name (dependency-type, artefact consumed) or "none">
    - **External gates**: <named gates — binary and version, service, person/team, environment — or "none">
