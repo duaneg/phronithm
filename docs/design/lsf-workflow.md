@@ -8,9 +8,11 @@ contradictory or incomplete requirements, divergence, scope and goal ambiguity
 — never on procedural sign-off.
 
 Status: `lsf-implement` exists (`workflows/lsf/implement.js`, built into
-`workflows/lsf-implement.js`) and is tested against a stubbed runtime; it has
-not been run under the Workflow tool. `lsf-brief` and `lsf-architecture` do
-not exist yet.
+`workflows/lsf-implement.js`) and is tested against a stubbed runtime. The
+plugin loader registers it as `phronithm:lsf-implement` (confirmed 2026-09-10
+against Claude Code 2.1.267: the loader reads `workflows/` non-recursively,
+so `workflows/lsf/` is ignored); it has not been run under the Workflow tool.
+`lsf-brief` and `lsf-architecture` do not exist yet.
 
 Detection of these meta-level signals by agents cannot be made reliable at
 present (measured, see Escalation). The design therefore treats surfacing as
