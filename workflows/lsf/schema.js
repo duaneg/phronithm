@@ -52,7 +52,9 @@ const DEPENDENCY_TYPES = Object.freeze([
 
 const GATE_KINDS = Object.freeze(['environment', 'organisational', 'release', 'data']);
 
-const UNIT_TYPES = Object.freeze(['foundation', 'feature', 'design', 'meta']);
+// phronithm:breakdown's unit types, plus `meta` for units the termination
+// stage appends from the plan's Meta-Tasks section.
+const UNIT_TYPES = Object.freeze(['foundation', 'feature', 'integration', 'design', 'refactor', 'bug-fix', 'polish', 'meta']);
 
 // Fields every agent() in the three workflows returns in addition to `result`.
 const STAGE_COMMON_PROPERTIES = Object.freeze({

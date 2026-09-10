@@ -72,7 +72,9 @@ const DEPENDENCY_TYPES = Object.freeze([
 
 const GATE_KINDS = Object.freeze(['environment', 'organisational', 'release', 'data']);
 
-const UNIT_TYPES = Object.freeze(['foundation', 'feature', 'design', 'meta']);
+// phronithm:breakdown's unit types, plus `meta` for units the termination
+// stage appends from the plan's Meta-Tasks section.
+const UNIT_TYPES = Object.freeze(['foundation', 'feature', 'integration', 'design', 'refactor', 'bug-fix', 'polish', 'meta']);
 
 // Fields every agent() in the three workflows returns in addition to `result`.
 const STAGE_COMMON_PROPERTIES = Object.freeze({
@@ -694,7 +696,11 @@ const tier = (ctx, role) => ctx.tiers[role] ?? ctx.tiers.default;
 const LENSES_BY_TYPE = {
   foundation: ['general', 'error-handling', 'data-structures'],
   feature: ['general', 'error-handling'],
+  integration: ['general', 'error-handling'],
   design: [],
+  refactor: ['general', 'complexity'],
+  'bug-fix': ['general', 'error-handling'],
+  polish: ['general'],
   meta: ['general'],
 };
 
@@ -825,7 +831,7 @@ ${RETURN_FIELDS}`;
 function loadPrompt(ctx) {
   return `${header(ctx, { path: ctx.planPath, sha: ctx.planSha })}
 
-Load the decomposition plan and reduce it to its graph. For every work unit return: id; type (foundation | feature | design | meta); complete — true iff a Plan Maintenance completion entry names it; dependencies with their type; scope — every file, module, or directory the unit writes to, written \`file::symbol\` where the entry or a coordination protocol confines the unit to named functions or classes within a file other units also write; publishes; gates — every external gate with kind, whether the decision log records it cleared, and its plan-time pin; and the unit's entry verbatim. Return the plan's execution order as a list of unit ids. Every coordination protocol for overlapping-scope units must already be expressible as a dependency edge or as symbol-level scope; do not add edges yourself — report a protocol that is neither as an ambiguity about scope. Also return the branch the main checkout is on and the architecture document's commit SHA on ${ctx.integrationBranch}.
+Load the decomposition plan and reduce it to its graph. For every work unit return: id; type, as the plan labels it; complete — true iff a Plan Maintenance completion entry names it; dependencies with their type; scope — every file, module, or directory the unit writes to, written \`file::symbol\` where the entry or a coordination protocol confines the unit to named functions or classes within a file other units also write; publishes; gates — every external gate with kind, whether the decision log records it cleared, and its plan-time pin; and the unit's entry verbatim. Return the \`## Execution Order\` section's list as unit ids in its literal order, not a sequence reconstructed from Plan Maintenance; a Plan Maintenance entry that selected a unit out of that order is an assumption if it affects what you return, not a contradiction. Every coordination protocol for overlapping-scope units must already be expressible as a dependency edge or as symbol-level scope; do not add edges yourself — report a protocol that is neither as an ambiguity about scope. Also return the branch the main checkout is on and the architecture document's commit SHA on ${ctx.integrationBranch}.
 ${RETURN_FIELDS}`;
 }
 
