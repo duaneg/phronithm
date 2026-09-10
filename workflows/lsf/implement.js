@@ -20,6 +20,7 @@
 //   ledgerPath          default docs/plans/<name>-signals.md
 //   config              overrides for scheduling DEFAULT_CONFIG
 //   maxWaves            default 20
+//   maxUnitsPerWave     cap on units started per wave, in execution order; default unbounded
 //   tiers               per-role { model, effort } overrides; roles: gate
 //                       (critique and review), planning (unit plan, re-plan,
 //                       termination), default (everything else)
@@ -550,6 +551,7 @@ async function run(rt) {
     ledgerPath: args.ledgerPath ?? `docs/plans/${name}-signals.md`,
     config: { ...DEFAULT_CONFIG, ...(args.config ?? {}) },
     maxWaves: args.maxWaves ?? DEFAULT_MAX_WAVES,
+    maxUnitsPerWave: args.maxUnitsPerWave ?? Infinity,
     tiers: { ...DEFAULT_TIERS, ...(args.tiers ?? {}) },
   };
 
@@ -614,7 +616,9 @@ async function run(rt) {
   let terminationRan = false;
 
   for (;;) {
-    const ready = readySet(plan, completed);
+    const allReady = readySet(plan, completed);
+    const ready = allReady.slice(0, ctx.maxUnitsPerWave);
+    if (ready.length < allReady.length) log(`wave ${wave + 1}: ${allReady.length} ready, capped at ${ready.length}: ${allReady.slice(ready.length).map((u) => u.id).join(', ')} deferred`);
     if (!ready.length) {
       const blocked = blockedUnits(plan, completed);
       if (blocked.length) {

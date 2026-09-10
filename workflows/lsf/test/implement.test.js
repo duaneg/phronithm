@@ -80,6 +80,16 @@ const twoWaves = () => graph('plan0', [unit('A', { type: 'foundation' }), unit('
 
 // ---------------------------------------------------------------- tests
 
+test('maxUnitsPerWave caps each wave in execution order and defers the rest', async () => {
+  const three = graph('plan0', [unit('A'), unit('B'), unit('C')]);
+  const { rt, labels } = runtime(three, {}, { maxUnitsPerWave: 2 });
+  const out = await run(rt);
+  assert.equal(out.status, 'complete');
+  assert.equal(out.waves, 2);
+  assert.deepEqual(labels().filter((x) => x.startsWith('implement')), ['implement:A', 'implement:B', 'implement:C']);
+  assert.ok(labels().indexOf('merge:w1') < labels().indexOf('implement:C'));
+});
+
 test('clean run: two waves, termination, obligations, complete', async () => {
   const { rt, labels } = runtime(twoWaves());
   const out = await run(rt);
