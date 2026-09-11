@@ -264,7 +264,7 @@ function signalsFromMerge(mergeResult, { wave }) {
 }
 
 const DEFAULT_CONFIG = Object.freeze({
-  perStageSignalThreshold: 6, // assumptions + ambiguities one stage reports for one unit
+  perStageSignalThreshold: 6, // open ambiguities + contradictions one stage reports for one unit
   distressDeviationThreshold: 4, // deviations + deferrals
   distressDesignDecisionThreshold: 3, // mid-implementation design decisions
 });
@@ -292,6 +292,10 @@ function distressSignals(distress, { unit, wave }, config = DEFAULT_CONFIG) {
 function normaliseReferent(r) {
   return String(r ?? '').trim().toLowerCase();
 }
+
+// Reported kinds that count towards a stage's volume: the open points, not
+// the disclosed choices.
+const VOLUME_KINDS = Object.freeze(['scope-ambiguity', 'goal-ambiguity', 'requirement-incomplete', 'requirement-contradictory', 'assumption-invalidated']);
 
 // Volume rules over this wave's signals and the ledger so far. Content-blind:
 // counting only.
@@ -323,13 +327,15 @@ function volumeSignals(waveSignals, prior, { wave, unitsInWave }, config = DEFAU
     }
   }
 
-  // Per-stage threshold on assumptions and ambiguities. A unit passes
-  // through many stages in a wave; the count that means something is one
-  // stage's, not the sum.
+  // Per-stage threshold on open ambiguities and contradictions. A unit
+  // passes through many stages in a wave; the count that means something is
+  // one stage's, not the sum. Disclosed assumptions and design ambiguities
+  // are the prompts asking for a record and do not count: a plan that lists
+  // its choices is the healthy case.
   const perStage = new Map();
   for (const s of waveSignals) {
     if (s.source !== 'reported' || !s.unit) continue;
-    if (s.kind === 'assumption' || s.kind.endsWith('-ambiguity') || s.kind === 'requirement-incomplete') {
+    if (VOLUME_KINDS.includes(s.kind)) {
       const key = `${s.unit}\u0000${s.stage}`;
       perStage.set(key, (perStage.get(key) ?? 0) + 1);
     }
@@ -339,7 +345,7 @@ function volumeSignals(waveSignals, prior, { wave, unitsInWave }, config = DEFAU
       const [unit, stage] = key.split('\u0000');
       out.push(signal({
         kind: 'signal-volume', source: 'structural', stage: 'stop-rule', unit, wave,
-        statement: `${n} assumptions and ambiguities reported by ${stage} for ${unit} (threshold ${cfg.perStageSignalThreshold})`,
+        statement: `${n} open ambiguities and contradictions reported by ${stage} for ${unit} (threshold ${cfg.perStageSignalThreshold})`,
         referent: unit,
       }));
     }
@@ -384,6 +390,21 @@ function countBy(items, key) {
 }
 
 // Three trend flags over the full ledger, plus counts by kind and source.
+// Markdown for the signal ledger: the scribe appends this verbatim. Cell
+// text is one line with pipes escaped so a statement cannot break the table.
+const LEDGER_COLUMNS = ['Wave', 'Unit', 'Stage', 'Source', 'Kind', 'Statement', 'Referent', 'Disposition'];
+function ledgerCell(v) {
+  return String(v ?? '').replace(/\r?\n+/g, ' ').replace(/\|/g, '\\|').trim() || '—';
+}
+function ledgerHeading(name) {
+  return `# Signal ledger: ${name}\n\nAppend-only. Never edit earlier entries — add a later wave's row instead.\n`;
+}
+function renderLedger(entries, wave) {
+  const head = [`## Wave ${wave}`, '', `| ${LEDGER_COLUMNS.join(' | ')} |`, `| ${LEDGER_COLUMNS.map(() => '---').join(' | ')} |`];
+  const rows = entries.map((e) => `| ${[e.wave ?? wave, e.unit, e.stage, e.source, e.kind, e.statement, e.referent, e.disposition].map(ledgerCell).join(' | ')} |`);
+  return [...head, ...rows].join('\n') + '\n';
+}
+
 function digest(ledger, { unitsPerWave = {} } = {}) {
   const waves = [...new Set(ledger.map((s) => s.wave).filter((w) => w !== undefined))].sort((a, b) => a - b);
 
@@ -416,5 +437,5 @@ export {
   findCycle, ancestors, pathsOverlap, scopesOverlap, overlappingPairs, validatePlan,
   readySet, blockedUnits, mergeOrder, wavePlan,
   signalsFromStageReturn, nullReturnSignal, signalsFromMerge, distressSignals,
-  volumeSignals, evaluateWave, digest,
+  volumeSignals, evaluateWave, digest, renderLedger, ledgerHeading,
 };

@@ -4,7 +4,7 @@ import {
   findCycle, pathsOverlap, overlappingPairs, validatePlan,
   readySet, blockedUnits, mergeOrder, wavePlan,
   signalsFromStageReturn, nullReturnSignal, signalsFromMerge, distressSignals,
-  volumeSignals, evaluateWave, digest,
+  volumeSignals, evaluateWave, digest, renderLedger, ledgerHeading,
 } from '../scheduling.js';
 import { signal } from '../schema.js';
 
@@ -253,9 +253,9 @@ test('recurrence only fires for referents this wave touched', () => {
   assert.deepEqual(volumeSignals(now, prior, { wave: 3, unitsInWave: 1 }), []);
 });
 
-test('per-stage signal threshold is configurable and counts one stage\'s assumptions and ambiguities, not the unit\'s total', () => {
-  const now = Array.from({ length: 3 }, (_, i) => reported('assumption', { unit: 'B', wave: 1, referent: `r${i}` }));
-  now.push(reported('design-ambiguity', { unit: 'B', wave: 1, referent: 'r9' }));
+test('per-stage signal threshold is configurable and counts one stage\'s open ambiguities and contradictions, not the unit\'s total', () => {
+  const now = Array.from({ length: 3 }, (_, i) => reported('scope-ambiguity', { unit: 'B', wave: 1, referent: `r${i}` }));
+  now.push(reported('assumption-invalidated', { unit: 'B', wave: 1, referent: 'r9' }));
   assert.deepEqual(volumeSignals(now, [], { wave: 1, unitsInWave: 1 }), []);
   const v = volumeSignals(now, [], { wave: 1, unitsInWave: 1 }, { perStageSignalThreshold: 3 });
   assert.deepEqual(v.map((s) => s.kind), ['signal-volume']);
@@ -264,6 +264,24 @@ test('per-stage signal threshold is configurable and counts one stage\'s assumpt
   // The same four spread over four stages is no one stage's volume.
   const spread = now.map((s, i) => ({ ...s, stage: `stage${i}` }));
   assert.deepEqual(volumeSignals(spread, [], { wave: 1, unitsInWave: 1 }, { perStageSignalThreshold: 3 }), []);
+  // Disclosed assumptions and design ambiguities are not volume, however many.
+  const disclosed = Array.from({ length: 8 }, (_, i) => reported(i % 2 ? 'assumption' : 'design-ambiguity', { unit: 'B', wave: 1, referent: `d${i}` }));
+  assert.deepEqual(volumeSignals(disclosed, [], { wave: 1, unitsInWave: 1 }, { perStageSignalThreshold: 3 }), []);
+});
+
+test('renderLedger is one table under a wave heading, one line per row, pipes and newlines neutralised', () => {
+  const rows = [
+    { wave: 2, unit: 'B', stage: 'plan', source: 'reported', kind: 'assumption', statement: 'a | b\nc', referent: 'x', disposition: 'recorded' },
+    { unit: null, stage: 'stop-rule', source: 'structural', kind: 'signal-volume', statement: 's', referent: 'B', disposition: 'stopped' },
+  ];
+  const md = renderLedger(rows, 2);
+  const lines = md.split('\n');
+  assert.equal(lines[0], '## Wave 2');
+  assert.equal(lines[2], '| Wave | Unit | Stage | Source | Kind | Statement | Referent | Disposition |');
+  assert.equal(lines[4], '| 2 | B | plan | reported | assumption | a \\| b c | x | recorded |');
+  assert.equal(lines[5], '| 2 | — | stop-rule | structural | signal-volume | s | B | stopped |');
+  assert.equal(lines.length, 7); // trailing newline
+  assert.match(ledgerHeading('f'), /^# Signal ledger: f\n/);
 });
 
 test('a referent that is only the signal\'s own unit id never recurs; an ambiguity without a referent uses its statement', () => {

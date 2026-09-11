@@ -262,8 +262,9 @@ need no detection quality, only counting:
 - the same referent named in signals from two different waves or two
   different sources — a referent that is only the signal's own unit id does
   not count, and an ambiguity with no referent uses its statement;
-- one stage's assumptions and ambiguities for one unit exceeding a threshold
-  set in the workflow's arguments;
+- one stage's open ambiguities and contradictions for one unit exceeding a
+  threshold set in the workflow's arguments — disclosed assumptions and design
+  ambiguities do not count, since the prompts ask for them;
 - a wave in which no stage reports any assumption, ambiguity, or contradiction
   — silence across a whole wave is more likely under-reporting than
   cleanliness, given the recall figures above.
@@ -279,10 +280,11 @@ Every signal, RECORD or STOP, is surfaced — the requester's ability to notice
 drift is the control the design actually relies on.
 
 - **Signal ledger.** Append-only file in the repo,
-  `docs/plans/<name>-signals.md`, committed by the scribe agent at the end of
-  every wave and every `lsf-brief` / `lsf-architecture` stage: wave, unit,
-  stage, source, kind, statement, referent, disposition (recorded / stopped /
-  decided-by-requester with the decision-log entry). The plan's Plan
+  `docs/plans/<name>-signals.md`: wave, unit, stage, source, kind, statement,
+  referent, disposition (recorded / stopped / decided-by-requester with the
+  decision-log entry). The script renders each wave's rows as a Markdown
+  table; a haiku scribe agent appends that text verbatim and commits,
+  once per wave (a stop rides in the same append). The plan's Plan
   Maintenance section records amendments; the ledger records why.
 - **Live narration.** The script calls `log()` at every wave boundary with the
   counts by kind and source, the units merged, conflicts, and the re-plan's
@@ -368,10 +370,18 @@ Every `agent()` in the three workflows returns at least:
 ```
 
 Empty arrays are valid. The script maps `ambiguities` and `contradictions`
-straight into signals; `assumptions` are recorded and passed to the review-gate
-agent for the wave. Ambiguities can only be about the architecture document,
+straight into signals. Ambiguities can only be about the architecture document,
 request record, plan, or unit entry, and carry a referent; an open point in a
 stage's own instructions is resolved plainly and recorded as an assumption.
+
+Each finding enters the ledger once. Every stage after a unit's plan receives
+the signals the unit's earlier stages recorded, and the review-gate agent
+receives the wave's, under an "Already recorded" heading with the instruction
+to report only what is new; a stale filename in a Scope line is recorded by
+the plan stage, not again by each of the seven that follow. The gate is also
+told the workflow's own rules — the critique pass bar, that re-plan follows
+the gate, that the script selects the wave's units — so it does not report
+them as defects, and that exit criteria are the done condition as written.
 
 ## Persistence
 
@@ -411,9 +421,10 @@ nothing. Units count as serialised when a dependency path runs
 between them in either direction. Signals from `ambiguities` map by
 `about`: scope and goal to their STOP kinds, requirement to
 `requirement-incomplete`, design to a RECORD kind. Every `contradictions`
-entry is `assumption-invalidated`. Volume thresholds (per-unit signal count,
+entry is `assumption-invalidated`. Volume thresholds (per-stage open-signal count,
 distress deviation and design-decision counts) are the module's config
-object, overridable from the workflow's `args`.
+object, overridable from the workflow's `args`. `renderLedger` produces the
+wave's ledger table the scribe appends.
 
 **Signal layer** (tentative): a synthetic feature in the bench repo with
 injected defects — a deferral, a claimed-disjoint conflict, a unit whose
@@ -428,7 +439,11 @@ critic-fidelity measurement. Not yet committed to.
 Each stage call carries a role tier (`args.tiers` overrides per role):
 gate (critique, lens review, architecture gate, obligations) runs opus;
 planning (unit plan, re-plan, termination) runs fable at medium effort;
-everything else runs sonnet. Static analysis inherits the session model.
+mechanical (plan-block copy, decision-log and ledger appends) runs haiku at
+low effort, since the script has already rendered what they write and the
+parser checks it on the next load; everything else, including termination's
+direct edits to the plan, runs sonnet. Static analysis inherits the session
+model.
 
 ## Open questions
 

@@ -336,7 +336,7 @@ test('fixed Critical findings reach the ledger on a passing gate', async () => {
   assert.match(ledger1.prompt, /critical-fixed/);
 });
 
-test('role tiers reach every call: gate opus, planning fable/medium, default sonnet; static analysis inherits', async () => {
+test('role tiers reach every call: gate opus, planning fable/medium, mechanical haiku/low, default sonnet; static analysis inherits', async () => {
   const { rt, calls } = runtime(twoWaves());
   await run(rt);
   const seen = new Set();
@@ -346,9 +346,45 @@ test('role tiers reach every call: gate opus, planning fable/medium, default son
     if (/^static-analysis/.test(c.label)) { assert.equal(c.opts.model, undefined, c.label); continue; }
     if (/^(critique-plan|critique-code|lens-review|review-gate|obligations)$/.test(role)) assert.equal(c.opts.model, 'opus', c.label);
     else if (/^(plan|replan|termination)$/.test(role)) assert.deepEqual([c.opts.model, c.opts.effort], ['fable', 'medium'], c.label);
+    else if (/^(load|ledger|decision-log)$/.test(role)) assert.deepEqual([c.opts.model, c.opts.effort], ['haiku', 'low'], c.label);
     else assert.equal(c.opts.model, 'sonnet', c.label);
   }
-  for (const r of ['critique-code', 'plan', 'implement', 'merge', 'review-gate', 'replan']) assert.ok(seen.has(r), r);
+  for (const r of ['critique-code', 'plan', 'implement', 'merge', 'review-gate', 'replan', 'load', 'ledger']) assert.ok(seen.has(r), r);
+});
+
+test('a wave stop scribes once, with the wave\'s records and stops in one rendered table', async () => {
+  const { rt, calls } = runtime(twoWaves(), {
+    implement: (p, o, u) => ret({
+      branch: `impl-${u}`, sha: 'i', gateProbe: [], distress: NO_DISTRESS, deviations: [], deferrals: [], discoveries: [],
+      doneCondition: { evaluable: true, met: true, evidence: 'ok' }, standingObligations: [], summary: 'done',
+    }, { assumptions: [{ statement: 'a | b', referent: 'r' }], contradictions: [{ statement: 'schema differs', against: 'docs/architecture/f.md @ arch1' }] }),
+  });
+  await run(rt);
+  const scribes = calls.filter((c) => c.label === 'ledger:w1');
+  assert.equal(scribes.length, 1);
+  const p = scribes[0].prompt;
+  assert.match(p, /<<<LEDGER\n## Wave 1\n/);
+  assert.match(p, /\| 1 \| A \| implement \| reported \| assumption \| a \\\| b \| r \| recorded \|/);
+  assert.match(p, /\| assumption-invalidated \| schema differs \| docs\/architecture\/f.md @ arch1 \| stopped \|/);
+  assert.match(p, /# Signal ledger: f/);
+});
+
+test('each stage after the plan sees the unit\'s earlier signals; the gate sees the wave\'s', async () => {
+  const { rt, calls } = runtime(twoWaves(), {
+    plan: (p, o, u) => ret({ branch: `plan-${u}`, sha: 'p', path: `docs/plans/${u}-plan.md`, planText: `plan for ${u}` },
+      { ambiguities: [{ statement: 'which file?', about: 'scope', referent: 'Scope' }] }),
+  });
+  await run(rt);
+  const of = (label) => calls.find((c) => c.label === label).prompt;
+  assert.doesNotMatch(of('plan:A'), /Already recorded for this unit/);
+  for (const l of ['critique-plan:r1:A', 'implement:A', 'critique-code:r1:A', 'lens-review:r1:A', 'completion-report:A']) {
+    assert.match(of(l), /Already recorded for this unit by earlier stages[^]*\[plan\] scope-ambiguity: which file\? \(referent: Scope\)/, l);
+  }
+  const gate = of('review-gate:w1');
+  assert.match(gate, /Already recorded by this wave's stages[^]*\[plan\] scope-ambiguity: which file\?/);
+  assert.match(gate, /\[implement\] assumption: assumed for A/);
+  assert.match(gate, /pass on no Critical findings/);
+  assert.match(gate, /re-plan stage runs after this gate/);
 });
 
 test('args.tiers overrides a role without disturbing the others', async () => {
