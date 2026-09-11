@@ -256,12 +256,14 @@ STOP on volume, independent of any single signal's content — these rules
 need no detection quality, only counting:
 
 - a completion report carrying breakdown's execution-distress signals
-  (context near exhaustion, mid-implementation design decisions, heavy
-  deviation or deferral count);
+  (context near exhaustion, three or more mid-implementation design
+  decisions, four or more deviations and deferrals; thresholds in the
+  scheduling config);
 - the same referent named in signals from two different waves or two
-  different sources;
-- a unit's assumptions or ambiguities exceeding a per-unit threshold set in
-  the workflow's arguments;
+  different sources — a referent that is only the signal's own unit id does
+  not count, and an ambiguity with no referent uses its statement;
+- one stage's assumptions and ambiguities for one unit exceeding a threshold
+  set in the workflow's arguments;
 - a wave in which no stage reports any assumption, ambiguity, or contradiction
   — silence across a whole wave is more likely under-reporting than
   cleanliness, given the recall figures above.
@@ -360,14 +362,16 @@ Every `agent()` in the three workflows returns at least:
 ```
 { result: <stage-specific>,
   assumptions: [ { statement, referent } ],
-  ambiguities: [ { statement, about: "scope" | "goal" | "requirement" | "design" } ],
+  ambiguities: [ { statement, about: "scope" | "goal" | "requirement" | "design", referent } ],
   contradictions: [ { statement, against: <doc path + SHA> } ],
   commits: [ { branch, sha } ] }
 ```
 
 Empty arrays are valid. The script maps `ambiguities` and `contradictions`
 straight into signals; `assumptions` are recorded and passed to the review-gate
-agent for the wave.
+agent for the wave. Ambiguities can only be about the architecture document,
+request record, plan, or unit entry, and carry a referent; an open point in a
+stage's own instructions is resolved plainly and recorded as an assumption.
 
 ## Persistence
 

@@ -69,8 +69,9 @@ const STAGE_COMMON_PROPERTIES = Object.freeze({
       properties: {
         statement: { type: 'string' },
         about: { type: 'string', enum: AMBIGUITY_ABOUT },
+        referent: { type: 'string', description: 'What the ambiguity concerns: a document section, symbol, unit, or gate' },
       },
-      required: ['statement', 'about'],
+      required: ['statement', 'about', 'referent'],
     },
   },
   contradictions: {

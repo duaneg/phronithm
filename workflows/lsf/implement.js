@@ -157,7 +157,7 @@ const SCRIBE_SCHEMA = stageSchema(obj({ path: str, sha: str }));
 // ---------------------------------------------------------------- prompts
 
 const RETURN_FIELDS = `
-Besides \`result\`, return: \`assumptions\` — each thing you took as given that the inputs do not state, with the referent it concerns; \`ambiguities\` — each point where the inputs leave open what is built, in what order, or with what scope, classified as scope, goal, requirement, or design — a choice about how the inputs map onto this return schema (which enum value fits, how to type an edge, how to label a gate) is an assumption, never an ambiguity, and no item goes under both; \`contradictions\` — each thing you observed that contradicts the architecture document, the request record, or the unit entry, citing the document path and SHA; \`commits\` — every commit you made, branch and SHA. Empty arrays are valid. Do not pad them and do not omit a real one. The return is one flat object with these four fields beside \`result\`, never inside it.`;
+Besides \`result\`, return: \`assumptions\` — each thing you took as given that the inputs do not state, with the referent it concerns; \`ambiguities\` — each point where the architecture document, the request record, the decomposition plan, or the unit entry leaves open what is built, in what order, or with what scope, classified as scope, goal, requirement, or design, with the referent it concerns (a section, symbol, unit, or gate). Only those documents can be ambiguous. An open point in these instructions, in the return schema, or in how to report (which enum value fits, how many commits, whether a template field applies) is not an ambiguity: resolve it the plainest way and record it as an assumption. No item goes under both; \`contradictions\` — each thing you observed that contradicts the architecture document, the request record, or the unit entry, citing the document path and SHA; \`commits\` — every commit you made, branch and SHA. Empty arrays are valid. Do not pad them and do not omit a real one. The return is one flat object with these four fields beside \`result\`, never inside it.`;
 
 function header(ctx, plan) {
   const lines = [
@@ -221,7 +221,7 @@ ${worktree(ctx.integrationBranch)}
 
 ${unitBlock(plan, unit)}
 
-Write the implementation plan for this unit following the phronithm:feature skill's Phase 3 in work-unit mode: the architecture document is the primary design input; the unit's done condition, adopted verbatim, is a success criterion; each standing obligation naming the unit is a requirement. Do not re-explore what the architecture document and unit entry settle. The plan must be self-contained — a fresh context can implement from it alone — and carry the work-unit context section (unit entry verbatim, decomposition plan path and SHA, standing obligations). Keep it within the unit's size budget: about six steps, at most one open design decision. Save it to docs/plans/${unit.id}-plan.md and commit. Return branch, SHA, path, and the plan text verbatim.
+Write the implementation plan for this unit following the phronithm:feature skill's Phase 3 in work-unit mode: the architecture document is the primary design input; the unit's done condition, adopted verbatim, is a success criterion; each standing obligation naming the unit is a requirement. Do not re-explore what the architecture document and unit entry settle. The plan must be self-contained — a fresh context can implement from it alone — and carry the work-unit context section (unit entry verbatim, decomposition plan path and SHA, standing obligations). Keep it within the unit's size budget: about six steps, at most one open design decision. This workflow's own stages replace feature's later phases: the implement stage runs the plan single-shot, a critique gate and lens review follow, and a completion report is written for the unit — so the plan carries no "Remaining phases" section and mandates no implementation summary (\`docs/plans/${unit.id}-implementation.md\`); the completion report is that record. Save it to docs/plans/${unit.id}-plan.md and commit. Return branch, SHA, path, and the plan text verbatim.
 ${RETURN_FIELDS}`;
 }
 
@@ -262,7 +262,7 @@ Implementation plan: docs/plans/${unit.id}-plan.md on this branch.
 
 First re-probe every external gate in the unit entry against its plan-time pin: probe environment gates mechanically (binaries and versions, fonts, services, accounts, data sets); organisational and release gates are already cleared per the decision log and need no probe. Report each under \`gateProbe\`. If any gate has drifted, implement nothing — return the probe results with every other \`result\` field empty, zero, or false, and stop.
 
-Otherwise execute the plan in full, single-shot, committing as you go with the project's commit discipline. There is no per-step critique here. Then evaluate the done condition exactly as written and report whether it is evaluable in position and whether it is met, with evidence. Record as they arise: deviations from the unit entry's scope or publishes; deferrals — work in scope deliberately not implemented, naming the unit it belongs to; discoveries that add work to, reassign work between, or invalidate an assumption of another unit; the status of each standing obligation the unit carries. Report execution distress honestly: whether context is near exhaustion, how many design decisions you took mid-implementation, the deviation and deferral counts.
+Otherwise execute the plan in full, single-shot, committing as you go with the project's commit discipline. There is no per-step critique here, and no implementation summary document: the completion report a later stage writes from your return is that record, so do not write \`docs/plans/${unit.id}-implementation.md\` even if the plan text mentions one. Then evaluate the done condition exactly as written and report whether it is evaluable in position and whether it is met, with evidence. Record as they arise: deviations from the unit entry's scope or publishes; deferrals — work in scope deliberately not implemented, naming the unit it belongs to; discoveries that add work to, reassign work between, or invalidate an assumption of another unit; the status of each standing obligation the unit carries. Report execution distress honestly: whether context is near exhaustion, how many design decisions you took mid-implementation, the deviation and deferral counts.
 ${RETURN_FIELDS}`;
 }
 
@@ -761,7 +761,7 @@ async function run(rt) {
         for (const c of g.result.exitCriteria.filter((c) => !c.met)) {
           waveSignals.push(signal({
             kind: 'done-condition-unevaluable', source: 'gate', stage: 'review-gate', unit: c.unit, wave,
-            statement: `exit criteria not met: ${c.statement}`, referent: c.unit,
+            statement: `exit criteria not met: ${c.statement}`, referent: c.statement,
           }));
         }
       }

@@ -89,8 +89,9 @@ const STAGE_COMMON_PROPERTIES = Object.freeze({
       properties: {
         statement: { type: 'string' },
         about: { type: 'string', enum: AMBIGUITY_ABOUT },
+        referent: { type: 'string', description: 'What the ambiguity concerns: a document section, symbol, unit, or gate' },
       },
-      required: ['statement', 'about'],
+      required: ['statement', 'about', 'referent'],
     },
   },
   contradictions: {
@@ -814,7 +815,9 @@ function signalsFromStageReturn(ret, { stage, unit, wave, source = 'reported' })
     out.push(signal({ ...base, kind: 'assumption', statement: a.statement, referent: a.referent }));
   }
   for (const a of ret.ambiguities ?? []) {
-    out.push(signal({ ...base, kind: AMBIGUITY_KIND[a.about] ?? 'scope-ambiguity', statement: a.statement, referent: a.about }));
+    // The category is not a referent; without one the statement stands in,
+    // so recurrence never trips on 'scope' meeting 'scope'.
+    out.push(signal({ ...base, kind: AMBIGUITY_KIND[a.about] ?? 'scope-ambiguity', statement: a.statement, referent: a.referent || a.statement }));
   }
   for (const c of ret.contradictions ?? []) {
     out.push(signal({ ...base, kind: 'assumption-invalidated', statement: c.statement, referent: c.against }));
@@ -856,9 +859,9 @@ function signalsFromMerge(mergeResult, { wave }) {
 }
 
 const DEFAULT_CONFIG = Object.freeze({
-  perUnitSignalThreshold: 6, // assumptions + ambiguities per unit per wave
+  perStageSignalThreshold: 6, // assumptions + ambiguities one stage reports for one unit
   distressDeviationThreshold: 4, // deviations + deferrals
-  distressDesignDecisionThreshold: 1,
+  distressDesignDecisionThreshold: 3, // mid-implementation design decisions
 });
 
 // Execution-distress signals from a completion report's distress fields.
@@ -891,12 +894,14 @@ function volumeSignals(waveSignals, prior, { wave, unitsInWave }, config = DEFAU
   const cfg = { ...DEFAULT_CONFIG, ...config };
   const out = [];
 
-  // Same referent from two waves or two sources.
+  // Same referent from two waves or two sources. A signal whose referent is
+  // just its own unit id names nothing in particular (distress, exit
+  // criteria, volume signals) and does not take part.
   const all = [...prior, ...waveSignals];
   const byReferent = new Map();
   for (const s of all) {
     const key = normaliseReferent(s.referent);
-    if (!key) continue;
+    if (!key || key === normaliseReferent(s.unit)) continue;
     if (!byReferent.has(key)) byReferent.set(key, []);
     byReferent.get(key).push(s);
   }
@@ -913,19 +918,23 @@ function volumeSignals(waveSignals, prior, { wave, unitsInWave }, config = DEFAU
     }
   }
 
-  // Per-unit threshold on assumptions and ambiguities.
-  const perUnit = new Map();
+  // Per-stage threshold on assumptions and ambiguities. A unit passes
+  // through many stages in a wave; the count that means something is one
+  // stage's, not the sum.
+  const perStage = new Map();
   for (const s of waveSignals) {
     if (s.source !== 'reported' || !s.unit) continue;
     if (s.kind === 'assumption' || s.kind.endsWith('-ambiguity') || s.kind === 'requirement-incomplete') {
-      perUnit.set(s.unit, (perUnit.get(s.unit) ?? 0) + 1);
+      const key = `${s.unit}\u0000${s.stage}`;
+      perStage.set(key, (perStage.get(key) ?? 0) + 1);
     }
   }
-  for (const [unit, n] of perUnit) {
-    if (n > cfg.perUnitSignalThreshold) {
+  for (const [key, n] of perStage) {
+    if (n > cfg.perStageSignalThreshold) {
+      const [unit, stage] = key.split('\u0000');
       out.push(signal({
         kind: 'signal-volume', source: 'structural', stage: 'stop-rule', unit, wave,
-        statement: `${n} assumptions and ambiguities reported for ${unit} (threshold ${cfg.perUnitSignalThreshold})`,
+        statement: `${n} assumptions and ambiguities reported by ${stage} for ${unit} (threshold ${cfg.perStageSignalThreshold})`,
         referent: unit,
       }));
     }
@@ -1149,7 +1158,7 @@ const SCRIBE_SCHEMA = stageSchema(obj({ path: str, sha: str }));
 // ---------------------------------------------------------------- prompts
 
 const RETURN_FIELDS = `
-Besides \`result\`, return: \`assumptions\` — each thing you took as given that the inputs do not state, with the referent it concerns; \`ambiguities\` — each point where the inputs leave open what is built, in what order, or with what scope, classified as scope, goal, requirement, or design — a choice about how the inputs map onto this return schema (which enum value fits, how to type an edge, how to label a gate) is an assumption, never an ambiguity, and no item goes under both; \`contradictions\` — each thing you observed that contradicts the architecture document, the request record, or the unit entry, citing the document path and SHA; \`commits\` — every commit you made, branch and SHA. Empty arrays are valid. Do not pad them and do not omit a real one. The return is one flat object with these four fields beside \`result\`, never inside it.`;
+Besides \`result\`, return: \`assumptions\` — each thing you took as given that the inputs do not state, with the referent it concerns; \`ambiguities\` — each point where the architecture document, the request record, the decomposition plan, or the unit entry leaves open what is built, in what order, or with what scope, classified as scope, goal, requirement, or design, with the referent it concerns (a section, symbol, unit, or gate). Only those documents can be ambiguous. An open point in these instructions, in the return schema, or in how to report (which enum value fits, how many commits, whether a template field applies) is not an ambiguity: resolve it the plainest way and record it as an assumption. No item goes under both; \`contradictions\` — each thing you observed that contradicts the architecture document, the request record, or the unit entry, citing the document path and SHA; \`commits\` — every commit you made, branch and SHA. Empty arrays are valid. Do not pad them and do not omit a real one. The return is one flat object with these four fields beside \`result\`, never inside it.`;
 
 function header(ctx, plan) {
   const lines = [
@@ -1213,7 +1222,7 @@ ${worktree(ctx.integrationBranch)}
 
 ${unitBlock(plan, unit)}
 
-Write the implementation plan for this unit following the phronithm:feature skill's Phase 3 in work-unit mode: the architecture document is the primary design input; the unit's done condition, adopted verbatim, is a success criterion; each standing obligation naming the unit is a requirement. Do not re-explore what the architecture document and unit entry settle. The plan must be self-contained — a fresh context can implement from it alone — and carry the work-unit context section (unit entry verbatim, decomposition plan path and SHA, standing obligations). Keep it within the unit's size budget: about six steps, at most one open design decision. Save it to docs/plans/${unit.id}-plan.md and commit. Return branch, SHA, path, and the plan text verbatim.
+Write the implementation plan for this unit following the phronithm:feature skill's Phase 3 in work-unit mode: the architecture document is the primary design input; the unit's done condition, adopted verbatim, is a success criterion; each standing obligation naming the unit is a requirement. Do not re-explore what the architecture document and unit entry settle. The plan must be self-contained — a fresh context can implement from it alone — and carry the work-unit context section (unit entry verbatim, decomposition plan path and SHA, standing obligations). Keep it within the unit's size budget: about six steps, at most one open design decision. This workflow's own stages replace feature's later phases: the implement stage runs the plan single-shot, a critique gate and lens review follow, and a completion report is written for the unit — so the plan carries no "Remaining phases" section and mandates no implementation summary (\`docs/plans/${unit.id}-implementation.md\`); the completion report is that record. Save it to docs/plans/${unit.id}-plan.md and commit. Return branch, SHA, path, and the plan text verbatim.
 ${RETURN_FIELDS}`;
 }
 
@@ -1254,7 +1263,7 @@ Implementation plan: docs/plans/${unit.id}-plan.md on this branch.
 
 First re-probe every external gate in the unit entry against its plan-time pin: probe environment gates mechanically (binaries and versions, fonts, services, accounts, data sets); organisational and release gates are already cleared per the decision log and need no probe. Report each under \`gateProbe\`. If any gate has drifted, implement nothing — return the probe results with every other \`result\` field empty, zero, or false, and stop.
 
-Otherwise execute the plan in full, single-shot, committing as you go with the project's commit discipline. There is no per-step critique here. Then evaluate the done condition exactly as written and report whether it is evaluable in position and whether it is met, with evidence. Record as they arise: deviations from the unit entry's scope or publishes; deferrals — work in scope deliberately not implemented, naming the unit it belongs to; discoveries that add work to, reassign work between, or invalidate an assumption of another unit; the status of each standing obligation the unit carries. Report execution distress honestly: whether context is near exhaustion, how many design decisions you took mid-implementation, the deviation and deferral counts.
+Otherwise execute the plan in full, single-shot, committing as you go with the project's commit discipline. There is no per-step critique here, and no implementation summary document: the completion report a later stage writes from your return is that record, so do not write \`docs/plans/${unit.id}-implementation.md\` even if the plan text mentions one. Then evaluate the done condition exactly as written and report whether it is evaluable in position and whether it is met, with evidence. Record as they arise: deviations from the unit entry's scope or publishes; deferrals — work in scope deliberately not implemented, naming the unit it belongs to; discoveries that add work to, reassign work between, or invalidate an assumption of another unit; the status of each standing obligation the unit carries. Report execution distress honestly: whether context is near exhaustion, how many design decisions you took mid-implementation, the deviation and deferral counts.
 ${RETURN_FIELDS}`;
 }
 
@@ -1753,7 +1762,7 @@ async function run(rt) {
         for (const c of g.result.exitCriteria.filter((c) => !c.met)) {
           waveSignals.push(signal({
             kind: 'done-condition-unevaluable', source: 'gate', stage: 'review-gate', unit: c.unit, wave,
-            statement: `exit criteria not met: ${c.statement}`, referent: c.unit,
+            statement: `exit criteria not met: ${c.statement}`, referent: c.statement,
           }));
         }
       }

@@ -220,7 +220,9 @@ function signalsFromStageReturn(ret, { stage, unit, wave, source = 'reported' })
     out.push(signal({ ...base, kind: 'assumption', statement: a.statement, referent: a.referent }));
   }
   for (const a of ret.ambiguities ?? []) {
-    out.push(signal({ ...base, kind: AMBIGUITY_KIND[a.about] ?? 'scope-ambiguity', statement: a.statement, referent: a.about }));
+    // The category is not a referent; without one the statement stands in,
+    // so recurrence never trips on 'scope' meeting 'scope'.
+    out.push(signal({ ...base, kind: AMBIGUITY_KIND[a.about] ?? 'scope-ambiguity', statement: a.statement, referent: a.referent || a.statement }));
   }
   for (const c of ret.contradictions ?? []) {
     out.push(signal({ ...base, kind: 'assumption-invalidated', statement: c.statement, referent: c.against }));
@@ -262,9 +264,9 @@ function signalsFromMerge(mergeResult, { wave }) {
 }
 
 const DEFAULT_CONFIG = Object.freeze({
-  perUnitSignalThreshold: 6, // assumptions + ambiguities per unit per wave
+  perStageSignalThreshold: 6, // assumptions + ambiguities one stage reports for one unit
   distressDeviationThreshold: 4, // deviations + deferrals
-  distressDesignDecisionThreshold: 1,
+  distressDesignDecisionThreshold: 3, // mid-implementation design decisions
 });
 
 // Execution-distress signals from a completion report's distress fields.
@@ -297,12 +299,14 @@ function volumeSignals(waveSignals, prior, { wave, unitsInWave }, config = DEFAU
   const cfg = { ...DEFAULT_CONFIG, ...config };
   const out = [];
 
-  // Same referent from two waves or two sources.
+  // Same referent from two waves or two sources. A signal whose referent is
+  // just its own unit id names nothing in particular (distress, exit
+  // criteria, volume signals) and does not take part.
   const all = [...prior, ...waveSignals];
   const byReferent = new Map();
   for (const s of all) {
     const key = normaliseReferent(s.referent);
-    if (!key) continue;
+    if (!key || key === normaliseReferent(s.unit)) continue;
     if (!byReferent.has(key)) byReferent.set(key, []);
     byReferent.get(key).push(s);
   }
@@ -319,19 +323,23 @@ function volumeSignals(waveSignals, prior, { wave, unitsInWave }, config = DEFAU
     }
   }
 
-  // Per-unit threshold on assumptions and ambiguities.
-  const perUnit = new Map();
+  // Per-stage threshold on assumptions and ambiguities. A unit passes
+  // through many stages in a wave; the count that means something is one
+  // stage's, not the sum.
+  const perStage = new Map();
   for (const s of waveSignals) {
     if (s.source !== 'reported' || !s.unit) continue;
     if (s.kind === 'assumption' || s.kind.endsWith('-ambiguity') || s.kind === 'requirement-incomplete') {
-      perUnit.set(s.unit, (perUnit.get(s.unit) ?? 0) + 1);
+      const key = `${s.unit}\u0000${s.stage}`;
+      perStage.set(key, (perStage.get(key) ?? 0) + 1);
     }
   }
-  for (const [unit, n] of perUnit) {
-    if (n > cfg.perUnitSignalThreshold) {
+  for (const [key, n] of perStage) {
+    if (n > cfg.perStageSignalThreshold) {
+      const [unit, stage] = key.split('\u0000');
       out.push(signal({
         kind: 'signal-volume', source: 'structural', stage: 'stop-rule', unit, wave,
-        statement: `${n} assumptions and ambiguities reported for ${unit} (threshold ${cfg.perUnitSignalThreshold})`,
+        statement: `${n} assumptions and ambiguities reported by ${stage} for ${unit} (threshold ${cfg.perStageSignalThreshold})`,
         referent: unit,
       }));
     }

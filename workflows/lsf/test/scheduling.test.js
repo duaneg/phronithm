@@ -189,7 +189,7 @@ test('distressSignals fires on any breakdown distress signal and is quiet otherw
   assert.deepEqual(distressSignals(calm, { unit: 'B', wave: 1 }), []);
   const cases = [
     { ...calm, contextNearExhaustion: true },
-    { ...calm, midImplementationDesignDecisions: 1 },
+    { ...calm, midImplementationDesignDecisions: 3 },
     { ...calm, deviations: 2, deferrals: 2 },
   ];
   for (const c of cases) {
@@ -198,6 +198,7 @@ test('distressSignals fires on any breakdown distress signal and is quiet otherw
     assert.equal(sigs[0].kind, 'execution-distress');
   }
   assert.deepEqual(distressSignals({ ...calm, deviations: 3 }, { unit: 'B', wave: 1 }, { distressDeviationThreshold: 10 }), []);
+  assert.deepEqual(distressSignals({ ...calm, midImplementationDesignDecisions: 2 }, { unit: 'B', wave: 1 }), [], 'two design decisions are ordinary');
 });
 
 const reported = (kind, opts) => signal({ source: 'reported', stage: 'implement', statement: kind, ...opts, kind });
@@ -252,13 +253,32 @@ test('recurrence only fires for referents this wave touched', () => {
   assert.deepEqual(volumeSignals(now, prior, { wave: 3, unitsInWave: 1 }), []);
 });
 
-test('per-unit signal threshold is configurable and counts assumptions and ambiguities only', () => {
+test('per-stage signal threshold is configurable and counts one stage\'s assumptions and ambiguities, not the unit\'s total', () => {
   const now = Array.from({ length: 3 }, (_, i) => reported('assumption', { unit: 'B', wave: 1, referent: `r${i}` }));
   now.push(reported('design-ambiguity', { unit: 'B', wave: 1, referent: 'r9' }));
   assert.deepEqual(volumeSignals(now, [], { wave: 1, unitsInWave: 1 }), []);
-  const v = volumeSignals(now, [], { wave: 1, unitsInWave: 1 }, { perUnitSignalThreshold: 3 });
+  const v = volumeSignals(now, [], { wave: 1, unitsInWave: 1 }, { perStageSignalThreshold: 3 });
   assert.deepEqual(v.map((s) => s.kind), ['signal-volume']);
   assert.equal(v[0].unit, 'B');
+  assert.match(v[0].statement, /by implement for B/);
+  // The same four spread over four stages is no one stage's volume.
+  const spread = now.map((s, i) => ({ ...s, stage: `stage${i}` }));
+  assert.deepEqual(volumeSignals(spread, [], { wave: 1, unitsInWave: 1 }, { perStageSignalThreshold: 3 }), []);
+});
+
+test('a referent that is only the signal\'s own unit id never recurs; an ambiguity without a referent uses its statement', () => {
+  const now = [
+    reported('assumption', { unit: 'B', wave: 1, referent: 'B' }),
+    signal({ kind: 'execution-distress', source: 'structural', stage: 'implement', unit: 'B', wave: 1, statement: 's', referent: 'B' }),
+    signal({ kind: 'done-condition-unevaluable', source: 'gate', stage: 'review-gate', unit: 'B', wave: 1, statement: 's', referent: 'b' }),
+  ];
+  assert.deepEqual(volumeSignals(now, [], { wave: 1, unitsInWave: 1 }), []);
+  const sigs = signalsFromStageReturn({
+    ambiguities: [{ statement: 'which order?', about: 'scope' }, { statement: 'what size?', about: 'scope', referent: 'Scene.fixture' }],
+  }, { stage: 'plan', unit: 'B', wave: 1 });
+  assert.deepEqual(sigs.map((s) => s.referent), ['which order?', 'Scene.fixture']);
+  const twoStages = [sigs[0], { ...sigs[0], source: 'gate', stage: 'review-gate' }];
+  assert.deepEqual(volumeSignals(twoStages, [], { wave: 1, unitsInWave: 1 }).map((s) => s.referent), ['which order?'], 'the statement is a referent that can recur');
 });
 
 test('digest computes counts and the three trend flags', () => {
