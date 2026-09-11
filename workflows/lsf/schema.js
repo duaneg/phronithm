@@ -109,9 +109,10 @@ function stageSchema(resultSchema) {
   };
 }
 
-// What the load stage returns: the decomposition plan reduced to what the
-// script reads — the dependency graph, scopes, gates, and execution order.
-// Prose (coordination protocols, done conditions) never reaches the script.
+// The decomposition plan reduced to what the script reads — the dependency
+// graph, scopes, gates, and execution order — as graph.js produces it from
+// the plan's ```yaml lsf-plan block (docs/plan-graph.md). Prose never
+// reaches the script. Gate `cleared` comes from the decision log.
 const PLAN_SCHEMA = Object.freeze({
   type: 'object',
   properties: {
@@ -152,9 +153,8 @@ const PLAN_SCHEMA = Object.freeze({
               required: ['name', 'kind', 'cleared'],
             },
           },
-          entry: { type: 'string', description: 'The unit entry verbatim, for downstream prompts' },
         },
-        required: ['id', 'type', 'complete', 'dependencies', 'scope', 'gates', 'entry'],
+        required: ['id', 'type', 'complete', 'dependencies', 'scope', 'gates'],
       },
     },
     executionOrder: { type: 'array', items: { type: 'string' } },

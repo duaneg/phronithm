@@ -132,7 +132,7 @@ not re-run implementation.
 ## Wave loop
 
 ```
-plan = load(decomposition-plan @ sha)          // stops if any overlapping-scope pair lacks an edge
+plan = load(decomposition-plan @ sha)          // copy agent + parser; stops on any structural defect
 loop:
   ready   = units with all dependencies complete and no uncleared organisational/release gate
   if ready is empty and units remain: return escalation(blocked units)
@@ -145,16 +145,26 @@ loop:
   if replan yields STOP signal: return escalation(...)
 ```
 
-**The script reads only the dependency graph.** Breakdown may reconcile
-overlapping-scope parallel units by a prose coordination protocol; the
-workflow does not read prose. Every such protocol is encoded in the plan
-either as a logical edge (serialise = an edge from the earlier unit to the
-later) or as symbol-level scope (`file::symbol` for each function or class a
-unit owns within a shared file), and `load` checks that every pair of units
-with overlapping scope has an edge between them, stopping otherwise. This is
-a constraint on the plan `lsf-architecture` produces, stated in its breakdown
-prompt. Symbol ownership is a claim the plan makes; a merge conflict between
-two units the plan called disjoint surfaces as a plan defect at re-plan.
+**The script reads only the dependency graph, and reads it from a block.**
+The plan carries its graph as a `\`\`\`yaml lsf-plan` block and the decision
+log its decisions as a `\`\`\`yaml lsf-decisions` block
+([plan graph](${CLAUDE_PLUGIN_ROOT}/docs/plan-graph.md)). `load` is a copy agent
+that runs `git show` and returns the blocks verbatim, then `graph.js` parses,
+joins clearances onto gates, and validates. The copy agent has no interpretive
+authority: its reported ambiguities and contradictions are recorded, never
+stops. Every structural defect — unreadable block, unknown or duplicate unit,
+bad gate kind, a decision clearing an unknown or environment gate, a cycle, an
+overlapping-scope pair with no dependency path — is a STOP. The same path
+re-reads the plan after re-plan and termination, from the SHA those stages
+return; no stage returns a graph inline.
+
+Breakdown may reconcile overlapping-scope parallel units by a prose
+coordination protocol; the workflow does not read prose. Every such protocol
+is encoded in the block either as an edge (serialise = an edge from the
+earlier unit to the later) or as symbol-level scope (`file::symbol` for each
+function or class a unit owns within a shared file). Symbol ownership is a
+claim the plan makes; a merge conflict between two units the plan called
+disjoint surfaces as a plan defect at re-plan.
 
 **Termination stage.** When no units remain, a breakdown-mode agent reads the
 plan's Meta-Tasks and Standing Obligations sections and returns two lists:
@@ -282,8 +292,11 @@ drift is the control the design actually relies on.
   and silent waves. A clean completion is presented with the same digest and
   the explicit note that silence is not evidence.
 - **Decision log.** Requester decisions live in the repo
-  (`docs/plans/<name>-decisions.md`), each linked from the ledger entry it
-  resolved and referenced by SHA in the prompts it affects.
+  (`docs/plans/<name>-decisions.md`) as a `\`\`\`yaml lsf-decisions` block,
+  each linked from the ledger entry it resolved and referenced by SHA in the
+  prompts it affects. A decision's `clears` entries are the only way an
+  organisational, release, or data gate becomes cleared; Plan Maintenance is
+  agent-written and never clears a gate.
 
 ### Relaunch target
 
@@ -374,10 +387,14 @@ logic and the signal layer.
 
 **Scheduling logic** — ready-set computation, wave partitioning, merge order,
 stop rule — is a dependency-free JavaScript module (`workflows/lsf/scheduling.js`, with
-the shared schema in `schema.js`), unit-tested outside Claude Code with
-`node --test`, and inlined into the script (the script cannot import). The
-inlining is a copy step and the only place drift can enter; the module file
-is the source of truth.
+the shared schema in `schema.js` and the block parser in `graph.js`),
+unit-tested outside Claude Code with `node --test`, and inlined into the
+script (the script cannot import). The inlining is a copy step and the only
+place drift can enter; the module files are the source of truth.
+
+`graph.js` parses the YAML subset the blocks are written in, maps the plan
+block onto `PLAN_SCHEMA`, applies decision-log clearances, and reports every
+defect as an `invalid-plan` problem with a referent.
 
 The module reads a plan reduced to its graph (`PLAN_SCHEMA`): unit ids,
 dependencies (the plan's dependency types are not carried — a path of

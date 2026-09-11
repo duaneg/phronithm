@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const OUTPUT = resolve(here, '..', 'lsf-implement.js');
-const MODULES = ['schema.js', 'scheduling.js', 'implement.js'];
+const MODULES = ['schema.js', 'graph.js', 'scheduling.js', 'implement.js'];
 
 const META = `export const meta = {
   name: 'lsf-implement',

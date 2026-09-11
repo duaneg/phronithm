@@ -5,8 +5,30 @@ import { run, GATE_MAX_ROUNDS } from '../implement.js';
 // ---------------------------------------------------------------- stub runtime
 
 const ret = (result, extra = {}) => ({ result, assumptions: [], ambiguities: [], contradictions: [], commits: [], ...extra });
-const unit = (id, opts = {}) => ({ id, type: 'feature', complete: false, dependencies: [], scope: [`src/${id}`], gates: [], entry: `entry ${id}`, ...opts });
+const unit = (id, opts = {}) => ({ id, type: 'feature', complete: false, dependencies: [], scope: [`src/${id}`], gates: [], ...opts });
 const graph = (sha, units) => ({ sha, path: 'docs/plans/f-breakdown.md', units, executionOrder: units.map((u) => u.id) });
+
+// Serialise a graph fixture as the plan's fenced block, as the copy agent
+// returns it.
+const q = (x) => JSON.stringify(String(x));
+const list = (xs) => `[${(xs ?? []).map(q).join(', ')}]`;
+function toBlock(plan) {
+  const lines = ['```yaml lsf-plan', 'units:'];
+  for (const u of plan.units) {
+    lines.push(`  - id: ${u.id}`, `    type: ${u.type}`, `    complete: ${u.complete}`,
+      `    dependencies: ${list(u.dependencies.map((d) => d.unit))}`, `    scope: ${list(u.scope)}`, `    publishes: ${list(u.publishes)}`);
+    if (u.gates.length) {
+      lines.push('    gates:');
+      for (const g of u.gates) {
+        lines.push(`      - name: ${q(g.name)}`, `        kind: ${g.kind}`);
+        if (g.pin) lines.push(`        pin: ${q(g.pin)}`);
+      }
+    } else lines.push('    gates: []');
+  }
+  lines.push(`execution_order: ${list(plan.executionOrder)}`, '```');
+  return lines.join('\n');
+}
+const copied = (plan, extra = {}) => ret({ planBlock: toBlock(plan), decisionsBlock: '', headBranch: 'integration', architectureSha: 'arch1', ...extra });
 
 const NO_DISTRESS = { contextNearExhaustion: false, midImplementationDesignDecisions: 0, deviations: 0, deferrals: 0 };
 const NO_FINDINGS = ret({ findings: [], systemic: false, summary: 'clean' });
@@ -16,7 +38,7 @@ const NO_FINDINGS = ret({ findings: [], systemic: false, summary: 'clean' });
 function defaults(plan) {
   let sha = 0;
   return {
-    load: () => ret({ plan, headBranch: 'integration', architectureSha: 'arch1' }),
+    load: (p, o, u, state) => copied(state.plan),
     plan: (p, o, u) => ret({ branch: `plan-${u}`, sha: 'p', path: `docs/plans/${u}-plan.md`, planText: `plan for ${u}` }),
     'critique-plan': () => NO_FINDINGS,
     'fix-plan': (p, o, u) => ret({ branch: `fixed-${u}`, sha: 'f', applied: [{ finding: `x-${u}`, fix: 'y' }], notApplied: [], planText: 'fixed' }),
@@ -35,12 +57,12 @@ function defaults(plan) {
       planSha: `merged${++sha}`,
     }),
     'review-gate': () => ret({ invalidatesArchitecture: false, handoff: 'sufficient', exitCriteria: [] }),
-    replan: (p, o, u, state) => ret({
-      plan: { ...state.plan, sha: `replan${++sha}`, units: state.plan.units.map((x) => ({ ...x, complete: state.completed.has(x.id) })) },
-      amendments: [], overBudget: [], summary: 'no change',
-    }),
+    replan: (p, o, u, state) => {
+      state.plan = { ...state.plan, sha: `replan${++sha}`, units: state.plan.units.map((x) => ({ ...x, complete: state.completed.has(x.id) })) };
+      return ret({ planSha: state.plan.sha, amendments: [], overBudget: [], summary: 'no change' });
+    },
     ledger: () => ret({ path: 'docs/plans/f-signals.md', sha: 'l' }),
-    termination: (p, o, u, state) => ret({ plan: state.plan, appendedUnits: [], directEdits: [] }),
+    termination: (p, o, u, state) => ret({ planSha: state.plan.sha, appendedUnits: [], directEdits: [] }),
     'direct-edits': () => ret({ path: 'docs/plans/f-breakdown.md', sha: 'e' }),
     obligations: () => ret({ obligations: [] }),
     'decision-log': () => ret({ path: 'docs/plans/f-decisions.md', sha: 'dec1' }),
@@ -64,7 +86,6 @@ function runtime(plan, overrides = {}, args = {}) {
     if (!h) throw new Error(`no stub for ${opts.label}`);
     const out = await h(prompt, opts, unitId, state);
     if (prefix === 'merge' && out) for (const m of out.result.merges) if (m.status !== 'unresolvable') state.completed.add(m.unit);
-    if (prefix === 'replan' && out) state.plan = out.result.plan;
     return out;
   };
   const parallel = async (thunks) => Promise.all(thunks.map((t) => t().catch(() => null)));
@@ -111,7 +132,7 @@ test('the re-planned SHA appears in the next wave\'s prompts', async () => {
   await run(rt);
   const planB = calls.find((c) => c.label === 'plan:B');
   assert.match(planB.prompt, /@ replan\d/);
-  assert.match(planB.prompt, /entry B/);
+  assert.match(planB.prompt, /`### B` section/);
   const planA = calls.find((c) => c.label === 'plan:A');
   assert.match(planA.prompt, /@ plan0/);
 });
@@ -199,7 +220,7 @@ test('an unresolvable merge conflict stops; the unit is not completed', async ()
 });
 
 test('load: wrong branch is a precondition stop; invalid plan stops before any unit', async () => {
-  const a = runtime(twoWaves(), { load: (p, o, u, s) => ret({ plan: s.plan, headBranch: 'main', architectureSha: 'a' }) });
+  const a = runtime(twoWaves(), { load: (p, o, u, s) => copied(s.plan, { headBranch: 'main' }) });
   const outA = await run(a.rt);
   assert.equal(outA.status, 'stopped');
   assert.equal(outA.escalation.stage, 'load');
@@ -228,13 +249,11 @@ test('termination appends meta units, which run as a further wave; direct edits 
   let terminated = false;
   const { rt, labels } = runtime(graph('plan0', [unit('A')]), {
     termination: (p, o, u, s) => {
-      if (terminated) return ret({ plan: s.plan, appendedUnits: [], directEdits: [] });
+      if (terminated) return ret({ planSha: s.plan.sha, appendedUnits: [], directEdits: [] });
       terminated = true;
       const meta = unit('M', { type: 'meta', dependencies: [{ unit: 'A' }] });
-      return ret({
-        plan: { ...s.plan, sha: 'term1', units: [...s.plan.units, meta], executionOrder: [...s.plan.executionOrder, 'M'] },
-        appendedUnits: ['M'], directEdits: [{ path: 'README.md', description: 'mention M' }],
-      });
+      s.plan = { ...s.plan, sha: 'term1', units: [...s.plan.units, meta], executionOrder: [...s.plan.executionOrder, 'M'] };
+      return ret({ planSha: 'term1', appendedUnits: ['M'], directEdits: [{ path: 'README.md', description: 'mention M' }] });
     },
   });
   const out = await run(rt);
@@ -340,4 +359,50 @@ test('args.tiers overrides a role without disturbing the others', async () => {
   assert.equal(gate.opts.model, 'sonnet');
   assert.equal(impl.opts.model, 'sonnet');
   assert.equal(calls.find((c) => c.label.startsWith('plan:')).opts.model, 'fable');
+});
+
+test('load: the copy stage cannot stop the run by reporting; a bad block or bad clearance does', async () => {
+  const chatty = runtime(twoWaves(), {
+    load: (p, o, u, s) => ret({ planBlock: toBlock(s.plan), decisionsBlock: '', headBranch: 'integration', architectureSha: 'arch1' },
+      { ambiguities: [{ statement: 'which order?', about: 'scope' }], contradictions: [{ statement: 'x', against: 'y @ z' }] }),
+  });
+  const out = await run(chatty.rt);
+  assert.equal(out.status, 'complete');
+  assert.ok(out.ledger.filter((x) => x.stage === 'load').every((x) => x.disposition === 'recorded'));
+  assert.equal(out.digest.byKind['scope-ambiguity'], out.ledger.filter((x) => x.stage === 'load').length / 2, 'every copy call reported one of each');
+
+  const garbled = runtime(twoWaves(), { load: () => ret({ planBlock: 'units: [', decisionsBlock: '', headBranch: 'integration', architectureSha: 'a' }) });
+  const outG = await run(garbled.rt);
+  assert.equal(outG.status, 'stopped');
+  assert.equal(outG.escalation.stage, 'load');
+  assert.deepEqual(outG.escalation.signals.map((x) => [x.kind, x.source]), [['invalid-plan', 'structural']]);
+  assert.ok(!garbled.labels().some((x) => x.startsWith('plan:')));
+});
+
+test('load: a decision log clears an organisational gate; clearing an environment gate is a stop', async () => {
+  const gated = graph('plan0', [unit('A', { gates: [{ name: 'legal', kind: 'organisational', cleared: false }, { name: 'node', kind: 'environment', cleared: false, pin: '22' }] })]);
+  const log = (clears) => ['```yaml lsf-decisions', 'decisions:', '  - id: D1', '    date: 2026-09-11', '    question: q', '    decision: d', `    clears: [${clears}]`, '```'].join('\n');
+  const ok = runtime(gated, { load: (p, o, u, s) => copied(s.plan, { decisionsBlock: log('A/legal') }) }, { decisionLogSha: 'dec0' });
+  const outOk = await run(ok.rt);
+  assert.equal(outOk.status, 'complete', JSON.stringify(outOk.escalation?.signals));
+  assert.match(ok.calls[0].prompt, /git show dec0:docs\/plans\/f-decisions\.md/);
+
+  const bad = runtime(gated, { load: (p, o, u, s) => copied(s.plan, { decisionsBlock: log('A/node') }) }, { decisionLogSha: 'dec0' });
+  const outBad = await run(bad.rt);
+  assert.equal(outBad.status, 'stopped');
+  assert.match(outBad.escalation.signals[0].statement, /environment gate A\/node/);
+
+  const missing = runtime(gated, { load: (p, o, u, s) => copied(s.plan) }, { decisionLogSha: 'dec0' });
+  const outMissing = await run(missing.rt);
+  assert.equal(outMissing.status, 'stopped');
+  assert.equal(outMissing.escalation.signals[0].referent, 'lsf-decisions');
+});
+
+test('the re-planned and terminated plans are re-read from their SHAs, not returned inline', async () => {
+  const { rt, calls } = runtime(twoWaves());
+  await run(rt);
+  const loads = calls.filter((c) => c.label.startsWith('load'));
+  assert.deepEqual(loads.map((c) => c.label), ['load', 'load:w1', 'load:w2', 'load:termination']);
+  assert.match(loads[1].prompt, /git show replan\d:docs\/plans\/f-breakdown\.md/);
+  assert.match(calls.find((c) => c.label === 'plan:B').prompt, /@ replan\d/);
 });

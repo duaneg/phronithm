@@ -25,6 +25,7 @@ Serves human teams planning work and agent teams needing structured task assignm
 
 - **decomposition-plan**: Document at `docs/plans/<feature-name>-breakdown.md` (or project equivalent). Contains:
   - Work units with classification metadata and done conditions
+  - Graph block: the units, dependencies, scope, gates, and execution order as one machine-readable YAML block (format: [plan graph](${CLAUDE_PLUGIN_ROOT}/docs/plan-graph.md)), kept in step with the entries
   - Dependency graph (multiple dependency types, Mermaid format preferred)
   - Execution order with rationale
   - Parallel streams for 2-worker and N-worker scenarios
@@ -227,6 +228,7 @@ Build the execution plan from the analysis.
    - Every `high`-risk unit is either placed early in execution order or has a risk mitigation note in the Risk Registry.
    - Every `foundation`-type unit appears before its dependants in the execution order.
    - All overlapping-scope parallel streams have a coordination protocol.
+   - The `## Graph` block agrees with the entries: every unit, its type, every Depends-on unit, every Scope path, every gate with its kind and pin, and the execution order — one id per unit, flattened from the Execution Order steps in written order. Check mechanically (a short script over the block and the entry fields), not by eye.
 
 5. **Draft the decomposition plan document**. Structure:
 
@@ -250,6 +252,12 @@ Build the execution plan from the analysis.
    - **External gates**: <named gates, each labelled `(environment | organisational | release | data)` — binary and version, service, person/team, migration — or "none">
    - **Done condition**: <verifiable statement>
    - **Description**: <what this unit does>
+
+   ## Graph
+   <one ```yaml lsf-plan block — units (id, type, complete, dependencies,
+    scope, publishes, gates with kind and pin) and execution_order — per
+    ${CLAUDE_PLUGIN_ROOT}/docs/plan-graph.md. The machine-read form of the
+    entries above; amend both together>
 
    ## Dependency Graph
    <Mermaid diagram preferred. Mark dependency types: solid arrows for logical,
@@ -297,7 +305,7 @@ Build the execution plan from the analysis.
 
 ### Re-plan on unit completion
 
-When a unit completes, diff its recorded deviations, deferrals, and discoveries against every downstream unit's scope, dependencies, and done condition. A deviation that adds work to a later unit, reassigns work between units, or leaves an interface unimplemented is a plan change, not an implementation note: amend the plan, re-run the Phase 2 step 4 quality check over the remaining units, and record the amendment in Plan Maintenance. Deferrals are the highest-yield case: "X is deliberately not here, it belongs to unit Y" is simultaneously a scope addition to Y, a possible new edge, and — if Y shares a file with a unit scheduled beside it — a broken parallel-stream claim.
+When a unit completes, diff its recorded deviations, deferrals, and discoveries against every downstream unit's scope, dependencies, and done condition. A deviation that adds work to a later unit, reassigns work between units, or leaves an interface unimplemented is a plan change, not an implementation note: amend the plan (entry and `## Graph` block together), re-run the Phase 2 step 4 quality check over the remaining units, and record the amendment in Plan Maintenance. Deferrals are the highest-yield case: "X is deliberately not here, it belongs to unit Y" is simultaneously a scope addition to Y, a possible new edge, and — if Y shares a file with a unit scheduled beside it — a broken parallel-stream claim.
 
 Execution signals are a trigger in their own right. A completion report showing distress — context near exhaustion, design decisions taken mid-implementation, a heavy deviation or deferral count — triggers this step even when no deviation touches downstream scope: re-run the quality check over the remaining units, examining the [size budget](#unit-size-budget) item first for units that resemble the completed one on its load factors, and record the outcome in Plan Maintenance.
 
@@ -308,3 +316,4 @@ Invoked with an existing plan and completion reports (re-plan mode), this step i
 See [commit discipline](${CLAUDE_PLUGIN_ROOT}/docs/vcs.md#commit-discipline). Additional breakdown-specific guidance:
 
 - Commit message should summarise: number of work units, critical path length, and key risks identified.
+- The `## Graph` block and the unit entries change in the same commit.

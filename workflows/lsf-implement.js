@@ -129,9 +129,10 @@ function stageSchema(resultSchema) {
   };
 }
 
-// What the load stage returns: the decomposition plan reduced to what the
-// script reads — the dependency graph, scopes, gates, and execution order.
-// Prose (coordination protocols, done conditions) never reaches the script.
+// The decomposition plan reduced to what the script reads — the dependency
+// graph, scopes, gates, and execution order — as graph.js produces it from
+// the plan's ```yaml lsf-plan block (docs/plan-graph.md). Prose never
+// reaches the script. Gate `cleared` comes from the decision log.
 const PLAN_SCHEMA = Object.freeze({
   type: 'object',
   properties: {
@@ -172,9 +173,8 @@ const PLAN_SCHEMA = Object.freeze({
               required: ['name', 'kind', 'cleared'],
             },
           },
-          entry: { type: 'string', description: 'The unit entry verbatim, for downstream prompts' },
         },
-        required: ['id', 'type', 'complete', 'dependencies', 'scope', 'gates', 'entry'],
+        required: ['id', 'type', 'complete', 'dependencies', 'scope', 'gates'],
       },
     },
     executionOrder: { type: 'array', items: { type: 'string' } },
@@ -237,6 +237,359 @@ function escalation({ workflow, planSha, wave, stage, signals, decisionNeeded })
   if (planSha !== undefined) record.plan_sha = planSha;
   if (wave !== undefined) record.wave = wave;
   return record;
+}
+
+// ---- inlined from workflows/lsf/graph.js
+
+// The plan graph and decision log as machine-readable YAML blocks, and the
+// restricted YAML subset they are written in. Dependency-free; inlined into
+// the workflow scripts. Format: docs/plan-graph.md.
+//
+// The workflow script has no file access. A copy agent runs `git show` and
+// returns the fenced blocks verbatim; this module parses and validates them.
+// Everything the load stage used to ask an agent to interpret is either a
+// field here or a structural problem reported as a signal.
+
+const PLAN_TAG = 'lsf-plan';
+const DECISIONS_TAG = 'lsf-decisions';
+
+// ---------------------------------------------------------------- YAML subset
+
+class YamlError extends Error {
+  constructor(message, line) {
+    super(line === undefined ? message : `line ${line}: ${message}`);
+    this.line = line;
+  }
+}
+
+// Strip a trailing comment: `#` preceded by whitespace, outside quotes.
+function stripComment(s) {
+  let quote = null;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (quote) {
+      if (c === '\\' && quote === '"') i++;
+      else if (c === quote) quote = null;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === '#' && (i === 0 || /\s/.test(s[i - 1]))) {
+      return s.slice(0, i);
+    }
+  }
+  return s;
+}
+
+function tokenise(text) {
+  const out = [];
+  text.split(/\r?\n/).forEach((raw, idx) => {
+    if (raw.includes('\t')) throw new YamlError('tab character; indent with spaces', idx + 1);
+    const content = stripComment(raw).trimEnd();
+    if (!content.trim()) return;
+    const indent = content.length - content.trimStart().length;
+    out.push({ indent, content: content.trim(), line: idx + 1 });
+  });
+  return out;
+}
+
+function parseScalar(s, line) {
+  if (s === '' || s === '~' || s === 'null') return null;
+  if (s === 'true') return true;
+  if (s === 'false') return false;
+  if (s[0] === '"') {
+    if (s[s.length - 1] !== '"' || s.length < 2) throw new YamlError('unterminated double-quoted string', line);
+    return s.slice(1, -1).replace(/\\(["\\nt])/g, (m, c) => ({ '"': '"', '\\': '\\', n: '\n', t: '\t' })[c]);
+  }
+  if (s[0] === "'") {
+    if (s[s.length - 1] !== "'" || s.length < 2) throw new YamlError('unterminated single-quoted string', line);
+    return s.slice(1, -1).replace(/''/g, "'");
+  }
+  if (/^[&*!|>%@`]/.test(s)) throw new YamlError(`unsupported YAML syntax: ${s[0]}`, line);
+  return s;
+}
+
+// `[a, b, "c, d"]` — flow sequence of scalars.
+function parseFlowSeq(s, line) {
+  const inner = s.slice(1, -1).trim();
+  if (inner === '') return [];
+  const items = [];
+  let cur = '';
+  let quote = null;
+  for (let i = 0; i < inner.length; i++) {
+    const c = inner[i];
+    if (quote) {
+      cur += c;
+      if (c === '\\' && quote === '"') cur += inner[++i];
+      else if (c === quote) quote = null;
+    } else if (c === '"' || c === "'") {
+      quote = c; cur += c;
+    } else if (c === ',') {
+      items.push(cur.trim()); cur = '';
+    } else if (c === '[' || c === '{') {
+      throw new YamlError('nested flow collections are not supported', line);
+    } else {
+      cur += c;
+    }
+  }
+  if (quote) throw new YamlError('unterminated quoted string in flow sequence', line);
+  items.push(cur.trim());
+  return items.map((it) => {
+    if (it === '') throw new YamlError('empty item in flow sequence', line);
+    return parseScalar(it, line);
+  });
+}
+
+function parseValue(s, line) {
+  if (s[0] === '[') {
+    if (s[s.length - 1] !== ']') throw new YamlError('unterminated flow sequence', line);
+    return parseFlowSeq(s, line);
+  }
+  if (s[0] === '{') throw new YamlError('flow mappings are not supported', line);
+  return parseScalar(s, line);
+}
+
+const KEY_RE = /^([A-Za-z0-9_][A-Za-z0-9_.-]*):(?:\s+(.*))?$/;
+
+function parseBlock(lines, i, indent) {
+  if (i >= lines.length) return { value: null, next: i };
+  const first = lines[i];
+  if (first.indent !== indent) throw new YamlError(`unexpected indent ${first.indent}, expected ${indent}`, first.line);
+  return /^-(\s|$)/.test(first.content) ? parseSeq(lines, i, indent) : parseMap(lines, i, indent);
+}
+
+function nested(lines, i, indent) {
+  // Value of a key or dash with nothing after it: a block at deeper indent.
+  if (i < lines.length && lines[i].indent > indent) return parseBlock(lines, i, lines[i].indent);
+  return { value: null, next: i };
+}
+
+function parseSeq(lines, i, indent) {
+  const out = [];
+  while (i < lines.length && lines[i].indent === indent) {
+    const { content, line } = lines[i];
+    if (!/^-(\s|$)/.test(content)) throw new YamlError('expected a sequence item', line);
+    const rest = content.replace(/^-\s*/, '');
+    if (rest === '') {
+      const r = nested(lines, i + 1, indent);
+      out.push(r.value); i = r.next;
+    } else if (KEY_RE.test(rest) && !/^["'[]/.test(rest)) {
+      // Inline mapping start: `- id: x`; continuation keys align with `id`.
+      const col = indent + (content.length - rest.length);
+      lines[i] = { indent: col, content: rest, line };
+      const r = parseMap(lines, i, col);
+      out.push(r.value); i = r.next;
+    } else {
+      out.push(parseValue(rest, line)); i += 1;
+    }
+  }
+  if (i < lines.length && lines[i].indent > indent) throw new YamlError('unexpected indent', lines[i].line);
+  return { value: out, next: i };
+}
+
+function parseMap(lines, i, indent) {
+  const out = {};
+  while (i < lines.length && lines[i].indent === indent) {
+    const { content, line } = lines[i];
+    const m = KEY_RE.exec(content);
+    if (!m) throw new YamlError(`expected \`key: value\`, got \`${content}\``, line);
+    const [, key, rawValue] = m;
+    if (key in out) throw new YamlError(`duplicate key ${key}`, line);
+    if (rawValue === undefined || rawValue === '') {
+      const r = nested(lines, i + 1, indent);
+      out[key] = r.value; i = r.next;
+    } else {
+      out[key] = parseValue(rawValue, line); i += 1;
+    }
+  }
+  if (i < lines.length && lines[i].indent > indent) throw new YamlError('unexpected indent', lines[i].line);
+  return { value: out, next: i };
+}
+
+function parseYaml(text) {
+  const lines = tokenise(text);
+  if (!lines.length) return null;
+  const { value, next } = parseBlock(lines, 0, lines[0].indent);
+  if (next < lines.length) throw new YamlError('content after the top-level block', lines[next].line);
+  return value;
+}
+
+// ---------------------------------------------------------------- blocks
+
+// The one fenced block tagged `tag` in a Markdown document: its body, or a
+// problem. `\`\`\`yaml <tag>` opens it.
+function extractBlock(markdown, tag) {
+  const re = new RegExp(`^\`\`\`yaml[ \\t]+${tag}[ \\t]*\\r?\\n([\\s\\S]*?)^\`\`\`[ \\t]*$`, 'gm');
+  const matches = [...(markdown ?? '').matchAll(re)];
+  if (matches.length === 0) return { body: null, problem: `no \`\`\`yaml ${tag} block found` };
+  if (matches.length > 1) return { body: null, problem: `${matches.length} \`\`\`yaml ${tag} blocks found; exactly one is allowed` };
+  return { body: matches[0][1], problem: null };
+}
+
+// ---------------------------------------------------------------- plan graph
+
+const problem = (statement, referent) => ({ kind: 'invalid-plan', statement, referent });
+
+const isStringList = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string' && x !== '');
+
+// Parse the plan block into the graph shape scheduling.js reads (PLAN_SCHEMA
+// less sha/path, which the caller adds). Returns { plan, problems }; `plan`
+// is null when the block cannot be read at all.
+function parsePlanGraph(body) {
+  const problems = [];
+  let doc;
+  try {
+    doc = parseYaml(body);
+  } catch (e) {
+    return { plan: null, problems: [problem(`plan block: ${e.message}`, PLAN_TAG)] };
+  }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
+    return { plan: null, problems: [problem('plan block: top level must be a mapping', PLAN_TAG)] };
+  }
+  for (const k of Object.keys(doc)) {
+    if (!['units', 'execution_order'].includes(k)) problems.push(problem(`plan block: unknown top-level key ${k}`, k));
+  }
+  if (!Array.isArray(doc.units)) {
+    return { plan: null, problems: [...problems, problem('plan block: `units` must be a sequence', 'units')] };
+  }
+  const units = [];
+  doc.units.forEach((u, idx) => {
+    const ref = (u && typeof u.id === 'string' && u.id) || `units[${idx}]`;
+    if (!u || typeof u !== 'object' || Array.isArray(u)) { problems.push(problem(`${ref}: unit must be a mapping`, ref)); return; }
+    if (typeof u.id !== 'string' || !u.id) problems.push(problem(`${ref}: missing id`, ref));
+    for (const k of Object.keys(u)) {
+      if (!['id', 'type', 'complete', 'dependencies', 'scope', 'publishes', 'gates'].includes(k)) problems.push(problem(`${ref}: unknown key ${k}`, ref));
+    }
+    if (!UNIT_TYPES.includes(u.type)) problems.push(problem(`${ref}: type must be one of ${UNIT_TYPES.join(', ')}; got ${JSON.stringify(u.type ?? null)}`, ref));
+    if (u.complete !== undefined && typeof u.complete !== 'boolean') problems.push(problem(`${ref}: complete must be true or false`, ref));
+    const deps = u.dependencies ?? [];
+    if (!isStringList(deps)) problems.push(problem(`${ref}: dependencies must be a sequence of unit ids`, ref));
+    const scope = u.scope ?? [];
+    if (!isStringList(scope)) problems.push(problem(`${ref}: scope must be a sequence of paths`, ref));
+    const publishes = u.publishes ?? [];
+    if (!isStringList(publishes)) problems.push(problem(`${ref}: publishes must be a sequence of strings`, ref));
+    const gates = u.gates ?? [];
+    if (!Array.isArray(gates)) problems.push(problem(`${ref}: gates must be a sequence`, ref));
+    const outGates = [];
+    (Array.isArray(gates) ? gates : []).forEach((g, gi) => {
+      const gref = `${ref}/${(g && typeof g.name === 'string' && g.name) || `gates[${gi}]`}`;
+      if (!g || typeof g !== 'object' || Array.isArray(g)) { problems.push(problem(`${gref}: gate must be a mapping`, gref)); return; }
+      for (const k of Object.keys(g)) {
+        if (!['name', 'kind', 'pin'].includes(k)) problems.push(problem(`${gref}: unknown key ${k}`, gref));
+      }
+      if (typeof g.name !== 'string' || !g.name) problems.push(problem(`${gref}: gate missing name`, gref));
+      if (!GATE_KINDS.includes(g.kind)) problems.push(problem(`${gref}: gate kind must be one of ${GATE_KINDS.join(', ')}; got ${JSON.stringify(g.kind ?? null)}`, gref));
+      if (g.pin !== undefined && g.pin !== null && typeof g.pin !== 'string') problems.push(problem(`${gref}: pin must be a string`, gref));
+      const gate = { name: String(g.name ?? ''), kind: g.kind, cleared: false };
+      if (typeof g.pin === 'string') gate.pin = g.pin;
+      outGates.push(gate);
+    });
+    const names = outGates.map((g) => g.name);
+    for (const n of new Set(names.filter((n, i) => names.indexOf(n) !== i))) problems.push(problem(`${ref}: duplicate gate name ${n}`, `${ref}/${n}`));
+    units.push({
+      id: String(u.id ?? ref),
+      type: u.type,
+      complete: u.complete === true,
+      dependencies: (isStringList(deps) ? deps : []).map((d) => ({ unit: d })),
+      scope: isStringList(scope) ? scope : [],
+      publishes: isStringList(publishes) ? publishes : [],
+      gates: outGates,
+    });
+  });
+  if (!isStringList(doc.execution_order ?? null)) problems.push(problem('plan block: `execution_order` must be a sequence of unit ids', 'execution_order'));
+  const executionOrder = isStringList(doc.execution_order ?? null) ? doc.execution_order : [];
+  const dupOrder = executionOrder.filter((id, i) => executionOrder.indexOf(id) !== i);
+  for (const id of new Set(dupOrder)) problems.push(problem(`execution_order names ${id} more than once`, id));
+  return { plan: { units, executionOrder }, problems };
+}
+
+// ---------------------------------------------------------------- decisions
+
+// Parse the decision-log block. Returns { decisions, problems }; `decisions`
+// is an empty list when the body is null (no log yet).
+function parseDecisions(body) {
+  if (body === null || body === undefined) return { decisions: [], problems: [] };
+  const problems = [];
+  let doc;
+  try {
+    doc = parseYaml(body);
+  } catch (e) {
+    return { decisions: [], problems: [problem(`decisions block: ${e.message}`, DECISIONS_TAG)] };
+  }
+  if (doc === null) return { decisions: [], problems: [] };
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc) || !Array.isArray(doc.decisions ?? [])) {
+    return { decisions: [], problems: [problem('decisions block: top level must be a mapping with a `decisions` sequence', DECISIONS_TAG)] };
+  }
+  for (const k of Object.keys(doc)) {
+    if (k !== 'decisions') problems.push(problem(`decisions block: unknown top-level key ${k}`, k));
+  }
+  const decisions = [];
+  (doc.decisions ?? []).forEach((d, idx) => {
+    const ref = (d && typeof d.id === 'string' && d.id) || `decisions[${idx}]`;
+    if (!d || typeof d !== 'object' || Array.isArray(d)) { problems.push(problem(`${ref}: decision must be a mapping`, ref)); return; }
+    for (const k of Object.keys(d)) {
+      if (!['id', 'date', 'question', 'decision', 'clears', 'resolves'].includes(k)) problems.push(problem(`${ref}: unknown key ${k}`, ref));
+    }
+    for (const k of ['id', 'date', 'question', 'decision']) {
+      if (typeof d[k] !== 'string' || !d[k]) problems.push(problem(`${ref}: missing ${k}`, ref));
+    }
+    const clears = d.clears ?? [];
+    if (!isStringList(clears)) problems.push(problem(`${ref}: clears must be a sequence of \`unit/gate\``, ref));
+    const resolves = d.resolves ?? [];
+    if (!isStringList(resolves)) problems.push(problem(`${ref}: resolves must be a sequence of strings`, ref));
+    decisions.push({
+      id: String(d.id ?? ref), date: String(d.date ?? ''), question: String(d.question ?? ''), decision: String(d.decision ?? ''),
+      clears: isStringList(clears) ? clears : [], resolves: isStringList(resolves) ? resolves : [],
+    });
+  });
+  const ids = decisions.map((d) => d.id);
+  for (const id of new Set(ids.filter((x, i) => ids.indexOf(x) !== i))) problems.push(problem(`duplicate decision id ${id}`, id));
+  return { decisions, problems };
+}
+
+// Mark gates cleared by the decision log. A `clears` entry must name an
+// existing unit and gate; environment gates are re-probed, never cleared by
+// decision, so clearing one is a problem.
+function applyClearances(plan, decisions) {
+  const problems = [];
+  const byId = new Map(plan.units.map((u) => [u.id, u]));
+  for (const d of decisions) {
+    for (const c of d.clears) {
+      const slash = c.indexOf('/');
+      const unitId = slash < 0 ? c : c.slice(0, slash);
+      const gateName = slash < 0 ? '' : c.slice(slash + 1);
+      const u = byId.get(unitId);
+      const g = u?.gates.find((x) => x.name === gateName);
+      if (!u || !g) { problems.push(problem(`decision ${d.id} clears unknown gate ${c}`, c)); continue; }
+      if (g.kind === 'environment') { problems.push(problem(`decision ${d.id} clears environment gate ${c}; environment gates are probed, not decided`, c)); continue; }
+      g.cleared = true;
+      g.clearedBy = d.id;
+    }
+  }
+  return problems;
+}
+
+// Load stage, script side: extract, parse, join. `planMarkdown` is the plan
+// document; `decisionsMarkdown` is the decision log or null. Returns
+// { plan, decisions, problems }; `plan` is null only when the block is
+// unreadable, in which case `problems` says why.
+function loadGraph({ planMarkdown, decisionsMarkdown }) {
+  const problems = [];
+  const pb = extractBlock(planMarkdown, PLAN_TAG);
+  if (pb.problem) return { plan: null, decisions: [], problems: [problem(pb.problem, PLAN_TAG)] };
+  const parsed = parsePlanGraph(pb.body);
+  problems.push(...parsed.problems);
+  if (!parsed.plan) return { plan: null, decisions: [], problems };
+  let decisions = [];
+  if (decisionsMarkdown !== null && decisionsMarkdown !== undefined) {
+    const db = extractBlock(decisionsMarkdown, DECISIONS_TAG);
+    if (db.problem) problems.push(problem(db.problem, DECISIONS_TAG));
+    else {
+      const pd = parseDecisions(db.body);
+      problems.push(...pd.problems);
+      decisions = pd.decisions;
+    }
+  }
+  problems.push(...applyClearances(parsed.plan, decisions));
+  return { plan: parsed.plan, decisions, problems };
 }
 
 // ---- inlined from workflows/lsf/scheduling.js
@@ -651,9 +1004,14 @@ function digest(ledger, { unitsPerWave = {} } = {}) {
 // docs/design/lsf-workflow.md, "Wave loop", "Escalation", "Persistence".
 //
 // `run(rt)` takes the Workflow runtime — { agent, parallel, log, args } — so
-// the loop is testable with a stub. build.js inlines this file and the two
+// the loop is testable with a stub. build.js inlines this file and the other
 // modules into workflows/lsf-implement.js; that file is generated, this one
 // is the source of truth.
+//
+// The plan graph is read from the plan's ```yaml lsf-plan block and gate
+// clearances from the decision log's ```yaml lsf-decisions block
+// (docs/plan-graph.md). A copy agent fetches the blocks; graph.js parses
+// them. No agent interprets the plan's prose on the script's behalf.
 //
 // args:
 //   name                feature name; default paths derive from it
@@ -664,7 +1022,8 @@ function digest(ledger, { unitsPerWave = {} } = {}) {
 //   integrationBranch   the main checkout must be on this branch (required)
 //   decisionLogPath     default docs/plans/<name>-decisions.md
 //   decisionLogSha      SHA of the decision log already committed, optional
-//   decisions           [{ id, question, decision }] to commit before loading
+//   decisions           [{ id, question, decision, clears? }] to commit before
+//                       loading; `clears` lists `unit/gate` names
 //   ledgerPath          default docs/plans/<name>-signals.md
 //   config              overrides for scheduling DEFAULT_CONFIG
 //   maxWaves            default 20
@@ -709,10 +1068,11 @@ const COMMIT_FIELDS = { branch: str, sha: str };
 
 const DECISION_LOG_SCHEMA = stageSchema(obj({ path: str, sha: str }));
 
-const LOAD_SCHEMA = stageSchema(obj({
-  plan: PLAN_SCHEMA,
+const COPY_SCHEMA = stageSchema(obj({
+  planBlock: { ...str, description: 'The plan document\'s ```yaml lsf-plan fenced block, verbatim, fences included' },
+  decisionsBlock: { ...str, description: 'The decision log\'s ```yaml lsf-decisions fenced block, verbatim, fences included; empty string when there is no decision log' },
   headBranch: { ...str, description: 'Branch the main checkout is on' },
-  architectureSha: str,
+  architectureSha: { ...str, description: 'Commit SHA of the architecture document on the integration branch' },
 }));
 
 const UNIT_PLAN_SCHEMA = stageSchema(obj({
@@ -768,14 +1128,14 @@ const GATE_SCHEMA = stageSchema(obj({
 const AMENDMENT_KINDS = RECORD_KINDS.filter((k) => !['assumption', 'design-ambiguity'].includes(k));
 
 const REPLAN_SCHEMA = stageSchema(obj({
-  plan: PLAN_SCHEMA,
+  planSha: { ...str, description: 'Plan SHA after the amendments were committed; the plan SHA given when nothing changed' },
   amendments: arr(obj({ kind: { type: 'string', enum: AMENDMENT_KINDS }, unit: str, statement: str })),
   overBudget: arr(obj({ unit: str, repaired: bool, statement: str })),
   summary: str,
 }));
 
 const TERMINATION_SCHEMA = stageSchema(obj({
-  plan: PLAN_SCHEMA,
+  planSha: { ...str, description: 'Plan SHA after the appended units were committed; the plan SHA given when nothing changed' },
   appendedUnits: strings,
   directEdits: arr(obj({ path: str, description: str })),
 }));
@@ -808,23 +1168,42 @@ function worktree(base) {
   return `You are running in a git worktree of the repository. Before anything else run \`git reset --hard ${base} && git clean -fd\` so the worktree matches that branch exactly, with no leftover untracked files from an earlier attempt. Make all changes and commits here; never touch other worktrees or the main checkout. Report your branch (\`git rev-parse --abbrev-ref HEAD\`) and HEAD SHA in \`result\`.`;
 }
 
-function unitBlock(unit) {
-  return `Work unit: ${unit.id} (type: ${unit.type})\nUnit entry, verbatim from the decomposition plan:\n\n${unit.entry}`;
+function unitBlock(plan, unit) {
+  return `Work unit: ${unit.id} (type: ${unit.type})\nUnit entry: the \`### ${unit.id}\` section under \`## Work Units\` in ${plan.path} @ ${plan.sha}. Read it first (\`git show ${plan.sha}:${plan.path}\`); it is requirement text, taken verbatim.`;
 }
 
 function decisionLogPrompt(ctx, decisions) {
   return `${header(ctx, { path: ctx.planPath, sha: ctx.planSha })}
 
-Append the following requester decisions to ${ctx.decisionLogPath} (create it if absent), one dated entry each with id, question, and decision, and commit on ${ctx.integrationBranch}. Return the file path and the commit SHA.
+Append the following requester decisions to ${ctx.decisionLogPath} and commit on ${ctx.integrationBranch}. The file holds one \`\`\`yaml lsf-decisions fenced block; each decision is one entry in its \`decisions\` sequence with \`id\`, \`date\` (today, \`date -I\`), \`question\`, \`decision\`, and \`clears\` (a flow sequence of \`unit/gate\` names; omit the key when empty). Quote any scalar containing \`: \`, \` #\`, or leading punctuation with double quotes. Nothing else in the block: no comments, anchors, or multi-line scalars. If the file does not exist, create it as:
 
+# Decisions: ${ctx.name}
+
+\`\`\`yaml lsf-decisions
+decisions:
+  - id: <id>
+    date: <YYYY-MM-DD>
+    question: <question>
+    decision: <decision>
+    clears: [<unit>/<gate>]
+\`\`\`
+
+Decisions to append:
 ${JSON.stringify(decisions, null, 2)}
+
+Return the file path and the commit SHA.
 ${RETURN_FIELDS}`;
 }
 
-function loadPrompt(ctx) {
-  return `${header(ctx, { path: ctx.planPath, sha: ctx.planSha })}
+function copyPrompt(ctx, sha) {
+  const decisions = ctx.decisionLogSha
+    ? `Run \`git show ${ctx.decisionLogSha}:${ctx.decisionLogPath}\` and return its \`\`\`yaml lsf-decisions fenced block the same way in \`decisionsBlock\`.`
+    : 'There is no decision log; return an empty string in `decisionsBlock`.';
+  return `${header(ctx, { path: ctx.planPath, sha })}
 
-Load the decomposition plan and reduce it to its graph. For every work unit return: id; type, as the plan labels it; complete — true iff a Plan Maintenance completion entry names it; dependencies — the units it depends on, of any dependency type; scope — every file, module, or directory the unit writes to, written \`file::symbol\` where the entry or a coordination protocol confines the unit to named functions or classes within a file other units also write; publishes; gates — every external gate with the kind its entry labels it (environment, organisational, release, or data; an unlabelled gate is an assumption, classified by what it names), whether the decision log records it cleared, and its plan-time pin; and the unit's entry verbatim. Return the \`## Execution Order\` section's list as unit ids in its literal order, not a sequence reconstructed from Plan Maintenance; a Plan Maintenance entry that selected a unit out of that order is an assumption if it affects what you return, not an ambiguity or a contradiction. Every coordination protocol for overlapping-scope units must already be expressible as a dependency edge or as symbol-level scope; do not add edges yourself — report a protocol that is neither as an ambiguity about scope. A file-level entry on a unit that a dependency path serialises against every other writer of that file is not an ambiguity. Also return the branch the main checkout is on and the architecture document's commit SHA on ${ctx.integrationBranch}.
+Copy stage. Run \`git show ${sha}:${ctx.planPath}\` and return, in \`planBlock\`, its \`\`\`yaml lsf-plan fenced block verbatim: from the opening fence line to the closing fence line inclusive, every character unchanged. ${decisions} Also return the branch the main checkout is on (\`git rev-parse --abbrev-ref HEAD\`) and the commit SHA of ${ctx.architectureDoc} on ${ctx.integrationBranch} (\`git rev-list -1 ${ctx.integrationBranch} -- ${ctx.architectureDoc}\`).
+
+Do not read, assess, or summarise the prose. Do not correct, reformat, or complete anything in the blocks; do not add units, edges, or gates. This stage copies; the script parses and checks the blocks itself. Anything you would report about the plan's content is outside this stage's scope: leave \`assumptions\`, \`ambiguities\`, and \`contradictions\` empty unless the copy itself could not be made faithfully.
 ${RETURN_FIELDS}`;
 }
 
@@ -832,7 +1211,7 @@ function unitPlanPrompt(ctx, plan, unit) {
   return `${header(ctx, plan)}
 ${worktree(ctx.integrationBranch)}
 
-${unitBlock(unit)}
+${unitBlock(plan, unit)}
 
 Write the implementation plan for this unit following the phronithm:feature skill's Phase 3 in work-unit mode: the architecture document is the primary design input; the unit's done condition, adopted verbatim, is a success criterion; each standing obligation naming the unit is a requirement. Do not re-explore what the architecture document and unit entry settle. The plan must be self-contained — a fresh context can implement from it alone — and carry the work-unit context section (unit entry verbatim, decomposition plan path and SHA, standing obligations). Keep it within the unit's size budget: about six steps, at most one open design decision. Save it to docs/plans/${unit.id}-plan.md and commit. Return branch, SHA, path, and the plan text verbatim.
 ${RETURN_FIELDS}`;
@@ -841,7 +1220,7 @@ ${RETURN_FIELDS}`;
 function planCritiquePrompt(ctx, plan, unit, planText, round) {
   return `${header(ctx, plan)}
 
-${unitBlock(unit)}
+${unitBlock(plan, unit)}
 
 Critique the implementation plan below with type critique-design. This is round ${round} of the critique gate. Pass bar: no Critical findings. Report Significant and Minor findings; they are recorded, not fixed. Set \`systemic\` when the findings indicate a structural defect that iteration will not resolve. Continue through to completion — do not stop to wait for instruction.
 
@@ -855,7 +1234,7 @@ function fixPrompt(ctx, plan, unit, branch, subject, criticals, round) {
   return `${header(ctx, plan)}
 ${worktree(branch)}
 
-${unitBlock(unit)}
+${unitBlock(plan, unit)}
 
 Critique gate round ${round} found these Critical findings against the ${subject}:
 
@@ -869,7 +1248,7 @@ function implementPrompt(ctx, plan, unit, planBranch) {
   return `${header(ctx, plan)}
 ${worktree(planBranch)}
 
-${unitBlock(unit)}
+${unitBlock(plan, unit)}
 
 Implementation plan: docs/plans/${unit.id}-plan.md on this branch.
 
@@ -883,7 +1262,7 @@ function staticAnalysisPrompt(ctx, plan, unit, branch) {
   return `${header(ctx, plan)}
 ${worktree(branch)}
 
-${unitBlock(unit)}
+${unitBlock(plan, unit)}
 
 Run the phronithm:static-analysis skill over the files this branch changes relative to ${ctx.integrationBranch} (\`git diff --name-only ${ctx.integrationBranch}...HEAD\`). Return each finding with a severity: Critical for a defect the analyser is confident of (type error, definite bug pattern, security rule), Significant for a probable issue, Minor for style. Do not modify anything.
 ${RETURN_FIELDS}`;
@@ -893,7 +1272,7 @@ function codeCritiquePrompt(ctx, plan, unit, branch, round) {
   return `${header(ctx, plan)}
 ${worktree(branch)}
 
-${unitBlock(unit)}
+${unitBlock(plan, unit)}
 
 Run the phronithm:critique skill with type critique-code over this branch's diff against ${ctx.integrationBranch} (\`git diff ${ctx.integrationBranch}...HEAD\`), reading surrounding code as needed. This is round ${round} of the critique gate. Pass bar: no Critical findings. Also evaluate the unit's done condition against this branch; a done condition that is not met is a Critical finding. Set \`systemic\` when the findings indicate a structural defect that iteration will not resolve. Do not modify anything and do not spawn subagents. Continue through to completion — do not stop to wait for instruction.
 ${RETURN_FIELDS}`;
@@ -903,7 +1282,7 @@ function lensReviewPrompt(ctx, plan, unit, branch, lenses, round) {
   return `${header(ctx, plan)}
 ${worktree(branch)}
 
-${unitBlock(unit)}
+${unitBlock(plan, unit)}
 
 Run the phronithm:review skill over this branch's diff against ${ctx.integrationBranch} through these lenses: ${lenses.join(', ')}. Round ${round} of the review gate. Return each finding with a severity; a finding is Critical only when it would be wrong to merge without fixing it. Do not modify anything and do not spawn subagents.
 ${RETURN_FIELDS}`;
@@ -913,7 +1292,7 @@ function designCritiquePrompt(ctx, plan, unit, branch, round) {
   return `${header(ctx, plan)}
 ${worktree(branch)}
 
-${unitBlock(unit)}
+${unitBlock(plan, unit)}
 
 This is a design unit: its deliverable is a decision record, not code. Run the phronithm:critique skill with type critique-design over the documents this branch adds or changes relative to ${ctx.integrationBranch}. Round ${round} of the critique gate. Pass bar: no Critical findings. A done condition that is not met is a Critical finding. Do not modify anything and do not spawn subagents.
 ${RETURN_FIELDS}`;
@@ -923,7 +1302,7 @@ function completionPrompt(ctx, plan, unit, branch, impl, review) {
   return `${header(ctx, plan)}
 ${worktree(branch)}
 
-${unitBlock(unit)}
+${unitBlock(plan, unit)}
 
 Write the completion report for this unit to docs/plans/${unit.id}-completion.md and commit. Contents, per phronithm:feature's completion-report: done-condition verdict with achieved rigour; deviations from the unit entry's scope and publishes; deferrals, each naming the receiving unit; discoveries affecting sibling or downstream units; status of each standing obligation; external-gate re-verification results; execution signals; and the footer "Run \`/phronithm:breakdown\` in re-plan mode with the decomposition plan and this report before starting any dependent unit." Assemble it from the implement and review stage returns below; do not re-derive or soften them.
 
@@ -940,7 +1319,7 @@ function mergePrompt(ctx, plan, wave, merges) {
 
 You are in the main checkout on ${ctx.integrationBranch}. Merge each unit branch below into ${ctx.integrationBranch}, in exactly this order, with a merge commit each (\`git merge --no-ff\`). For each unit report clean, resolved, unresolvable, or regressed, with the files involved and the merge SHA. Resolve a conflict only when the resolution is mechanical — both sides' changes apply without judgement about intent; otherwise abort that merge (\`git merge --abort\`), report it unresolvable, and continue with the next unit. Run the test suite after each merge. If the suite fails after a clean or resolved merge, undo that merge (\`git reset --hard\` to the pre-merge tip of ${ctx.integrationBranch}), report the unit as regressed with the failing test files, and continue with the next unit.
 
-Then record a Plan Maintenance completion entry in ${plan.path} for every unit merged clean or resolved, naming its completion report, commit on ${ctx.integrationBranch}, and return the new plan SHA. Do not amend anything else in the plan.
+Then, for every unit merged clean or resolved, record a Plan Maintenance completion entry in ${plan.path} naming its completion report and set \`complete: true\` on that unit in the plan's \`\`\`yaml lsf-plan block; commit on ${ctx.integrationBranch} and return the new plan SHA. Do not amend anything else in the plan.
 
 Wave ${wave} merge order:
 ${merges.map((m) => `- ${m.unit}: branch ${m.branch} (completion report ${m.completionPath})`).join('\n')}
@@ -967,14 +1346,14 @@ You are in the main checkout on ${ctx.integrationBranch}. Run the phronithm:brea
 Merge conflicts: ${conflicts.length ? JSON.stringify(conflicts, null, 2) : 'none'}
 Recorded signals this wave: ${recorded.length ? JSON.stringify(recorded, null, 2) : 'none'}
 
-Commit the amended plan on ${ctx.integrationBranch}. Return the amended plan reduced to its graph (same shape as the load stage: id, type, complete, dependencies, scope, publishes, gates, entry verbatim, execution order) with its new SHA; each amendment with its kind (${AMENDMENT_KINDS.join(', ')}), unit, and statement; and every remaining unit over its size budget with whether you repaired it by extracting a preceding design unit or flagging wall-clock rationale. Do not answer whether the architecture document still stands — a separate stage does that. Do not select or execute any unit.
+Every amendment to a unit's type, dependencies, scope, publishes, gates, or completion, and to the execution order, is made in both the unit's entry and the plan's \`\`\`yaml lsf-plan block, which must agree; the script reads the block. Commit the amended plan on ${ctx.integrationBranch}. Return the new plan SHA; each amendment with its kind (${AMENDMENT_KINDS.join(', ')}), unit, and statement; and every remaining unit over its size budget with whether you repaired it by extracting a preceding design unit or flagging wall-clock rationale. Do not answer whether the architecture document still stands — a separate stage does that. Do not select or execute any unit.
 ${RETURN_FIELDS}`;
 }
 
 function terminationPrompt(ctx, plan) {
   return `${header(ctx, plan)}
 
-You are in the main checkout on ${ctx.integrationBranch}. Every work unit in ${plan.path} is complete. Read its Meta-Tasks and Standing Obligations sections. Turn each substantial meta-task (integration testing, tuning infrastructure, anything needing its own implementation plan) into a work unit entry of type meta with a verifiable done condition, scope, dependencies, and gates, following phronithm:breakdown's unit conventions; append these to the plan and its execution order, record the amendment in Plan Maintenance, and commit. List each small meta-task (documentation updates and the like) under \`directEdits\` with the path and what to change; do not make those edits. Return the amended plan reduced to its graph with its new SHA and the ids of the appended units. If no meta-task remains, return the plan unchanged.
+You are in the main checkout on ${ctx.integrationBranch}. Every work unit in ${plan.path} is complete. Read its Meta-Tasks and Standing Obligations sections. Turn each substantial meta-task (integration testing, tuning infrastructure, anything needing its own implementation plan) into a work unit entry of type meta with a verifiable done condition, scope, dependencies, and gates, following phronithm:breakdown's unit conventions; append these to the plan's Work Units, to its execution order, and to its \`\`\`yaml lsf-plan block (entry and block must agree; the script reads the block), record the amendment in Plan Maintenance, and commit. List each small meta-task (documentation updates and the like) under \`directEdits\` with the path and what to change; do not make those edits. Return the new plan SHA and the ids of the appended units. If no meta-task remains, return the plan SHA given, unchanged.
 ${RETURN_FIELDS}`;
 }
 
@@ -1238,23 +1617,42 @@ async function run(rt) {
     ctx.decisionLogPath = d.result.path;
   }
 
+  // Plan graph at a SHA. A copy agent returns the fenced blocks verbatim;
+  // graph.js parses and validates. The copy agent has no interpretive
+  // authority: its reported ambiguities and contradictions are recorded,
+  // never stops. Structural problems (unreadable block, unknown unit, cycle,
+  // unserialised overlap, bad clearance) are STOP signals.
+  const loadPlan = async (sha, label, w) => {
+    const copy = await agent(copyPrompt(ctx, sha), { label, ...tier(ctx, 'default'), phase: 'Load', schema: COPY_SCHEMA });
+    if (!copy) return { plan: null, copy: null, records: [], stops: [nullReturnSignal({ stage: 'load', wave: w })] };
+    const records = signalsFromStageReturn(copy, { stage: 'load', wave: w }).map((x) => ({ ...x, disposition: 'recorded' }));
+    const g = loadGraph({ planMarkdown: copy.result.planBlock, decisionsMarkdown: ctx.decisionLogSha ? copy.result.decisionsBlock : null });
+    const stops = g.problems.map((p) => signal({ ...p, source: 'structural', stage: 'load', wave: w }));
+    let loadedPlan = null;
+    if (g.plan) {
+      loadedPlan = { ...g.plan, path: ctx.planPath, sha };
+      stops.push(...validatePlan(loadedPlan).map((p) => signal({ ...p, source: 'structural', stage: 'load', wave: w })));
+    }
+    return { plan: loadedPlan, copy, records, stops };
+  };
+
   // Load.
-  const loaded = await agent(loadPrompt(ctx), { label: 'load', ...tier(ctx, 'default'), phase: 'Load', schema: LOAD_SCHEMA });
-  if (!loaded) return stopOn('load', [nullReturnSignal({ stage: 'load' })]);
-  plan = loaded.result.plan;
-  ctx.architectureSha = ctx.architectureSha ?? loaded.result.architectureSha;
-  const loadSignals = signalsFromStageReturn(loaded, { stage: 'load' });
-  if (loaded.result.headBranch !== ctx.integrationBranch) {
+  const first = await loadPlan(ctx.planSha, 'load');
+  if (!first.copy) return stopOn('load', first.stops);
+  ctx.architectureSha = ctx.architectureSha ?? first.copy.result.architectureSha;
+  const loadSignals = [...first.stops];
+  if (first.copy.result.headBranch !== ctx.integrationBranch) {
     loadSignals.push(signal({
       kind: 'precondition', source: 'structural', stage: 'load',
-      statement: `main checkout is on ${loaded.result.headBranch}, not ${ctx.integrationBranch}`, referent: ctx.integrationBranch,
+      statement: `main checkout is on ${first.copy.result.headBranch}, not ${ctx.integrationBranch}`, referent: ctx.integrationBranch,
     }));
   }
-  for (const p of validatePlan(plan)) loadSignals.push(signal({ ...p, source: 'structural', stage: 'load' }));
+  ledger.push(...first.records);
   const loadEval = evaluateWave(loadSignals, [], { wave: 0, unitsInWave: 0 }, ctx.config);
   ledger.push(...loadEval.all);
-  if (loadEval.stop) return stopped('load', loadEval.stops);
-  log(`loaded ${plan.units.length} units @ ${plan.sha}; projected waves: ${wavePlan(plan).map((w) => w.join('+')).join(' | ') || 'none'}`);
+  if (loadEval.stop || !first.plan) return stopped('load', loadEval.stops);
+  plan = first.plan;
+  log(`loaded ${plan.units.length} units @ ${plan.sha}; ${ctx.decisionLogSha ? 'decision log applied' : 'no decision log'}; projected waves: ${wavePlan(plan).map((w) => w.join('+')).join(' | ') || 'none'}`);
 
   const completed = new Set(plan.units.filter((u) => u.complete).map((u) => u.id));
   let terminationRan = false;
@@ -1279,12 +1677,13 @@ async function run(rt) {
       const term = await agent(terminationPrompt(ctx, plan), { label: 'termination', ...tier(ctx, 'planning'), phase: 'Termination', schema: TERMINATION_SCHEMA });
       if (!term) return stopOn('termination', [nullReturnSignal({ stage: 'termination' })]);
       const termSignals = signalsFromStageReturn(term, { stage: 'termination' });
-      const problems = validatePlan(term.result.plan);
-      for (const p of problems) termSignals.push(signal({ ...p, source: 'structural', stage: 'termination' }));
+      const re = await loadPlan(term.result.planSha, 'load:termination', wave);
+      ledger.push(...re.records);
+      termSignals.push(...re.stops);
       const termEval = evaluateWave(termSignals, ledger, { wave, unitsInWave: 0 }, ctx.config);
       ledger.push(...termEval.all);
       if (termEval.stop) return stopped('termination', termEval.stops);
-      plan = term.result.plan;
+      plan = re.plan;
       if (term.result.directEdits.length) {
         const edits = await agent(directEditsPrompt(ctx, plan, term.result.directEdits), { label: 'direct-edits', ...tier(ctx, 'default'), phase: 'Termination', schema: SCRIBE_SCHEMA });
         if (!edits) return stopOn('direct-edits', [nullReturnSignal({ stage: 'direct-edits' })]);
@@ -1386,12 +1785,14 @@ async function run(rt) {
           statement: b.statement, referent: b.unit,
         }));
       }
-      for (const p of validatePlan(rp.result.plan)) replanSignals.push(signal({ ...p, source: 'structural', stage: 'replan', wave }));
-      nextPlan = rp.result.plan;
+      const re = await loadPlan(rp.result.planSha, `load:w${wave}`, wave);
+      ledger.push(...re.records);
+      replanSignals.push(...re.stops);
+      if (re.plan) nextPlan = re.plan;
     }
     const evalB = evaluateWave(replanSignals, ledger, { wave, unitsInWave: 0 }, ctx.config);
     ledger.push(...evalB.all);
-    await scribeLedger([...evalA.all, ...evalB.records]);
+    await scribeLedger([...evalA.all, ...evalB.records, ...ledger.filter((x) => x.stage === 'load' && x.wave === wave && x.disposition === 'recorded')]);
     if (evalB.stop) return stopped('replan', evalB.stops);
     plan = nextPlan;
     for (const u of plan.units) if (u.complete) completed.add(u.id);
