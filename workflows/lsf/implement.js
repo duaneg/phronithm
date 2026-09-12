@@ -28,7 +28,9 @@
 //   decisionLogPath     default docs/plans/<name>-decisions.md
 //   decisionLogSha      SHA of the decision log already committed, optional
 //   decisions           [{ id, question, decision, clears? }] to commit before
-//                       loading; `clears` lists `unit/gate` names
+//                       loading; `clears` lists `unit/gate` names. A re-plan
+//                       stage then applies the decisions to the plan, and the
+//                       run loads the SHA it returns
 //   ledgerPath          default docs/plans/<name>-signals.md
 //   config              overrides for scheduling DEFAULT_CONFIG
 //   maxWaves            default 20
@@ -394,6 +396,16 @@ Every amendment to a unit's type, dependencies, scope, publishes, gates, or comp
 ${RETURN_FIELDS}`;
 }
 
+function decisionReplanPrompt(ctx, plan, decisions) {
+  return `${header(ctx, plan)}
+
+You are in the main checkout on ${ctx.integrationBranch}. The requester has answered the questions the last run stopped on; the answers are in the decision log at the SHA above. Run the phronithm:breakdown skill in re-plan mode over ${plan.path} with these decisions as the input: apply each to the plan (a Scope or Publishes line, a done condition, an edge, the execution order, a unit added or removed), re-run the quality check over the remaining units, and record every amendment in Plan Maintenance citing the decision id. Return a verdict for every decision id: \`amended\`, \`no-change\` (with what in the plan already reflects it), or \`cannot\` (with why the plan cannot carry it out — it changes the architecture document or the request record, or is not a plan matter). An id you do not answer is treated as \`cannot\` and stops the run.
+${JSON.stringify(decisions, null, 2)}
+
+Every amendment to a unit's type, dependencies, scope, publishes, gates, or completion, and to the execution order, is made in both the unit's entry and the plan's \`\`\`yaml lsf-plan block, which must agree; the script reads the block. Commit on ${ctx.integrationBranch} and return the new plan SHA (the SHA given when nothing changed), each amendment with its kind (${AMENDMENT_KINDS.join(', ')}), unit, and statement, and a verdict per decision id. Do not select or execute any unit.
+${RETURN_FIELDS}`;
+}
+
 function terminationPrompt(ctx, plan) {
   return `${header(ctx, plan)}
 
@@ -594,6 +606,38 @@ function decisionsFor(stops) {
   }));
 }
 
+// Signals from a re-plan return: a verdict per item (cannot or missing is a
+// stop), each amendment, and each over-budget unit. `describe` renders the
+// item for the statement; `referentOf` gives the ledger referent.
+function replanSignals(result, items, { stage, wave }, describe, referentOf = (it) => it.unit ?? it.id) {
+  const out = [];
+  const verdicts = new Map((result.verdicts ?? []).map((v) => [v.id, v]));
+  items.forEach((it, i) => {
+    const v = verdicts.get(it.id);
+    if (v && v.verdict !== 'cannot') {
+      out.push(signal({
+        kind: 'verdict', source: 'reported', stage, unit: it.unit, wave,
+        statement: `${it.id} ${v.verdict}: ${v.statement} — ${describe(it)}`, referent: referentOf(it, i),
+      }));
+      return;
+    }
+    out.push(signal({
+      kind: 'plan-defect-unabsorbed', source: 'reported', stage, unit: it.unit, wave,
+      statement: `${v ? `re-plan cannot absorb: ${v.statement}` : 're-plan gave no verdict'} — ${describe(it)}`, referent: referentOf(it, i),
+    }));
+  });
+  for (const a of result.amendments ?? []) {
+    out.push(signal({ kind: 'amendment', source: 'reported', stage, unit: a.unit, wave, statement: `${a.kind}: ${a.statement}`, referent: a.unit }));
+  }
+  for (const b of result.overBudget ?? []) {
+    out.push(signal({
+      kind: b.repaired ? 'over-budget-repaired' : 'unit-over-budget', source: 'reported', stage, unit: b.unit, wave,
+      statement: b.statement, referent: b.unit,
+    }));
+  }
+  return out;
+}
+
 function requireArg(args, key) {
   if (args[key] === undefined || args[key] === null || args[key] === '') throw new Error(`lsf-implement: args.${key} is required`);
   return args[key];
@@ -639,13 +683,13 @@ async function run(rt) {
   // Every stop path: stamp, ledger, scribe, escalate. `stops` may already be
   // in the ledger (from evaluateWave); the rest are appended here. Records
   // not yet scribed ride in the same append, so a stop costs one scribe.
-  const stopped = async (stage, stops, records = []) => {
+  const stopped = async (stage, stops, records = [], extra = {}) => {
     for (const s of stops) s.disposition = 'stopped';
     ledger.push(...stops.filter((s) => !ledger.includes(s)));
     await scribeLedger([...records, ...stops]);
     log(`STOP at ${stage}: ${stops.map((s) => s.kind).join(', ')}`);
     return outcome('stopped', {
-      escalation: escalation({ workflow: WORKFLOW, planSha: plan.sha, wave: wave || undefined, stage, signals: stops, decisionNeeded: decisionsFor(stops) }),
+      escalation: escalation({ workflow: WORKFLOW, planSha: plan.sha, wave: wave || undefined, stage, signals: stops, decisionNeeded: decisionsFor(stops), ...extra }),
     });
   };
   const stopOn = stopped;
@@ -657,6 +701,20 @@ async function run(rt) {
     if (!d) return stopOn('decision-log', [nullReturnSignal({ stage: 'decision-log' })]);
     ctx.decisionLogSha = d.result.sha;
     ctx.decisionLogPath = d.result.path;
+
+    // Decisions are the plan's to carry out before any unit starts: a
+    // re-plan over the decisions, then the run loads the SHA it returns.
+    const items = args.decisions.map(({ id, question, decision }) => ({ id, question, decision }));
+    const rp = await agent(decisionReplanPrompt(ctx, plan, items), { label: 'decision-replan', ...tier(ctx, 'planning'), phase: 'Load', schema: REPLAN_SCHEMA });
+    if (!rp) return stopOn('decision-replan', [nullReturnSignal({ stage: 'decision-replan' })]);
+    const sigs = replanSignals(rp.result, items, { stage: 'decision-replan', wave: 0 }, (it) => it.question);
+    const ev = evaluateWave(sigs);
+    ledger.push(...ev.all);
+    if (ev.stop) return stopped('decision-replan', ev.stops, ev.records, { planSha: rp.result.planSha, preReplanSha: plan.sha });
+    await scribeLedger(ev.records);
+    plan = { ...plan, sha: rp.result.planSha };
+    ctx.planSha = plan.sha;
+    log(`decisions applied: ${rp.result.amendments.length} amendment(s) → plan @ ${plan.sha}`);
   }
 
   // Plan graph at a SHA. A copy agent returns the fenced blocks verbatim;
@@ -781,44 +839,22 @@ async function run(rt) {
     const items = itemSignals.map((s, i) => ({ id: `rp-${i + 1}`, ...flat(s) }));
     const records = evalA.records.filter((s) => !REPLAN_ITEM_KINDS.includes(s.kind)).map(flat);
     const rp = await agent(replanPrompt(ctx, plan, wave, merged, conflicts, items, records), { label: `replan:w${wave}`, ...tier(ctx, 'planning'), schema: REPLAN_SCHEMA, phase: 'Re-plan' });
-    const replanSignals = [];
+    const replanSigs = [];
     let nextPlan = plan;
     if (!rp) {
-      replanSignals.push(nullReturnSignal({ stage: 'replan', wave }));
+      replanSigs.push(nullReturnSignal({ stage: 'replan', wave }));
     } else {
-      const verdicts = new Map((rp.result.verdicts ?? []).map((v) => [v.id, v]));
-      items.forEach((it, i) => {
-        const v = verdicts.get(it.id);
-        if (v && v.verdict !== 'cannot') {
-          replanSignals.push(signal({
-            kind: 'verdict', source: 'reported', stage: 'replan', unit: it.unit, wave,
-            statement: `${it.id} ${v.verdict}: ${v.statement} — [${it.stage}] ${it.kind}: ${it.statement}`, referent: itemSignals[i].referent,
-          }));
-          return;
-        }
-        replanSignals.push(signal({
-          kind: 'plan-defect-unabsorbed', source: 'reported', stage: 'replan', unit: it.unit, wave,
-          statement: `${v ? `re-plan cannot absorb: ${v.statement}` : 're-plan gave no verdict'} — [${it.stage}] ${it.kind}: ${it.statement}`,
-          referent: itemSignals[i].referent,
-        }));
-      });
-      for (const a of rp.result.amendments) {
-        replanSignals.push(signal({ kind: 'amendment', source: 'reported', stage: 'replan', unit: a.unit, wave, statement: `${a.kind}: ${a.statement}`, referent: a.unit }));
-      }
-      for (const b of rp.result.overBudget) {
-        replanSignals.push(signal({
-          kind: b.repaired ? 'over-budget-repaired' : 'unit-over-budget', source: 'reported', stage: 'replan', unit: b.unit, wave,
-          statement: b.statement, referent: b.unit,
-        }));
-      }
+      replanSigs.push(...replanSignals(rp.result, items, { stage: 'replan', wave }, (it) => `[${it.stage}] ${it.kind}: ${it.statement}`, (it, i) => itemSignals[i].referent));
       const re = await loadPlan(rp.result.planSha, `load:w${wave}`, wave);
-      replanSignals.push(...re.stops);
+      replanSigs.push(...re.stops);
       if (re.plan) nextPlan = re.plan;
     }
-    const evalB = evaluateWave(replanSignals);
+    const evalB = evaluateWave(replanSigs);
     ledger.push(...evalB.all);
     const waveRecords = [...evalA.all, ...evalB.records];
-    if (evalB.stop) return stopped('replan', evalB.stops, waveRecords);
+    // The re-plan committed its absorbed amendments before the stop; the
+    // record carries that SHA as the plan to relaunch from.
+    if (evalB.stop) return stopped('replan', evalB.stops, waveRecords, rp ? { planSha: rp.result.planSha, preReplanSha: plan.sha } : {});
     await scribeLedger(waveRecords);
     plan = nextPlan;
     for (const u of plan.units) if (u.complete) completed.add(u.id);

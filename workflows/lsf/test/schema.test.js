@@ -41,4 +41,6 @@ test('escalation omits plan_sha and wave when unset', () => {
   const f = escalation({ workflow: 'lsf-implement', planSha: 'abc', wave: 2, stage: 'merge', signals: [] });
   assert.equal(f.plan_sha, 'abc');
   assert.equal(f.wave, 2);
+  assert.ok(!('pre_replan_sha' in f));
+  assert.equal(escalation({ workflow: 'w', stage: 'replan', signals: [], planSha: 'b', preReplanSha: 'a' }).pre_replan_sha, 'a');
 });

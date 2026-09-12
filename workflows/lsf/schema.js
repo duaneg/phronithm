@@ -197,9 +197,13 @@ function signal({ kind, source, stage, statement, referent, raisedBy, unit, wave
   return s;
 }
 
-function escalation({ workflow, planSha, wave, stage, signals, decisionNeeded }) {
+// `planSha` is the plan to relaunch from. After a stop at re-plan it is the
+// re-plan's commit, which carries the absorbed amendments; `preReplanSha`
+// is then the plan the wave ran against.
+function escalation({ workflow, planSha, preReplanSha, wave, stage, signals, decisionNeeded }) {
   const record = { workflow, stage, signals, decision_needed: decisionNeeded ?? [] };
   if (planSha !== undefined) record.plan_sha = planSha;
+  if (preReplanSha !== undefined) record.pre_replan_sha = preReplanSha;
   if (wave !== undefined) record.wave = wave;
   return record;
 }

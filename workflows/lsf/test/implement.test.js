@@ -69,6 +69,8 @@ function defaults(plan) {
     'direct-edits': () => ret({ path: 'docs/plans/f-breakdown.md', sha: 'e' }),
     obligations: () => ret({ obligations: [] }),
     'decision-log': () => ret({ path: 'docs/plans/f-decisions.md', sha: 'dec1' }),
+    'decision-replan': (p, o, u, state) => ret({ planSha: 'decided1', amendments: [{ kind: 'new-edge', unit: 'B', statement: 'B after A' }], overBudget: [],
+      verdicts: [...p.matchAll(/"id": "(d\d+)"/g)].map((m) => ({ id: m[1], verdict: 'amended', statement: 'edge added' })), summary: 'applied' }),
   };
 }
 
@@ -237,7 +239,7 @@ test('an item the re-plan cannot absorb, or does not answer, stops after the re-
   for (const mode of ['cannot', 'missing']) {
     const { rt, labels } = runtime(twoWaves(), {
       implement: (p, o, u) => ret(implemented(u, { discoveries: [{ statement: 'B needs C first', affects: 'B' }, { statement: 'C is redundant', affects: 'C' }] })),
-      replan: (p, o, u, state) => ret({ planSha: state.plan.sha, amendments: [], overBudget: [],
+      replan: (p, o, u, state) => ret({ planSha: 'replanned-stop', amendments: [], overBudget: [],
         verdicts: mode === 'cannot' ? [{ id: 'rp-1', verdict: 'cannot', statement: 'needs the requester' }, { id: 'rp-2', verdict: 'amended', statement: 'dropped' }] : [], summary: 's' }),
     });
     const out = await run(rt);
@@ -248,6 +250,8 @@ test('an item the re-plan cannot absorb, or does not answer, stops after the re-
     assert.equal(stops[0].referent, 'B');
     assert.match(stops[0].statement, mode === 'cannot' ? /cannot absorb: needs the requester — \[implement\] discovery: B needs C first/ : /no verdict — \[implement\] discovery: B needs C first/);
     assert.ok(labels().includes('replan:w1') && !labels().includes('plan:B'));
+    assert.equal(out.escalation.plan_sha, 'replanned-stop', 'relaunch from the re-plan commit');
+    assert.equal(out.escalation.pre_replan_sha, 'merged1');
     if (mode === 'cannot') assert.equal(out.ledger.filter((s) => s.kind === 'verdict').length, 1);
   }
 });
@@ -376,11 +380,37 @@ test('an undischarged standing obligation at termination stops', async () => {
   assert.deepEqual(out.escalation.signals.map((s) => s.kind), ['standing-obligation-undischarged']);
 });
 
-test('decisions are committed first and their SHA reaches every prompt', async () => {
-  const { rt, calls } = runtime(twoWaves(), {}, { decisions: [{ id: 'd1', question: 'q', decision: 'yes' }] });
-  await run(rt);
-  assert.equal(calls[0].label, 'decision-log');
+test('decisions are committed first, applied by a re-plan, and both SHAs reach every later prompt', async () => {
+  const decisionsBlock = ['```yaml lsf-decisions', 'decisions:', '  - id: d1', '    date: 2026-09-12', '    question: q', '    decision: yes', '```'].join('\n');
+  const { rt, calls, labels } = runtime(twoWaves(), { load: (p, o, u, st) => copied(st.plan, { decisionsBlock }) }, { decisions: [{ id: 'd1', question: 'q', decision: 'yes' }] });
+  const out = await run(rt);
+  assert.equal(out.status, 'complete', JSON.stringify(out.escalation?.signals));
+  assert.deepEqual(labels().slice(0, 3), ['decision-log', 'decision-replan', 'ledger:w0']);
   for (const c of calls.slice(1)) assert.match(c.prompt, /Decision log: docs\/plans\/f-decisions\.md @ dec1/, c.label);
+  const rp = calls[1].prompt;
+  assert.match(rp, /Decomposition plan: docs\/plans\/f-breakdown\.md @ plan0/);
+  assert.match(rp, /"id": "d1"[^]*"decision": "yes"/);
+  assert.doesNotMatch(rp, /"clears"/);
+  const load = calls.find((c) => c.label === 'load');
+  assert.match(load.prompt, /git show decided1:docs\/plans\/f-breakdown\.md/, 'loads the re-planned SHA');
+  assert.match(calls.find((c) => c.label === 'plan:A').prompt, /@ decided1/);
+  const w0 = out.ledger.filter((s) => s.wave === 0).map((s) => [s.stage, s.kind]);
+  assert.deepEqual(w0, [['decision-replan', 'verdict'], ['decision-replan', 'amendment']]);
+  assert.match(calls[2].prompt, /## Wave 0[^]*decision-replan \| reported \| verdict \| d1 amended: edge added — q/);
+});
+
+test('a decision the re-plan cannot carry out stops before load, with both SHAs in the record', async () => {
+  const { rt, labels } = runtime(twoWaves(), {
+    'decision-replan': () => ret({ planSha: 'decided1', amendments: [], overBudget: [], verdicts: [{ id: 'd1', verdict: 'cannot', statement: 'changes §4' }], summary: 's' }),
+  }, { decisions: [{ id: 'd1', question: 'q', decision: 'rewrite the seam' }] });
+  const out = await run(rt);
+  assert.equal(out.status, 'stopped');
+  assert.equal(out.escalation.stage, 'decision-replan');
+  assert.deepEqual(out.escalation.signals.map((s) => s.kind), ['plan-defect-unabsorbed']);
+  assert.match(out.escalation.signals[0].statement, /cannot absorb: changes §4 — q/);
+  assert.equal(out.escalation.plan_sha, 'decided1');
+  assert.equal(out.escalation.pre_replan_sha, 'plan0');
+  assert.ok(!labels().includes('load'));
 });
 
 test('a null agent return is a stop', async () => {

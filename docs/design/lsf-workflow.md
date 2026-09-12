@@ -151,6 +151,7 @@ not re-run implementation.
 ## Wave loop
 
 ```
+if decisions: commit to the decision log; replan(plan, decisions)   // a verdict per decision; cannot stops
 plan = load(decomposition-plan @ sha)          // copy agent + parser; stops on any structural defect
 loop:
   ready   = units with all dependencies complete and no uncleared organisational/release gate
@@ -219,6 +220,14 @@ fields are present; an invalidation missing a field, and every note the gate
 returns besides, is recorded and handed to the re-plan. The gate is told not
 to re-evaluate done conditions or review findings (the unit stages did, at
 the bar this workflow sets) and not to report the workflow's own process.
+
+**Decisions are applied before any unit starts.** A relaunch that carries
+requester decisions commits them to the decision log, then runs a re-plan
+over the plan with the decisions as input; each decision gets a verdict
+(amended, no change, cannot), and `cannot` or none stops the run before
+load. The plan is then loaded from the SHA the re-plan returns. Without this
+stage the decision would sit in the log while the next wave ran against an
+unamended plan.
 
 **Prompts embed the plan's commit SHA** (and the unit entry verbatim), never a
 path alone. A re-plan produces a new SHA, every downstream prompt changes, and
@@ -357,13 +366,16 @@ nothing to replay and it is a fresh run in effect.
 Returned by the workflow; presented verbatim by the session.
 
 ```
-{ workflow, plan_sha?, wave?, stage,
+{ workflow, plan_sha?, pre_replan_sha?, wave?, stage,
   signals: [{ kind, source, unit?, stage, statement, referent, raised_by }],
   decision_needed: [ { id, question, options?, affects: [units | stages] } ] }
 ```
 
 `plan_sha`, `wave`, and `unit` are set by `lsf-implement` only; `stage` names
-the research, synthesis, critique, or breakdown stage in the other two. An
+the research, synthesis, critique, or breakdown stage in the other two.
+`plan_sha` is the plan to relaunch from: after a stop at a re-plan it is the
+re-plan's own commit, which carries the amendments it did absorb, and
+`pre_replan_sha` is the plan the wave ran against. An
 architecture invalidation's statement carries the gate's five fields, so the
 question the requester sees includes the proposed amendment.
 
