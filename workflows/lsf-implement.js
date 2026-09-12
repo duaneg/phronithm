@@ -1016,7 +1016,7 @@ function digest(ledger) {
 const WORKFLOW = 'lsf-implement';
 const GATE_MAX_ROUNDS = 4; // critique gate hard cap
 const DEFAULT_MAX_WAVES = 20;
-// Model and effort per role. Static analysis inherits the session model.
+// Model and effort per role.
 const DEFAULT_TIERS = Object.freeze({
   critique: { model: 'sonnet' },
   gate: { model: 'opus' },
@@ -1266,16 +1266,6 @@ Implementation plan: docs/plans/${unit.id}-plan.md on this branch. Hold to its R
 First re-probe every external gate in the unit entry against its plan-time pin: probe environment gates mechanically (binaries and versions, fonts, services, accounts, data sets); organisational and release gates are already cleared per the decision log and need no probe. Report each under \`gateProbe\`. If any gate has drifted, implement nothing — return the probe results with every other \`result\` field empty, zero, or false, and stop.
 
 Otherwise execute the plan in full, single-shot, committing as you go with the project's commit discipline. There is no per-step critique here, and no implementation summary document: the completion report a later stage writes from your return is that record, so do not write \`docs/plans/${unit.id}-implementation.md\` even if the plan text mentions one. Then evaluate the done condition exactly as written, under the plan's readings, and report whether it is evaluable in position and whether it is met, with evidence. Record as they arise: deviations from the unit entry's scope or publishes; the files you changed that the Scope line does not name, under \`writesOutsideScope\`; deferrals — work in scope deliberately not implemented, naming the unit it belongs to; discoveries — anything you learned that changes another unit's scope, dependencies, or done condition, or that the architecture document states otherwise, naming the unit or the section; the status of each standing obligation the unit carries. Report execution distress honestly: whether context is near exhaustion, how many design decisions you took mid-implementation, the deviation and deferral counts.
-${RETURN_FIELDS}`;
-}
-
-function staticAnalysisPrompt(ctx, plan, unit, branch) {
-  return `${header(ctx, plan)}
-${worktree(branch)}
-
-${unitBlock(plan, unit)}
-
-Run the phronithm:static-analysis skill over the files this branch changes relative to ${ctx.integrationBranch} (\`git diff --name-only ${ctx.integrationBranch}...HEAD\`). Return each finding with a severity: Critical for a defect the analyser is confident of (type error, definite bug pattern, security rule), Significant for a probable issue, Minor for style. Do not modify anything.
 ${RETURN_FIELDS}`;
 }
 
@@ -1535,15 +1525,11 @@ async function runUnit(rt, ctx, plan, unit, wave) {
       const reviewers = unit.type === 'design'
         ? [['critique-design', designCritiquePrompt(ctx, plan, unit, branch, n)]]
         : [
-          ['static-analysis', staticAnalysisPrompt(ctx, plan, unit, branch)],
           ['critique-code', codeCritiquePrompt(ctx, plan, unit, branch, n)],
           ...(lenses.length ? [['lens-review', lensReviewPrompt(ctx, plan, unit, branch, lenses, n)]] : []),
         ];
       const rets = await rt.parallel(reviewers.map(([stage, prompt]) => () =>
-        rt.agent(prompt, opts(`${stage}:r${n}`, {
-          isolation: 'worktree', schema: FINDINGS_SCHEMA,
-          ...(stage === 'static-analysis' ? { model: undefined, effort: undefined } : tier(ctx, 'critique')),
-        }))));
+        rt.agent(prompt, opts(`${stage}:r${n}`, { isolation: 'worktree', schema: FINDINGS_SCHEMA, ...tier(ctx, 'critique') }))));
       return reviewers.map(([stage], i) => ({ stage, ret: rets[i] ?? null }));
     },
     fix: (n, criticals) => rt.agent(fixPrompt(ctx, plan, unit, branch, 'code', criticals, n),

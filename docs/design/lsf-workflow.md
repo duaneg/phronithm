@@ -124,9 +124,11 @@ carries its own unit plan template and stages instead:
    files written outside the Scope line, deferrals with the receiving unit,
    discoveries with the unit or architecture section they affect, distress
    counts, the done-condition verdict.
-4. **review** stage over the branch diff: the static-analysis pre-scan, then
-   one critique-code gate at the Critical-only bar, then lens review per unit
-   type. The code critique evaluates the done condition under the plan's
+4. **review** stage over the branch diff: one critique-code gate at the
+   Critical-only bar and lens review per unit type, in parallel. No separate
+   static-analysis stage: the project's own gates (linters, type checks) run
+   in the implement stage, whose done conditions require them green, and
+   again after each merge. The code critique evaluates the done condition under the plan's
    readings; an unmet condition, or a reading the code does not bear out, is
    Critical. Significant and Minor findings are recorded, not fixed.
 5. **completion-report** is assembled from the implement and review returns and
@@ -451,8 +453,7 @@ planning (unit plan, re-plan, termination) runs fable at medium effort;
 mechanical (plan-block copy, decision-log and ledger appends) runs haiku at
 low effort, since the script has already rendered what they write and the
 parser checks it on the next load; everything else, including termination's
-direct edits to the plan, runs sonnet. Static analysis inherits the session
-model.
+direct edits to the plan, runs sonnet.
 
 ## Open questions
 

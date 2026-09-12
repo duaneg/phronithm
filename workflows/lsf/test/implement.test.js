@@ -50,7 +50,6 @@ function defaults(plan) {
     'critique-plan': () => NO_FINDINGS,
     'fix-plan': (p, o, u) => ret({ branch: `fixed-${u}`, sha: 'f', applied: [{ finding: `x-${u}`, fix: 'y' }], notApplied: [], planText: 'fixed' }),
     implement: (p, o, u) => ret(implemented(u)),
-    'static-analysis': () => NO_FINDINGS,
     'critique-code': () => NO_FINDINGS,
     'lens-review': () => NO_FINDINGS,
     'fix-code': (p, o, u) => ret({ branch: `fixed-code-${u}`, sha: 'f', applied: [], notApplied: [], planText: '' }),
@@ -419,14 +418,13 @@ test('fixed Critical findings reach the ledger on a passing gate', async () => {
   assert.match(ledger1.prompt, /critical-fixed/);
 });
 
-test('role tiers reach every call: critique sonnet, gate opus, planning fable/medium, mechanical haiku/low, default sonnet; static analysis inherits', async () => {
+test('role tiers reach every call: critique sonnet, gate opus, planning fable/medium, mechanical haiku/low, default sonnet', async () => {
   const { rt, calls } = runtime(twoWaves());
   await run(rt);
   const seen = new Set();
   for (const c of calls) {
     const role = c.label.replace(/:.*$/, '');
     seen.add(role);
-    if (/^static-analysis/.test(c.label)) { assert.equal(c.opts.model, undefined, c.label); continue; }
     if (/^(critique-plan|critique-code|lens-review|critique-design)$/.test(role)) assert.equal(c.opts.model, 'sonnet', c.label);
     else if (/^(review-gate|obligations)$/.test(role)) assert.equal(c.opts.model, 'opus', c.label);
     else if (/^(plan|replan|termination)$/.test(role)) assert.deepEqual([c.opts.model, c.opts.effort], ['fable', 'medium'], c.label);
