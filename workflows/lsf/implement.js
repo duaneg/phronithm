@@ -33,10 +33,11 @@
 //   config              overrides for scheduling DEFAULT_CONFIG
 //   maxWaves            default 20
 //   maxUnitsPerWave     cap on units started per wave, in execution order; default unbounded
-//   tiers               per-role { model, effort } overrides; roles: gate
-//                       (critique and review), planning (unit plan, re-plan,
-//                       termination), mechanical (plan-block copy, ledger and
-//                       decision-log appends),
+//   tiers               per-role { model, effort } overrides; roles:
+//                       critique (unit plan critique, code critique, lens
+//                       review), gate (wave gate, obligations), planning
+//                       (unit plan, re-plan, termination), mechanical
+//                       (plan-block copy, ledger and decision-log appends),
 //                       default (everything else)
 
 import {
@@ -54,6 +55,7 @@ const GATE_MAX_ROUNDS = 4; // critique gate hard cap
 const DEFAULT_MAX_WAVES = 20;
 // Model and effort per role. Static analysis inherits the session model.
 const DEFAULT_TIERS = Object.freeze({
+  critique: { model: 'sonnet' },
   gate: { model: 'opus' },
   planning: { model: 'fable', effort: 'medium' },
   default: { model: 'sonnet' },
@@ -531,7 +533,7 @@ async function runUnit(rt, ctx, plan, unit, wave) {
     round: async (n) => [{
       stage: 'critique-plan',
       ret: await rt.agent(planCritiquePrompt(ctx, plan, unit, planText, n),
-        opts(`critique-plan:r${n}`, { agentType: 'phronithm:critic', schema: FINDINGS_SCHEMA, ...tier(ctx, 'gate') })),
+        opts(`critique-plan:r${n}`, { agentType: 'phronithm:critic', schema: FINDINGS_SCHEMA, ...tier(ctx, 'critique') })),
     }],
     fix: (n, criticals) => rt.agent(fixPrompt(ctx, plan, unit, branch, 'plan', criticals, n),
       opts(`fix-plan:r${n}`, { isolation: 'worktree', schema: FIX_SCHEMA })),
@@ -577,7 +579,7 @@ async function runUnit(rt, ctx, plan, unit, wave) {
       const rets = await rt.parallel(reviewers.map(([stage, prompt]) => () =>
         rt.agent(prompt, opts(`${stage}:r${n}`, {
           isolation: 'worktree', schema: FINDINGS_SCHEMA,
-          ...(stage === 'static-analysis' ? { model: undefined, effort: undefined } : tier(ctx, 'gate')),
+          ...(stage === 'static-analysis' ? { model: undefined, effort: undefined } : tier(ctx, 'critique')),
         }))));
       return reviewers.map(([stage], i) => ({ stage, ret: rets[i] ?? null }));
     },
