@@ -224,10 +224,30 @@ the bar this workflow sets) and not to report the workflow's own process.
 **Decisions are applied before any unit starts.** A relaunch that carries
 requester decisions commits them to the decision log, then runs a re-plan
 over the plan with the decisions as input; each decision gets a verdict
-(amended, no change, cannot), and `cannot` or none stops the run before
-load. The plan is then loaded from the SHA the re-plan returns. Without this
+(amended, no change, document-text, cannot), and `cannot` or none stops the
+run before load. The plan is then loaded from the SHA the re-plan returns. Without this
 stage the decision would sit in the log while the next wave ran against an
 unamended plan.
+
+**The re-plan may correct the architecture document's wording, never its
+decisions.** A gate note whose only remedy is text in the architecture
+document and that moves no decision — a resolved unknown still marked open,
+a measured figure replacing an estimate, an accessor or signature the code
+settled — gets the verdict `document-text`: the re-plan makes the
+correction, commits it, and the ledger records an architecture amendment
+with the section. The gate has already ruled that nothing in the note
+invalidates a decision; routing such a note back to the requester as an
+unabsorbed defect asked for a decision that was not there. A correction that
+would change what a section decides is `cannot`.
+
+**A unit over its size budget stops only when neither repair applies.** The
+re-plan reports each over-budget unit with a disposition: `extracted` (a
+preceding design unit carries the excess), `flagged` (the excess is
+wall-clock, not context, and the unit carries the rationale, which
+breakdown's size budget accepts as discharging the check), or `unrepaired`.
+A flag stands across re-plans, including the decision re-plan before load;
+a stop kind derived from standing plan state rather than from the wave's
+events could not be cleared by any decision.
 
 **Prompts embed the plan's commit SHA** (and the unit entry verbatim), never a
 path alone. A re-plan produces a new SHA, every downstream prompt changes, and
@@ -271,7 +291,9 @@ gate loop it belongs to.
 RECORD (ledger; the re-plan absorbs what it can): every reading, deviation,
 deferral, discovery, distress record, unfixed Significant or Minor finding,
 applied Critical fix, gate note, mechanically resolved claimed-disjoint
-conflict, re-plan amendment, and re-plan verdict of `amended` or `no-change`.
+conflict, re-plan amendment, re-plan verdict of `amended`, `no-change`, or
+`document-text` with the architecture amendment it made, and an over-budget
+unit repaired by extraction or flagged with rationale.
 
 STOP (return an escalation record):
 
@@ -279,8 +301,8 @@ STOP (return an escalation record):
   present;
 - a re-plan item the re-plan cannot absorb, or gives no verdict on;
 - a done condition that cannot be evaluated as written;
-- a re-plan producing a cycle, or a unit over budget that extraction cannot
-  repair;
+- a re-plan producing a cycle, or a unit over budget that is neither
+  extracted nor flagged with wall-clock rationale;
 - critique-gate non-convergence: hard cap, a systemic verdict, or a Critical
   finding the fix stage declined;
 - an unresolvable merge conflict, or a clean merge after which the project's
@@ -331,7 +353,7 @@ The session does not always relaunch the workflow that stopped. Per STOP kind:
 
 | STOP kind | Relaunch | Inputs |
 |-----------|----------|--------|
-| Architecture invalidated; a re-plan item unabsorbed because the answer lies in the architecture document or the request record | `lsf-architecture` (or `lsf-brief` when the requester's decision amends the request record; the session then runs the later workflows in sequence without a further prompt) | Decision log SHA; the amended document; Phase 3 state — existing decomposition plan, completion reports, integration branch |
+| Architecture invalidated; a re-plan item unabsorbed because the answer changes a decision in the architecture document or the request record | `lsf-architecture` (or `lsf-brief` when the requester's decision amends the request record; the session then runs the later workflows in sequence without a further prompt) | Decision log SHA; the amended document; Phase 3 state — existing decomposition plan, completion reports, integration branch |
 | Done condition unevaluable as written | `lsf-architecture` | Decision log SHA; Phase 3 state |
 | Everything else: cycle or unrepairable budget excess; gate non-convergence; unresolvable merge conflict or regression; environment drift; gated units; null agent; load failure; undischarged obligation | Same workflow | Decision log SHA |
 
@@ -404,7 +426,9 @@ stage-specific `result` fields with defined shapes:
 - **wave gate**: `invalidations: [{ section, decision, premise, evidence,
   amendment }]`, `notes: [{ statement, referent }]`.
 - **re-plan**: `amendments: [{ kind, unit, statement }]`, `verdicts: [{ id,
-  verdict: amended | no-change | cannot, statement }]`, `overBudget`.
+  verdict: amended | no-change | document-text | cannot, statement }]`,
+  `overBudget: [{ unit, disposition: extracted | flagged | unrepaired,
+  statement }]`.
 
 ## Persistence
 

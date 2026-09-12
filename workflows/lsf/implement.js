@@ -160,11 +160,15 @@ const GATE_SCHEMA = stageSchema(obj({
 const REPLAN_SCHEMA = stageSchema(obj({
   planSha: { ...str, description: 'Plan SHA after the amendments were committed; the plan SHA given when nothing changed' },
   amendments: arr(obj({ kind: { type: 'string', enum: AMENDMENT_KINDS }, unit: str, statement: str })),
-  overBudget: arr(obj({ unit: str, repaired: bool, statement: str })),
+  overBudget: arr(obj({
+    unit: str,
+    disposition: { type: 'string', enum: ['extracted', 'flagged', 'unrepaired'], description: 'extracted: a preceding design unit now carries the excess; flagged: the excess is wall-clock, not context, and the unit carries the rationale; unrepaired: neither' },
+    statement: str,
+  })),
   verdicts: arr(obj({
     id: str,
-    verdict: { type: 'string', enum: ['amended', 'no-change', 'cannot'] },
-    statement: { ...str, description: 'What was amended, why the plan already answers it, or why the plan cannot absorb it' },
+    verdict: { type: 'string', enum: ['amended', 'no-change', 'document-text', 'cannot'] },
+    statement: { ...str, description: 'What was amended, why the plan already answers it, what wording in the architecture document was corrected, or why the plan cannot absorb it' },
   })),
   summary: str,
 }));
@@ -386,20 +390,22 @@ function replanPrompt(ctx, plan, wave, merged, conflicts, items, records) {
 
 You are in the main checkout on ${ctx.integrationBranch}. Run the phronithm:breakdown skill in re-plan mode over ${plan.path} with the completion reports of wave ${wave}: ${merged.map((m) => m.completionPath).join(', ')}. Diff their deviations, deferrals, and discoveries against every remaining unit's scope, dependencies, and done condition; amend the plan; re-run the quality check over the remaining units, examining the size budget first where a completed unit showed distress; record every amendment in Plan Maintenance. Treat each merge conflict below between units the plan claimed disjoint as a plan defect: record it and add the missing edge or scope correction. A file a unit wrote outside its Scope line is a Scope correction where a later unit shares the file.
 
-Items this wave, each with an id — deferrals, discoveries, claimed-disjoint conflicts, the gate's notes, and distress. Each is yours to absorb: amend the plan (a Scope or Publishes line, a done condition, an edge, the execution order, a unit added), or show the plan as it stands already answers it. Return a verdict for every id: \`amended\`, \`no-change\` (with what in the plan answers it), or \`cannot\` (with why the plan cannot absorb it — the answer lies in the architecture document or the request record, or needs the requester). An id you do not answer is treated as \`cannot\` and stops the run.
+Items this wave, each with an id — deferrals, discoveries, claimed-disjoint conflicts, the gate's notes, and distress. Each is yours to absorb: amend the plan (a Scope or Publishes line, a done condition, an edge, the execution order, a unit added), or show the plan as it stands already answers it. Return a verdict for every id: \`amended\`, \`no-change\` (with what in the plan answers it), \`document-text\`, or \`cannot\` (with why the plan cannot absorb it — the answer changes a decision in the architecture document or the request record, or needs the requester). An id you do not answer is treated as \`cannot\` and stops the run.
+
+\`document-text\` is for a gate note whose only remedy is wording in the architecture document and that moves no decision — a resolved unknown still marked open, a measured figure replacing an estimate, a named accessor or signature the code settled. Make that correction in the document, commit it, and put the section and the new wording in the verdict statement. A correction that would change what a section decides is not text; that is \`cannot\`.
 ${items.length ? JSON.stringify(items, null, 2) : 'none'}
 
 Merge conflicts: ${conflicts.length ? JSON.stringify(conflicts, null, 2) : 'none'}
 Other records this wave (readings, deviations, unfixed findings): ${records.length ? JSON.stringify(records, null, 2) : 'none'}
 
-Every amendment to a unit's type, dependencies, scope, publishes, gates, or completion, and to the execution order, is made in both the unit's entry and the plan's \`\`\`yaml lsf-plan block, which must agree; the script reads the block. Commit the amended plan on ${ctx.integrationBranch}. Return the new plan SHA; each amendment with its kind (${AMENDMENT_KINDS.join(', ')}), unit, and statement; a verdict per item id; and every remaining unit over its size budget with whether you repaired it by extracting a preceding design unit or flagging wall-clock rationale. Do not answer whether the architecture document still stands — the gate did. Do not select or execute any unit.
+Every amendment to a unit's type, dependencies, scope, publishes, gates, or completion, and to the execution order, is made in both the unit's entry and the plan's \`\`\`yaml lsf-plan block, which must agree; the script reads the block. Commit the amended plan on ${ctx.integrationBranch}. Return the new plan SHA; each amendment with its kind (${AMENDMENT_KINDS.join(', ')}), unit, and statement; a verdict per item id; and every remaining unit over its size budget with its disposition: \`extracted\` (a preceding design unit now carries the excess), \`flagged\` (the excess is wall-clock, not context, and the unit carries the rationale — breakdown's size budget discharges it), or \`unrepaired\`. A flag already on the unit from an earlier pass stands unless the unit's scope has grown since; report it as \`flagged\`. Do not answer whether the architecture document still stands — the gate did. Do not select or execute any unit.
 ${RETURN_FIELDS}`;
 }
 
 function decisionReplanPrompt(ctx, plan, decisions) {
   return `${header(ctx, plan)}
 
-You are in the main checkout on ${ctx.integrationBranch}. The requester has answered the questions the last run stopped on; the answers are in the decision log at the SHA above. Run the phronithm:breakdown skill in re-plan mode over ${plan.path} with these decisions as the input: apply each to the plan (a Scope or Publishes line, a done condition, an edge, the execution order, a unit added or removed), re-run the quality check over the remaining units, and record every amendment in Plan Maintenance citing the decision id. Return a verdict for every decision id: \`amended\`, \`no-change\` (with what in the plan already reflects it), or \`cannot\` (with why the plan cannot carry it out — it changes the architecture document or the request record, or is not a plan matter). An id you do not answer is treated as \`cannot\` and stops the run.
+You are in the main checkout on ${ctx.integrationBranch}. The requester has answered the questions the last run stopped on; the answers are in the decision log at the SHA above. Run the phronithm:breakdown skill in re-plan mode over ${plan.path} with these decisions as the input: apply each to the plan (a Scope or Publishes line, a done condition, an edge, the execution order, a unit added or removed), re-run the quality check over the remaining units, and record every amendment in Plan Maintenance citing the decision id. Return a verdict for every decision id: \`amended\`, \`no-change\` (with what in the plan already reflects it), \`document-text\` (the decision only corrects wording in the architecture document; make the correction, commit it, and state the section), or \`cannot\` (with why the plan cannot carry it out — it changes a decision in the architecture document or the request record, or is not a plan matter). An id you do not answer is treated as \`cannot\` and stops the run. Report any remaining unit over its size budget with its disposition — \`extracted\`, \`flagged\` (a flag with wall-clock rationale, standing or new), or \`unrepaired\`.
 ${JSON.stringify(decisions, null, 2)}
 
 Every amendment to a unit's type, dependencies, scope, publishes, gates, or completion, and to the execution order, is made in both the unit's entry and the plan's \`\`\`yaml lsf-plan block, which must agree; the script reads the block. Commit on ${ctx.integrationBranch} and return the new plan SHA (the SHA given when nothing changed), each amendment with its kind (${AMENDMENT_KINDS.join(', ')}), unit, and statement, and a verdict per decision id. Do not select or execute any unit.
@@ -607,8 +613,10 @@ function decisionsFor(stops) {
 }
 
 // Signals from a re-plan return: a verdict per item (cannot or missing is a
-// stop), each amendment, and each over-budget unit. `describe` renders the
-// item for the statement; `referentOf` gives the ledger referent.
+// stop; document-text also records the architecture amendment), each
+// amendment, and each over-budget unit by disposition (unrepaired is a
+// stop). `describe` renders the item for the statement; `referentOf` gives
+// the ledger referent.
 function replanSignals(result, items, { stage, wave }, describe, referentOf = (it) => it.unit ?? it.id) {
   const out = [];
   const verdicts = new Map((result.verdicts ?? []).map((v) => [v.id, v]));
@@ -619,6 +627,9 @@ function replanSignals(result, items, { stage, wave }, describe, referentOf = (i
         kind: 'verdict', source: 'reported', stage, unit: it.unit, wave,
         statement: `${it.id} ${v.verdict}: ${v.statement} — ${describe(it)}`, referent: referentOf(it, i),
       }));
+      if (v.verdict === 'document-text') {
+        out.push(signal({ kind: 'architecture-amendment', source: 'reported', stage, wave, statement: v.statement, referent: referentOf(it, i) }));
+      }
       return;
     }
     out.push(signal({
@@ -629,9 +640,10 @@ function replanSignals(result, items, { stage, wave }, describe, referentOf = (i
   for (const a of result.amendments ?? []) {
     out.push(signal({ kind: 'amendment', source: 'reported', stage, unit: a.unit, wave, statement: `${a.kind}: ${a.statement}`, referent: a.unit }));
   }
+  const budgetKind = { extracted: 'over-budget-repaired', flagged: 'over-budget-flagged', unrepaired: 'unit-over-budget' };
   for (const b of result.overBudget ?? []) {
     out.push(signal({
-      kind: b.repaired ? 'over-budget-repaired' : 'unit-over-budget', source: 'reported', stage, unit: b.unit, wave,
+      kind: budgetKind[b.disposition] ?? 'unit-over-budget', source: 'reported', stage, unit: b.unit, wave,
       statement: b.statement, referent: b.unit,
     }));
   }

@@ -256,6 +256,47 @@ test('an item the re-plan cannot absorb, or does not answer, stops after the re-
   }
 });
 
+test('a flagged over-budget unit is recorded and the run continues; an unrepaired one stops', async () => {
+  for (const disposition of ['flagged', 'unrepaired']) {
+    const { rt } = runtime(twoWaves(), {
+      replan: (p, o, u, state) => {
+        state.plan = { ...state.plan, sha: 'replanned', units: state.plan.units.map((x) => ({ ...x, complete: state.completed.has(x.id) })) };
+        return ret({ planSha: 'replanned', amendments: [], overBudget: [{ unit: 'B', disposition, statement: 'three written paths' }], verdicts: [], summary: 's' });
+      },
+    });
+    const out = await run(rt);
+    if (disposition === 'flagged') {
+      assert.equal(out.status, 'complete', 'flag discharges the budget check');
+      const flags = out.ledger.filter((s) => s.kind === 'over-budget-flagged');
+      assert.equal(flags.length, 2, 'reported each re-plan');
+      assert.equal(flags[0].disposition, 'recorded');
+      assert.equal(flags[0].unit, 'B');
+    } else {
+      assert.equal(out.status, 'stopped');
+      assert.deepEqual(out.escalation.signals.map((s) => s.kind), ['unit-over-budget']);
+    }
+  }
+});
+
+test('a document-text verdict records the architecture amendment and does not stop', async () => {
+  const { rt } = runtime(twoWaves(), {
+    'review-gate': () => ret({ invalidations: [], notes: [{ statement: 'U5 row is stale', referent: '§6 U5' }] }),
+    replan: (p, o, u, state) => {
+      state.plan = { ...state.plan, sha: `rp-${state.completed.size}`, units: state.plan.units.map((x) => ({ ...x, complete: state.completed.has(x.id) })) };
+      return ret({ planSha: state.plan.sha, amendments: [], overBudget: [],
+        verdicts: [...p.matchAll(/"id": "(rp-\d+)"/g)].map((m) => ({ id: m[1], verdict: 'document-text', statement: '§6 row U5 now reads resolved' })), summary: 's' });
+    },
+  });
+  const out = await run(rt);
+  assert.equal(out.status, 'complete');
+  const amendments = out.ledger.filter((s) => s.kind === 'architecture-amendment');
+  assert.equal(amendments.length, 2, 'one per wave');
+  assert.equal(amendments[0].referent, '§6 U5');
+  assert.equal(amendments[0].disposition, 'recorded');
+  assert.deepEqual(out.digest.attention.architectureAmendments, ['§6 row U5 now reads resolved', '§6 row U5 now reads resolved']);
+  assert.match(out.ledger.find((s) => s.kind === 'verdict').statement, /rp-1 document-text: §6 row U5 now reads resolved/);
+});
+
 test('critique gate hits the hard cap: fixes on rounds 1-3, stop on round 4, no implement', async () => {
   const critical = ret({ findings: [{ severity: 'Critical', statement: 'bad', location: 'plan' }], systemic: false, summary: 's' });
   const { rt, labels } = runtime(twoWaves(), { 'critique-plan': () => critical });
@@ -411,6 +452,21 @@ test('a decision the re-plan cannot carry out stops before load, with both SHAs 
   assert.equal(out.escalation.plan_sha, 'decided1');
   assert.equal(out.escalation.pre_replan_sha, 'plan0');
   assert.ok(!labels().includes('load'));
+});
+
+test('a standing over-budget flag reported at decision-replan does not stop the relaunch', async () => {
+  const decisionsBlock = ['```yaml lsf-decisions', 'decisions:', '  - id: d1', '    date: 2026-09-12', '    question: q', '    decision: proceed', '```'].join('\n');
+  const { rt, labels } = runtime(twoWaves(), {
+    load: (p, o, u, st) => copied(st.plan, { decisionsBlock }),
+    'decision-replan': () => ret({ planSha: 'decided1', amendments: [], overBudget: [{ unit: 'B', disposition: 'flagged', statement: 'D7 stands' }],
+      verdicts: [{ id: 'd1', verdict: 'no-change', statement: 'D7 reaffirmed' }], summary: 's' }),
+  }, { decisions: [{ id: 'd1', question: 'q', decision: 'proceed, no split' }] });
+  const out = await run(rt);
+  assert.equal(out.status, 'complete', JSON.stringify(out.escalation?.signals));
+  assert.ok(labels().includes('plan:A'));
+  assert.deepEqual(out.ledger.filter((s) => s.wave === 0).map((s) => s.kind), ['verdict', 'over-budget-flagged']);
+  assert.equal(out.waves, 2);
+  assert.equal(out.digest.waves, 0, 'silent waves leave no ledger entries; wave 0 is not counted');
 });
 
 test('a null agent return is a stop', async () => {

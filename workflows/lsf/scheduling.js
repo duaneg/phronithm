@@ -371,7 +371,8 @@ function renderLedger(entries, wave) {
 // requester's attention on a run that did not stop: architecture notes,
 // unfixed Significant findings per unit, and units that showed distress.
 function digest(ledger) {
-  const waves = [...new Set(ledger.map((s) => s.wave).filter((w) => w !== undefined))].sort((a, b) => a - b);
+  // Wave 0 is the decision re-plan before load, not a wave of units.
+  const waves = [...new Set(ledger.map((s) => s.wave).filter((w) => w !== undefined && w > 0))].sort((a, b) => a - b);
   const unfixedSignificant = {};
   for (const s of ledger) {
     if (s.kind === 'finding' && /^Significant/.test(s.statement)) unfixedSignificant[s.unit] = (unfixedSignificant[s.unit] ?? 0) + 1;
@@ -383,6 +384,7 @@ function digest(ledger) {
     byDisposition: countBy(ledger, 'disposition'),
     attention: {
       architectureNotes: ledger.filter((s) => s.kind === 'architecture-note').map((s) => s.statement),
+      architectureAmendments: ledger.filter((s) => s.kind === 'architecture-amendment').map((s) => s.statement),
       unfixedSignificant,
       distressedUnits: [...new Set(ledger.filter((s) => s.kind === 'execution-distress').map((s) => s.unit))],
     },

@@ -272,13 +272,15 @@ test('digest counts by kind, source and disposition, and lists what needs attent
     signal({ kind: 'architecture-note', source: 'gate', stage: 'review-gate', wave: 2, statement: 'N3 has no owner', referent: '§6', disposition: 'recorded' }),
     rec('execution-distress', { unit: 'B', wave: 2 }),
     rec('execution-distress', { unit: 'B', wave: 2 }),
+    signal({ kind: 'verdict', source: 'reported', stage: 'decision-replan', wave: 0, statement: 'd1 amended', disposition: 'recorded' }),
   ];
   const d = digest(ledger);
-  assert.equal(d.waves, 2);
+  assert.equal(d.waves, 2, 'wave 0 (decision re-plan) is not counted');
   assert.equal(d.byKind.finding, 3);
-  assert.deepEqual(d.bySource, { reported: 3, gate: 4 });
-  assert.deepEqual(d.byDisposition, { recorded: 7 });
+  assert.deepEqual(d.bySource, { reported: 4, gate: 4 });
+  assert.deepEqual(d.byDisposition, { recorded: 8 });
   assert.deepEqual(d.attention.architectureNotes, ['N3 has no owner']);
+  assert.deepEqual(d.attention.architectureAmendments, []);
   assert.deepEqual(d.attention.unfixedSignificant, { A: 1, B: 1 });
   assert.deepEqual(d.attention.distressedUnits, ['B']);
   assert.match(d.note, /not evidence/);

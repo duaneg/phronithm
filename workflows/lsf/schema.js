@@ -11,7 +11,7 @@ const STOP_KINDS = Object.freeze([
   'plan-defect-unabsorbed', // re-plan: verdict `cannot`, or no verdict
   'done-condition-unevaluable',
   'cycle',
-  'unit-over-budget',
+  'unit-over-budget', // re-plan: over budget, neither extracted nor flagged with rationale
   'gate-non-convergence',
   'merge-conflict-unresolvable',
   'merge-regression',
@@ -37,8 +37,10 @@ const RECORD_KINDS = Object.freeze([
   'architecture-note', // gate: an observation short of an invalidation
   'claimed-disjoint-conflict', // merge: conflict between units the plan called disjoint, resolved mechanically
   'amendment', // re-plan: a plan amendment
-  'verdict', // re-plan: amended / no-change verdict on a re-plan item
-  'over-budget-repaired',
+  'verdict', // re-plan: amended / no-change / document-text verdict on a re-plan item
+  'architecture-amendment', // re-plan: a wording-only correction to the architecture document, no decision moved
+  'over-budget-repaired', // re-plan: a preceding design unit extracted
+  'over-budget-flagged', // re-plan: excess is wall-clock, not context; flagged with rationale
 ]);
 
 const SOURCES = Object.freeze(['structural', 'reported', 'gate']);
