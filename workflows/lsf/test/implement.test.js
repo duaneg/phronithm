@@ -157,6 +157,51 @@ test('a contradiction from implement stops the wave with an escalation record', 
   assert.ok(!l.includes('plan:B'));
 });
 
+const planDefect = (p, o, u) => ret({ branch: `plan-${u}`, sha: 'p', path: `docs/plans/${u}-plan.md`, planText: `plan for ${u}` },
+  { ambiguities: [{ statement: 'Scope omits CLAUDE.md', about: 'scope', level: 'plan', referent: `${u} Scope` }],
+    contradictions: [{ statement: 'Publishes names an extra member', level: 'plan', against: `docs/plans/f-breakdown.md@plan0 ${u} Publishes` }] });
+
+test('plan-level ambiguities and contradictions reach the re-plan with ids instead of stopping the wave', async () => {
+  const seen = [];
+  const { rt, calls, labels } = runtime(twoWaves(), {
+    plan: planDefect,
+    replan: (p, o, u, state) => {
+      seen.push(p);
+      state.plan = { ...state.plan, sha: `replan-x`, units: state.plan.units.map((x) => ({ ...x, complete: state.completed.has(x.id) })) };
+      const ids = [...p.matchAll(/"id": "(pd-\d+)"/g)].map((m) => m[1]);
+      return ret({ planSha: state.plan.sha, amendments: [], overBudget: [],
+        defects: ids.map((id, i) => ({ id, verdict: i ? 'no-change' : 'amended', statement: 'ok' })), summary: 'absorbed' });
+    },
+  });
+  const out = await run(rt);
+  assert.equal(out.status, 'complete', JSON.stringify(out.ledger.filter((s) => s.disposition === 'stopped')));
+  const l = labels();
+  assert.ok(l.includes('replan:w1') && l.includes('replan:w2'));
+  const w1 = calls.find((c) => c.label === 'replan:w1').prompt;
+  assert.match(w1, /Plan defects reported this wave[^]*"id": "pd-1"[^]*"kind": "plan-defect"[^]*"id": "pd-2"/);
+  assert.doesNotMatch(w1.split('Other recorded signals this wave')[1], /plan-defect/);
+  assert.ok(out.ledger.filter((s) => s.kind === 'plan-defect').every((s) => s.disposition === 'recorded'));
+  const merge = calls.find((c) => c.label === 'merge:w1').prompt;
+  assert.match(merge, /Already recorded by this wave's unit stages[^]*\[plan\] plan-defect: Scope omits CLAUDE.md/);
+});
+
+test('a plan defect the re-plan cannot absorb, or does not answer, stops after the re-plan', async () => {
+  for (const defects of [[{ id: 'pd-1', verdict: 'cannot', statement: 'needs the requester' }, { id: 'pd-2', verdict: 'amended', statement: 'fixed' }], []]) {
+    const { rt, labels } = runtime(twoWaves(), {
+      plan: planDefect,
+      replan: (p, o, u, state) => ret({ planSha: state.plan.sha, amendments: [], overBudget: [], defects, summary: 's' }),
+    });
+    const out = await run(rt);
+    assert.equal(out.status, 'stopped');
+    assert.equal(out.escalation.stage, 'replan');
+    const stops = out.ledger.filter((s) => s.disposition === 'stopped');
+    assert.deepEqual(stops.map((s) => s.kind), defects.length ? ['plan-defect-unabsorbed'] : ['plan-defect-unabsorbed', 'plan-defect-unabsorbed']);
+    assert.equal(stops[0].referent, 'A Scope');
+    assert.match(stops[0].statement, defects.length ? /cannot absorb: needs the requester — \[plan\] Scope omits CLAUDE.md/ : /no verdict — \[plan\] Scope omits CLAUDE.md/);
+    assert.ok(labels().includes('replan:w1') && !labels().includes('plan:B'));
+  }
+});
+
 test('a silent wave stops the run', async () => {
   const { rt } = runtime(twoWaves(), {
     implement: (p, o, u) => ret({

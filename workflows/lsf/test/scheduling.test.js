@@ -160,6 +160,29 @@ test('signalsFromStageReturn maps the shared fields by kind', () => {
   assert.equal(sigs[5].referent, 'docs/arch.md@abc');
 });
 
+test('signalsFromStageReturn: plan-level ambiguities and contradictions are plan defects; other levels keep their kind', () => {
+  const ret = {
+    result: {},
+    ambiguities: [
+      { statement: 'Scope omits CLAUDE.md', about: 'scope', level: 'plan', referent: 'unit B Scope' },
+      { statement: 'done condition is an outcome', about: 'requirement', level: 'plan', referent: 'unit B done condition' },
+      { statement: 'retry policy', about: 'design', level: 'plan', referent: 'unit B plan' },
+      { statement: 'which tenants', about: 'scope', level: 'architecture', referent: '§3' },
+      { statement: 'missing SLA', about: 'requirement', level: 'request', referent: 'request record' },
+    ],
+    contradictions: [
+      { statement: 'Publishes names a member §4.11 lacks', level: 'plan', against: 'docs/plans/f-breakdown.md@p1' },
+      { statement: 'arch says sync', level: 'architecture', against: 'docs/arch.md@abc' },
+    ],
+  };
+  const sigs = signalsFromStageReturn(ret, { stage: 'critique-plan', unit: 'B', wave: 1, source: 'gate' });
+  assert.deepEqual(sigs.map((s) => s.kind), [
+    'plan-defect', 'plan-defect', 'design-ambiguity', 'scope-ambiguity', 'requirement-incomplete', 'plan-defect', 'assumption-invalidated',
+  ]);
+  const ev = evaluateWave(sigs, [], { wave: 1, unitsInWave: 1 });
+  assert.deepEqual(ev.records.map((s) => s.kind), ['plan-defect', 'plan-defect', 'design-ambiguity', 'plan-defect']);
+});
+
 test('signalsFromStageReturn tolerates missing arrays', () => {
   assert.deepEqual(signalsFromStageReturn({ result: {} }, { stage: 'plan' }), []);
 });
@@ -223,25 +246,31 @@ test('a wave with units and no reported signal stops as silent', () => {
   assert.equal(empty.stop, false);
 });
 
-test('the same referent from two waves stops', () => {
-  const prior = [reported('assumption', { unit: 'A', wave: 1, referent: 'Auth Token Format' })];
-  const now = [reported('assumption', { unit: 'B', wave: 2, referent: 'auth token format ' })];
+test('the same referent from two waves stops, for open points and plan defects', () => {
+  const prior = [reported('scope-ambiguity', { unit: 'A', wave: 1, referent: 'Auth Token Format' })];
+  const now = [reported('plan-defect', { unit: 'B', wave: 2, referent: 'auth token format ' })];
   const v = volumeSignals(now, prior, { wave: 2, unitsInWave: 1 });
   assert.deepEqual(v.map((s) => s.kind), ['referent-recurrence']);
   assert.equal(v[0].referent, 'auth token format');
+  assert.doesNotMatch(v[0].statement, /sources/);
 });
 
-test('the same referent from two sources in one wave stops; one source in one wave does not', () => {
+test('recurrence ignores assumptions: read-only stages disclosing the same field is boilerplate', () => {
+  const prior = [reported('assumption', { unit: 'A', wave: 1, referent: 'commits field' })];
   const now = [
-    reported('assumption', { unit: 'B', wave: 1, referent: 'x' }),
-    signal({ kind: 'claimed-disjoint-conflict', source: 'structural', stage: 'merge', unit: 'B', wave: 1, statement: 's', referent: 'x' }),
+    reported('assumption', { unit: 'B', wave: 2, referent: 'commits field' }),
+    signal({ kind: 'assumption', source: 'gate', stage: 'review-gate', wave: 2, statement: 's', referent: 'commits field' }),
   ];
-  assert.deepEqual(volumeSignals(now, [], { wave: 1, unitsInWave: 1 }).map((s) => s.kind), ['referent-recurrence']);
-  const single = [
-    reported('assumption', { unit: 'B', wave: 1, referent: 'x' }),
-    reported('assumption', { unit: 'C', wave: 1, referent: 'x' }),
+  assert.deepEqual(volumeSignals(now, prior, { wave: 2, unitsInWave: 1 }), []);
+});
+
+test('the same referent from two sources in one wave does not recur', () => {
+  const now = [
+    reported('scope-ambiguity', { unit: 'B', wave: 1, referent: 'x' }),
+    signal({ kind: 'assumption-invalidated', source: 'gate', stage: 'review-gate', unit: 'B', wave: 1, statement: 's', referent: 'x' }),
+    reported('scope-ambiguity', { unit: 'C', wave: 1, referent: 'x' }),
   ];
-  assert.deepEqual(volumeSignals(single, [], { wave: 1, unitsInWave: 2 }), []);
+  assert.deepEqual(volumeSignals(now, [], { wave: 1, unitsInWave: 2 }), []);
 });
 
 test('recurrence only fires for referents this wave touched', () => {
@@ -267,6 +296,11 @@ test('per-stage signal threshold is configurable and counts one stage\'s open am
   // Disclosed assumptions and design ambiguities are not volume, however many.
   const disclosed = Array.from({ length: 8 }, (_, i) => reported(i % 2 ? 'assumption' : 'design-ambiguity', { unit: 'B', wave: 1, referent: `d${i}` }));
   assert.deepEqual(volumeSignals(disclosed, [], { wave: 1, unitsInWave: 1 }, { perStageSignalThreshold: 3 }), []);
+});
+
+test('plan defects do not count towards the per-stage threshold', () => {
+  const now = Array.from({ length: 8 }, (_, i) => reported('plan-defect', { unit: 'B', wave: 1, stage: 'plan', referent: `r${i}` }));
+  assert.deepEqual(volumeSignals(now, [], { wave: 1, unitsInWave: 1 }), []);
 });
 
 test('renderLedger is one table under a wave heading, one line per row, pipes and newlines neutralised', () => {
@@ -295,8 +329,8 @@ test('a referent that is only the signal\'s own unit id never recurs; an ambigui
     ambiguities: [{ statement: 'which order?', about: 'scope' }, { statement: 'what size?', about: 'scope', referent: 'Scene.fixture' }],
   }, { stage: 'plan', unit: 'B', wave: 1 });
   assert.deepEqual(sigs.map((s) => s.referent), ['which order?', 'Scene.fixture']);
-  const twoStages = [sigs[0], { ...sigs[0], source: 'gate', stage: 'review-gate' }];
-  assert.deepEqual(volumeSignals(twoStages, [], { wave: 1, unitsInWave: 1 }).map((s) => s.referent), ['which order?'], 'the statement is a referent that can recur');
+  const later = { ...sigs[0], wave: 2 };
+  assert.deepEqual(volumeSignals([later], [sigs[0]], { wave: 2, unitsInWave: 1 }).map((s) => s.referent), ['which order?'], 'the statement is a referent that can recur');
 });
 
 test('digest computes counts and the three trend flags', () => {

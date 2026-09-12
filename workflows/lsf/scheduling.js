@@ -211,7 +211,10 @@ const AMBIGUITY_KIND = {
 };
 
 // Map a stage's shared-schema fields into signals. `source` defaults to
-// 'reported'; gate agents (critique, review-gate) pass 'gate'. A null stage
+// 'reported'; gate agents (critique, review-gate) pass 'gate'. An ambiguity
+// or contradiction at plan level is a plan defect for the re-plan stage to
+// absorb, whatever its category; one with no level is taken as above the
+// plan. A null stage
 // return is a STOP the caller raises via nullReturnSignal.
 function signalsFromStageReturn(ret, { stage, unit, wave, source = 'reported' }) {
   const out = [];
@@ -222,10 +225,11 @@ function signalsFromStageReturn(ret, { stage, unit, wave, source = 'reported' })
   for (const a of ret.ambiguities ?? []) {
     // The category is not a referent; without one the statement stands in,
     // so recurrence never trips on 'scope' meeting 'scope'.
-    out.push(signal({ ...base, kind: AMBIGUITY_KIND[a.about] ?? 'scope-ambiguity', statement: a.statement, referent: a.referent || a.statement }));
+    const kind = a.level === 'plan' && a.about !== 'design' ? 'plan-defect' : (AMBIGUITY_KIND[a.about] ?? 'scope-ambiguity');
+    out.push(signal({ ...base, kind, statement: a.statement, referent: a.referent || a.statement }));
   }
   for (const c of ret.contradictions ?? []) {
-    out.push(signal({ ...base, kind: 'assumption-invalidated', statement: c.statement, referent: c.against }));
+    out.push(signal({ ...base, kind: c.level === 'plan' ? 'plan-defect' : 'assumption-invalidated', statement: c.statement, referent: c.against }));
   }
   return out;
 }
@@ -297,18 +301,27 @@ function normaliseReferent(r) {
 // the disclosed choices.
 const VOLUME_KINDS = Object.freeze(['scope-ambiguity', 'goal-ambiguity', 'requirement-incomplete', 'requirement-contradictory', 'assumption-invalidated']);
 
+// Kinds whose referent can recur: the open points and plan defects. Disclosed
+// assumptions are excluded — several read-only stages disclosing the same
+// thing about the same field is boilerplate, not a finding that will not go
+// away.
+const RECURRENCE_KINDS = Object.freeze([...VOLUME_KINDS, 'plan-defect']);
+
 // Volume rules over this wave's signals and the ledger so far. Content-blind:
 // counting only.
 function volumeSignals(waveSignals, prior, { wave, unitsInWave }, config = DEFAULT_CONFIG) {
   const cfg = { ...DEFAULT_CONFIG, ...config };
   const out = [];
 
-  // Same referent from two waves or two sources. A signal whose referent is
-  // just its own unit id names nothing in particular (distress, exit
-  // criteria, volume signals) and does not take part.
+  // Same referent from two waves. Within one wave the gate is handed the
+  // unit stages' signals and asked whether it agrees, so a second source
+  // naming the same referent is the design working, not recurrence. A signal
+  // whose referent is just its own unit id names nothing in particular
+  // (distress, exit criteria, volume signals) and does not take part.
   const all = [...prior, ...waveSignals];
   const byReferent = new Map();
   for (const s of all) {
+    if (!RECURRENCE_KINDS.includes(s.kind)) continue;
     const key = normaliseReferent(s.referent);
     if (!key || key === normaliseReferent(s.unit)) continue;
     if (!byReferent.has(key)) byReferent.set(key, []);
@@ -317,11 +330,10 @@ function volumeSignals(waveSignals, prior, { wave, unitsInWave }, config = DEFAU
   for (const [key, sigs] of byReferent) {
     if (!sigs.some((s) => waveSignals.includes(s))) continue; // only fire when this wave touched it
     const waves = new Set(sigs.map((s) => s.wave));
-    const sources = new Set(sigs.map((s) => s.source));
-    if (waves.size > 1 || sources.size > 1) {
+    if (waves.size > 1) {
       out.push(signal({
         kind: 'referent-recurrence', source: 'structural', stage: 'stop-rule', wave,
-        statement: `referent named ${sigs.length} times across waves ${[...waves].join(',')} and sources ${[...sources].join(',')}`,
+        statement: `referent named ${sigs.length} times across waves ${[...waves].join(',')}`,
         referent: key,
       }));
     }
@@ -331,7 +343,8 @@ function volumeSignals(waveSignals, prior, { wave, unitsInWave }, config = DEFAU
   // passes through many stages in a wave; the count that means something is
   // one stage's, not the sum. Disclosed assumptions and design ambiguities
   // are the prompts asking for a record and do not count: a plan that lists
-  // its choices is the healthy case.
+  // its choices is the healthy case. Plan defects do not count either: the
+  // re-plan stage absorbs them, and one it cannot absorb stops on its own.
   const perStage = new Map();
   for (const s of waveSignals) {
     if (s.source !== 'reported' || !s.unit) continue;

@@ -10,6 +10,10 @@ test('stageSchema wraps a result schema with the shared fields', () => {
   assert.deepEqual(s.required, ['result', ...STAGE_COMMON_REQUIRED]);
   for (const r of s.required) assert.ok(r in s.properties, `${r} declared`);
   assert.deepEqual(s.properties.ambiguities.items.properties.about.enum, ['scope', 'goal', 'requirement', 'design']);
+  assert.deepEqual(s.properties.ambiguities.items.properties.level.enum, ['plan', 'architecture', 'request']);
+  assert.deepEqual(s.properties.contradictions.items.properties.level.enum, ['plan', 'architecture', 'request']);
+  assert.ok(s.properties.ambiguities.items.required.includes('level'));
+  assert.ok(s.properties.contradictions.items.required.includes('level'));
 });
 
 test('stageSchema rejects a non-object result schema', () => {

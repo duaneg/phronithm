@@ -140,9 +140,9 @@ loop:
   results = parallel(ready.map(unit => runUnit(unit, plan.sha)))   // barrier
   merged  = merge(results, in plan execution order)               // agent, sequential
   signals = structural(results, merged) ∪ reported(results, merged)
-  if any signal is STOP: return escalation(signals, plan.sha)
-  plan    = replan(plan, results.reports, merged.conflicts, signals)  // agent, commits
-  if replan yields STOP signal: return escalation(...)
+  if any signal is STOP: return escalation(signals, plan.sha)         // plan defects are RECORD
+  plan    = replan(plan, results.reports, merged.conflicts, signals)  // agent, commits; a verdict per plan defect
+  if replan yields STOP signal, or leaves a plan defect unabsorbed: return escalation(...)
 ```
 
 **The script reads only the dependency graph, and reads it from a block.**
@@ -211,9 +211,12 @@ In descending reliability:
    probe failing against its pin.
 2. **Reported** — mandatory fields in every stage's return schema (below). Each
    agent must state what it assumed, what it found ambiguous, and what it saw
-   that contradicts the architecture document or the request record. Forced
-   fields beat volunteered remarks; they also invite boilerplate, which the
-   measurement plan addresses. The re-plan agent's size-budget verdicts belong
+   that contradicts the architecture document, the request record, or the
+   plan. Every ambiguity and contradiction carries a level — `plan`,
+   `architecture`, or `request` — naming which document leaves the point
+   open or is contradicted; the stop rule reads the level, not the category.
+   Forced fields beat volunteered remarks; they also invite boilerplate, which
+   the measurement plan addresses. The re-plan agent's size-budget verdicts belong
    here too: breakdown defines the budget by judged load factors, not a
    mechanical threshold.
 3. **Gate agents** — the critique gate and the LSF review-gate questions run as
@@ -229,14 +232,22 @@ RECORD (autonomous; amend the plan, note in Plan Maintenance, continue):
 anything the re-plan can absorb — a deferral, a scope reassignment, a new
 edge, a claimed-disjoint conflict resolved mechanically, an over-budget unit
 repaired by extracting a preceding `design` unit or flagged with wall-clock
-rationale — breakdown's two sanctioned repairs.
+rationale — breakdown's two sanctioned repairs; and every ambiguity or
+contradiction reported at plan level (a Scope, Publishes, or done-condition
+line, a dependency, the execution order), whatever its category. These
+reach the re-plan stage as plan defects with ids, and the re-plan returns a
+verdict for each: amended, no change needed (citing what in the plan answers
+it), or cannot absorb.
 
 STOP (return an escalation record): anything above the plan —
 
 - an assumption in the architecture document or request record reported
   invalidated, by any source;
-- a requirement reported contradictory or incomplete;
-- scope or goal ambiguity reported by any stage;
+- a requirement in the architecture document or request record reported
+  contradictory or incomplete;
+- scope or goal ambiguity in the architecture document or request record,
+  reported by any stage;
+- a plan defect the re-plan cannot absorb, or gives no verdict on;
 - a done condition that cannot be evaluated as written;
 - a re-plan producing a cycle, or a unit over budget that extraction cannot
   repair;
@@ -259,12 +270,17 @@ need no detection quality, only counting:
   (context near exhaustion, three or more mid-implementation design
   decisions, four or more deviations and deferrals; thresholds in the
   scheduling config);
-- the same referent named in signals from two different waves or two
-  different sources — a referent that is only the signal's own unit id does
-  not count, and an ambiguity with no referent uses its statement;
+- the same referent named in open ambiguities, contradictions, or plan
+  defects from two different waves — a referent that is only the signal's own
+  unit id does not count, and an ambiguity with no referent uses its
+  statement. Disclosed assumptions do not take part (several read-only stages
+  disclosing the same thing about the same field is boilerplate), and a
+  second source in the same wave is not recurrence: the gate is handed the
+  unit stages' signals and asked whether it agrees;
 - one stage's open ambiguities and contradictions for one unit exceeding a
-  threshold set in the workflow's arguments — disclosed assumptions and design
-  ambiguities do not count, since the prompts ask for them;
+  threshold set in the workflow's arguments — disclosed assumptions, design
+  ambiguities, and plan defects do not count: the prompts ask for the first
+  two, and the re-plan absorbs the third;
 - a wave in which no stage reports any assumption, ambiguity, or contradiction
   — silence across a whole wave is more likely under-reporting than
   cleanliness, given the recall figures above.

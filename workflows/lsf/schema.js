@@ -13,6 +13,7 @@ const STOP_KINDS = Object.freeze([
   'done-condition-unevaluable',
   'cycle',
   'unit-over-budget',
+  'plan-defect-unabsorbed',
   'gate-non-convergence',
   'merge-conflict-unresolvable',
   'environment-gate-drift',
@@ -33,6 +34,7 @@ const STOP_KINDS = Object.freeze([
 const RECORD_KINDS = Object.freeze([
   'assumption',
   'design-ambiguity',
+  'plan-defect',
   'deferral',
   'scope-reassignment',
   'new-edge',
@@ -45,6 +47,12 @@ const RECORD_KINDS = Object.freeze([
 const SOURCES = Object.freeze(['structural', 'reported', 'gate']);
 
 const AMBIGUITY_ABOUT = Object.freeze(['scope', 'goal', 'requirement', 'design']);
+
+// Which document an ambiguity or contradiction is about. The decomposition
+// plan (a unit entry, its Scope or Publishes line, its done condition, the
+// execution order) is the re-plan stage's to amend; the architecture document
+// and the request record are above the plan.
+const SIGNAL_LEVELS = Object.freeze(['plan', 'architecture', 'request']);
 
 const GATE_KINDS = Object.freeze(['environment', 'organisational', 'release', 'data']);
 
@@ -69,9 +77,10 @@ const STAGE_COMMON_PROPERTIES = Object.freeze({
       properties: {
         statement: { type: 'string' },
         about: { type: 'string', enum: AMBIGUITY_ABOUT },
+        level: { type: 'string', enum: SIGNAL_LEVELS, description: 'Which document leaves the point open: the decomposition plan or unit entry (plan), the architecture document, or the request record' },
         referent: { type: 'string', description: 'What the ambiguity concerns: a document section, symbol, unit, or gate' },
       },
-      required: ['statement', 'about', 'referent'],
+      required: ['statement', 'about', 'level', 'referent'],
     },
   },
   contradictions: {
@@ -80,9 +89,10 @@ const STAGE_COMMON_PROPERTIES = Object.freeze({
       type: 'object',
       properties: {
         statement: { type: 'string' },
+        level: { type: 'string', enum: SIGNAL_LEVELS, description: 'Which document is contradicted: the decomposition plan or unit entry (plan), the architecture document, or the request record' },
         against: { type: 'string', description: 'Document path and commit SHA' },
       },
-      required: ['statement', 'against'],
+      required: ['statement', 'level', 'against'],
     },
   },
   commits: {
@@ -221,7 +231,7 @@ function escalation({ workflow, planSha, wave, stage, signals, decisionNeeded })
 }
 
 export {
-  STOP_KINDS, RECORD_KINDS, SOURCES, AMBIGUITY_ABOUT, GATE_KINDS, UNIT_TYPES,
+  STOP_KINDS, RECORD_KINDS, SOURCES, AMBIGUITY_ABOUT, SIGNAL_LEVELS, GATE_KINDS, UNIT_TYPES,
   STAGE_COMMON_PROPERTIES, STAGE_COMMON_REQUIRED, stageSchema,
   PLAN_SCHEMA, MERGE_RESULT_SCHEMA, DISTRESS_SCHEMA,
   signal, escalation,

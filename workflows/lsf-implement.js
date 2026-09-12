@@ -33,6 +33,7 @@ const STOP_KINDS = Object.freeze([
   'done-condition-unevaluable',
   'cycle',
   'unit-over-budget',
+  'plan-defect-unabsorbed',
   'gate-non-convergence',
   'merge-conflict-unresolvable',
   'environment-gate-drift',
@@ -53,6 +54,7 @@ const STOP_KINDS = Object.freeze([
 const RECORD_KINDS = Object.freeze([
   'assumption',
   'design-ambiguity',
+  'plan-defect',
   'deferral',
   'scope-reassignment',
   'new-edge',
@@ -65,6 +67,12 @@ const RECORD_KINDS = Object.freeze([
 const SOURCES = Object.freeze(['structural', 'reported', 'gate']);
 
 const AMBIGUITY_ABOUT = Object.freeze(['scope', 'goal', 'requirement', 'design']);
+
+// Which document an ambiguity or contradiction is about. The decomposition
+// plan (a unit entry, its Scope or Publishes line, its done condition, the
+// execution order) is the re-plan stage's to amend; the architecture document
+// and the request record are above the plan.
+const SIGNAL_LEVELS = Object.freeze(['plan', 'architecture', 'request']);
 
 const GATE_KINDS = Object.freeze(['environment', 'organisational', 'release', 'data']);
 
@@ -89,9 +97,10 @@ const STAGE_COMMON_PROPERTIES = Object.freeze({
       properties: {
         statement: { type: 'string' },
         about: { type: 'string', enum: AMBIGUITY_ABOUT },
+        level: { type: 'string', enum: SIGNAL_LEVELS, description: 'Which document leaves the point open: the decomposition plan or unit entry (plan), the architecture document, or the request record' },
         referent: { type: 'string', description: 'What the ambiguity concerns: a document section, symbol, unit, or gate' },
       },
-      required: ['statement', 'about', 'referent'],
+      required: ['statement', 'about', 'level', 'referent'],
     },
   },
   contradictions: {
@@ -100,9 +109,10 @@ const STAGE_COMMON_PROPERTIES = Object.freeze({
       type: 'object',
       properties: {
         statement: { type: 'string' },
+        level: { type: 'string', enum: SIGNAL_LEVELS, description: 'Which document is contradicted: the decomposition plan or unit entry (plan), the architecture document, or the request record' },
         against: { type: 'string', description: 'Document path and commit SHA' },
       },
-      required: ['statement', 'against'],
+      required: ['statement', 'level', 'against'],
     },
   },
   commits: {
@@ -806,7 +816,10 @@ const AMBIGUITY_KIND = {
 };
 
 // Map a stage's shared-schema fields into signals. `source` defaults to
-// 'reported'; gate agents (critique, review-gate) pass 'gate'. A null stage
+// 'reported'; gate agents (critique, review-gate) pass 'gate'. An ambiguity
+// or contradiction at plan level is a plan defect for the re-plan stage to
+// absorb, whatever its category; one with no level is taken as above the
+// plan. A null stage
 // return is a STOP the caller raises via nullReturnSignal.
 function signalsFromStageReturn(ret, { stage, unit, wave, source = 'reported' }) {
   const out = [];
@@ -817,10 +830,11 @@ function signalsFromStageReturn(ret, { stage, unit, wave, source = 'reported' })
   for (const a of ret.ambiguities ?? []) {
     // The category is not a referent; without one the statement stands in,
     // so recurrence never trips on 'scope' meeting 'scope'.
-    out.push(signal({ ...base, kind: AMBIGUITY_KIND[a.about] ?? 'scope-ambiguity', statement: a.statement, referent: a.referent || a.statement }));
+    const kind = a.level === 'plan' && a.about !== 'design' ? 'plan-defect' : (AMBIGUITY_KIND[a.about] ?? 'scope-ambiguity');
+    out.push(signal({ ...base, kind, statement: a.statement, referent: a.referent || a.statement }));
   }
   for (const c of ret.contradictions ?? []) {
-    out.push(signal({ ...base, kind: 'assumption-invalidated', statement: c.statement, referent: c.against }));
+    out.push(signal({ ...base, kind: c.level === 'plan' ? 'plan-defect' : 'assumption-invalidated', statement: c.statement, referent: c.against }));
   }
   return out;
 }
@@ -892,18 +906,27 @@ function normaliseReferent(r) {
 // the disclosed choices.
 const VOLUME_KINDS = Object.freeze(['scope-ambiguity', 'goal-ambiguity', 'requirement-incomplete', 'requirement-contradictory', 'assumption-invalidated']);
 
+// Kinds whose referent can recur: the open points and plan defects. Disclosed
+// assumptions are excluded — several read-only stages disclosing the same
+// thing about the same field is boilerplate, not a finding that will not go
+// away.
+const RECURRENCE_KINDS = Object.freeze([...VOLUME_KINDS, 'plan-defect']);
+
 // Volume rules over this wave's signals and the ledger so far. Content-blind:
 // counting only.
 function volumeSignals(waveSignals, prior, { wave, unitsInWave }, config = DEFAULT_CONFIG) {
   const cfg = { ...DEFAULT_CONFIG, ...config };
   const out = [];
 
-  // Same referent from two waves or two sources. A signal whose referent is
-  // just its own unit id names nothing in particular (distress, exit
-  // criteria, volume signals) and does not take part.
+  // Same referent from two waves. Within one wave the gate is handed the
+  // unit stages' signals and asked whether it agrees, so a second source
+  // naming the same referent is the design working, not recurrence. A signal
+  // whose referent is just its own unit id names nothing in particular
+  // (distress, exit criteria, volume signals) and does not take part.
   const all = [...prior, ...waveSignals];
   const byReferent = new Map();
   for (const s of all) {
+    if (!RECURRENCE_KINDS.includes(s.kind)) continue;
     const key = normaliseReferent(s.referent);
     if (!key || key === normaliseReferent(s.unit)) continue;
     if (!byReferent.has(key)) byReferent.set(key, []);
@@ -912,11 +935,10 @@ function volumeSignals(waveSignals, prior, { wave, unitsInWave }, config = DEFAU
   for (const [key, sigs] of byReferent) {
     if (!sigs.some((s) => waveSignals.includes(s))) continue; // only fire when this wave touched it
     const waves = new Set(sigs.map((s) => s.wave));
-    const sources = new Set(sigs.map((s) => s.source));
-    if (waves.size > 1 || sources.size > 1) {
+    if (waves.size > 1) {
       out.push(signal({
         kind: 'referent-recurrence', source: 'structural', stage: 'stop-rule', wave,
-        statement: `referent named ${sigs.length} times across waves ${[...waves].join(',')} and sources ${[...sources].join(',')}`,
+        statement: `referent named ${sigs.length} times across waves ${[...waves].join(',')}`,
         referent: key,
       }));
     }
@@ -926,7 +948,8 @@ function volumeSignals(waveSignals, prior, { wave, unitsInWave }, config = DEFAU
   // passes through many stages in a wave; the count that means something is
   // one stage's, not the sum. Disclosed assumptions and design ambiguities
   // are the prompts asking for a record and do not count: a plan that lists
-  // its choices is the healthy case.
+  // its choices is the healthy case. Plan defects do not count either: the
+  // re-plan stage absorbs them, and one it cannot absorb stops on its own.
   const perStage = new Map();
   for (const s of waveSignals) {
     if (s.source !== 'reported' || !s.unit) continue;
@@ -1161,12 +1184,17 @@ const GATE_SCHEMA = stageSchema(obj({
   exitCriteria: arr(obj({ unit: str, met: bool, statement: str })),
 }));
 
-const AMENDMENT_KINDS = RECORD_KINDS.filter((k) => !['assumption', 'design-ambiguity'].includes(k));
+const AMENDMENT_KINDS = RECORD_KINDS.filter((k) => !['assumption', 'design-ambiguity', 'plan-defect'].includes(k));
 
 const REPLAN_SCHEMA = stageSchema(obj({
   planSha: { ...str, description: 'Plan SHA after the amendments were committed; the plan SHA given when nothing changed' },
   amendments: arr(obj({ kind: { type: 'string', enum: AMENDMENT_KINDS }, unit: str, statement: str })),
   overBudget: arr(obj({ unit: str, repaired: bool, statement: str })),
+  defects: arr(obj({
+    id: str,
+    verdict: { type: 'string', enum: ['amended', 'no-change', 'cannot'] },
+    statement: { ...str, description: 'What was amended, why the plan already answers it, or why the plan cannot absorb it' },
+  })),
   summary: str,
 }));
 
@@ -1185,7 +1213,7 @@ const SCRIBE_SCHEMA = stageSchema(obj({ path: str, sha: str }));
 // ---------------------------------------------------------------- prompts
 
 const RETURN_FIELDS = `
-Besides \`result\`, return: \`assumptions\` — each thing you took as given that the inputs do not state, with the referent it concerns; \`ambiguities\` — each point where the architecture document, the request record, the decomposition plan, or the unit entry leaves open what is built, in what order, or with what scope, classified as scope, goal, requirement, or design, with the referent it concerns (a section, symbol, unit, or gate). Only those documents can be ambiguous. An open point in these instructions, in the return schema, or in how to report (which enum value fits, how many commits, whether a template field applies) is not an ambiguity: resolve it the plainest way and record it as an assumption. No item goes under both; \`contradictions\` — each thing you observed that contradicts the architecture document, the request record, or the unit entry, citing the document path and SHA; \`commits\` — every commit you made, branch and SHA. Empty arrays are valid. Do not pad them and do not omit a real one. An item already listed under "Already recorded" in these instructions is in the ledger: do not report it again in any field, in any wording; report only what is new. The return is one flat object with these four fields beside \`result\`, never inside it.`;
+Besides \`result\`, return: \`assumptions\` — each thing you took as given that the inputs do not state, with the referent it concerns; \`ambiguities\` — each point where the architecture document, the request record, the decomposition plan, or the unit entry leaves open what is built, in what order, or with what scope, classified as scope, goal, requirement, or design, with the referent it concerns (a section, symbol, unit, or gate) and its level: \`plan\` when the decomposition plan or the unit entry is what leaves the point open (a Scope, Publishes, or done-condition line, a dependency, the execution order), \`architecture\` or \`request\` when that document does. Only those documents can be ambiguous. An open point in these instructions, in the return schema, or in how to report (which enum value fits, how many commits, whether a template field applies) is not an ambiguity: resolve it the plainest way and record it as an assumption. No item goes under both; \`contradictions\` — each thing you observed that contradicts the architecture document, the request record, or the unit entry, citing the document path and SHA, with the same level field naming which of the three is contradicted. Plan-level items are amended by the re-plan stage and do not stop the run; a plan defect is not evidence against the architecture or the request unless those documents themselves say otherwise; \`commits\` — every commit you made, branch and SHA. Empty arrays are valid. Do not pad them and do not omit a real one. An item already listed under "Already recorded" in these instructions is in the ledger: do not report it again in any field, in any wording; report only what is new. The return is one flat object with these four fields beside \`result\`, never inside it.`;
 
 function header(ctx, plan) {
   const lines = [
@@ -1361,7 +1389,7 @@ ${JSON.stringify(review, null, 2)}
 ${RETURN_FIELDS}`;
 }
 
-function mergePrompt(ctx, plan, wave, merges) {
+function mergePrompt(ctx, plan, wave, merges, waveSignals) {
   return `${header(ctx, plan)}
 
 You are in the main checkout on ${ctx.integrationBranch}. Merge each unit branch below into ${ctx.integrationBranch}, in exactly this order, with a merge commit each (\`git merge --no-ff\`). For each unit report clean, resolved, unresolvable, or regressed, with the files involved and the merge SHA. Resolve a conflict only when the resolution is mechanical — both sides' changes apply without judgement about intent; otherwise abort that merge (\`git merge --abort\`), report it unresolvable, and continue with the next unit. Run the project's gates after each merge — the test suite and whatever else the project's own instructions name as a gate (linters, type checks). If a gate fails after a clean or resolved merge, undo that merge (\`git reset --hard\` to the pre-merge tip of ${ctx.integrationBranch}), report the unit as regressed with the failing test files, and continue with the next unit.
@@ -1369,7 +1397,7 @@ You are in the main checkout on ${ctx.integrationBranch}. Merge each unit branch
 Then, for every unit merged clean or resolved, record a Plan Maintenance completion entry in ${plan.path} naming its completion report and set \`complete: true\` on that unit in the plan's \`\`\`yaml lsf-plan block; commit on ${ctx.integrationBranch} and return the new plan SHA. Do not amend anything else in the plan.
 
 Wave ${wave} merge order:
-${merges.map((m) => `- ${m.unit}: branch ${m.branch} (completion report ${m.completionPath})`).join('\n')}
+${merges.map((m) => `- ${m.unit}: branch ${m.branch} (completion report ${m.completionPath})`).join('\n')}${priorBlock(waveSignals, 'by this wave\'s unit stages')}
 ${RETURN_FIELDS}`;
 }
 
@@ -1384,15 +1412,18 @@ How this workflow runs, so you do not report its design as a defect: each unit's
 ${RETURN_FIELDS}`;
 }
 
-function replanPrompt(ctx, plan, wave, merged, conflicts, recorded) {
+function replanPrompt(ctx, plan, wave, merged, conflicts, recorded, defects) {
   return `${header(ctx, plan)}
 
 You are in the main checkout on ${ctx.integrationBranch}. Run the phronithm:breakdown skill in re-plan mode over ${plan.path} with the completion reports of wave ${wave}: ${merged.map((m) => m.completionPath).join(', ')}. Diff their deviations, deferrals, and discoveries against every remaining unit's scope, dependencies, and done condition; amend the plan; re-run the quality check over the remaining units, examining the size budget first where a completed unit showed distress; record every amendment in Plan Maintenance. Treat each merge conflict below between units the plan claimed disjoint as a plan defect: record it and add the missing edge or scope correction.
 
-Merge conflicts: ${conflicts.length ? JSON.stringify(conflicts, null, 2) : 'none'}
-Recorded signals this wave: ${recorded.length ? JSON.stringify(recorded, null, 2) : 'none'}
+Plan defects reported this wave — ambiguities and contradictions the stages laid at the plan's or a unit entry's door. Each is yours to absorb: amend the plan (a Scope or Publishes line, a done condition, an edge, the execution order), or show the plan as it stands already answers it. Return a verdict for every id: \`amended\`, \`no-change\` (with what in the plan answers it), or \`cannot\` (with why the plan cannot absorb it — the answer lies in the architecture document or the request record, or needs the requester). An id you do not answer is treated as \`cannot\`.
+${defects.length ? JSON.stringify(defects, null, 2) : 'none'}
 
-Every amendment to a unit's type, dependencies, scope, publishes, gates, or completion, and to the execution order, is made in both the unit's entry and the plan's \`\`\`yaml lsf-plan block, which must agree; the script reads the block. Commit the amended plan on ${ctx.integrationBranch}. Return the new plan SHA; each amendment with its kind (${AMENDMENT_KINDS.join(', ')}), unit, and statement; and every remaining unit over its size budget with whether you repaired it by extracting a preceding design unit or flagging wall-clock rationale. Do not answer whether the architecture document still stands — a separate stage does that. Do not select or execute any unit.
+Merge conflicts: ${conflicts.length ? JSON.stringify(conflicts, null, 2) : 'none'}
+Other recorded signals this wave: ${recorded.length ? JSON.stringify(recorded, null, 2) : 'none'}
+
+Every amendment to a unit's type, dependencies, scope, publishes, gates, or completion, and to the execution order, is made in both the unit's entry and the plan's \`\`\`yaml lsf-plan block, which must agree; the script reads the block. Commit the amended plan on ${ctx.integrationBranch}. Return the new plan SHA; each amendment with its kind (${AMENDMENT_KINDS.join(', ')}), unit, and statement; a verdict per plan defect id; and every remaining unit over its size budget with whether you repaired it by extracting a preceding design unit or flagging wall-clock rationale. Do not answer whether the architecture document still stands — a separate stage does that. Do not select or execute any unit.
 ${RETURN_FIELDS}`;
 }
 
@@ -1769,7 +1800,7 @@ async function run(rt) {
     let merged = [];
     let conflicts = [];
     if (order.length) {
-      const m = await agent(mergePrompt(ctx, plan, wave, order), { label: `merge:w${wave}`, ...tier(ctx, 'default'), phase: 'Merge', schema: MERGE_SCHEMA });
+      const m = await agent(mergePrompt(ctx, plan, wave, order, waveSignals), { label: `merge:w${wave}`, ...tier(ctx, 'default'), phase: 'Merge', schema: MERGE_SCHEMA });
       if (!m) {
         waveSignals.push(nullReturnSignal({ stage: 'merge', wave }));
       } else {
@@ -1816,15 +1847,29 @@ async function run(rt) {
     log(`wave ${wave}: merged ${merged.map((r) => r.unit).join(', ') || 'nothing'}; ${conflicts.length} conflict(s); ${evalA.records.length} recorded, ${evalA.stops.length} stop signal(s)`);
     if (evalA.stop) return stopped('wave', evalA.stops, evalA.records);
 
-    // Re-plan from the wave's completion reports.
-    const recorded = evalA.records.map(({ unit, stage, kind, statement, referent }) => ({ unit, stage, kind, statement, referent }));
-    const rp = await agent(replanPrompt(ctx, plan, wave, merged, conflicts, recorded), { label: `replan:w${wave}`, ...tier(ctx, 'planning'), phase: 'Re-plan', schema: REPLAN_SCHEMA });
+    // Re-plan from the wave's completion reports. Plan defects go in with
+    // ids; one the re-plan cannot absorb, or does not answer, is a stop.
+    const flat = ({ unit, stage, kind, statement, referent }) => ({ unit, stage, kind, statement, referent });
+    const defectSignals = evalA.records.filter((s) => s.kind === 'plan-defect');
+    const defects = defectSignals.map((s, i) => ({ id: `pd-${i + 1}`, ...flat(s) }));
+    const recorded = evalA.records.filter((s) => s.kind !== 'plan-defect').map(flat);
+    const rp = await agent(replanPrompt(ctx, plan, wave, merged, conflicts, recorded, defects), { label: `replan:w${wave}`, ...tier(ctx, 'planning'), phase: 'Re-plan', schema: REPLAN_SCHEMA });
     const replanSignals = [];
     let nextPlan = plan;
     if (!rp) {
       replanSignals.push(nullReturnSignal({ stage: 'replan', wave }));
     } else {
       replanSignals.push(...signalsFromStageReturn(rp, { stage: 'replan', wave }));
+      const verdicts = new Map((rp.result.defects ?? []).map((d) => [d.id, d]));
+      defects.forEach((d, i) => {
+        const v = verdicts.get(d.id);
+        if (v && v.verdict !== 'cannot') return;
+        replanSignals.push(signal({
+          kind: 'plan-defect-unabsorbed', source: 'reported', stage: 'replan', unit: d.unit, wave,
+          statement: `${v ? `re-plan cannot absorb: ${v.statement}` : 're-plan gave no verdict'} — [${d.stage}] ${d.statement}`,
+          referent: defectSignals[i].referent,
+        }));
+      });
       for (const a of rp.result.amendments) {
         replanSignals.push(signal({ kind: a.kind, source: 'reported', stage: 'replan', unit: a.unit, wave, statement: a.statement, referent: a.unit }));
       }

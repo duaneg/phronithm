@@ -139,12 +139,17 @@ const GATE_SCHEMA = stageSchema(obj({
   exitCriteria: arr(obj({ unit: str, met: bool, statement: str })),
 }));
 
-const AMENDMENT_KINDS = RECORD_KINDS.filter((k) => !['assumption', 'design-ambiguity'].includes(k));
+const AMENDMENT_KINDS = RECORD_KINDS.filter((k) => !['assumption', 'design-ambiguity', 'plan-defect'].includes(k));
 
 const REPLAN_SCHEMA = stageSchema(obj({
   planSha: { ...str, description: 'Plan SHA after the amendments were committed; the plan SHA given when nothing changed' },
   amendments: arr(obj({ kind: { type: 'string', enum: AMENDMENT_KINDS }, unit: str, statement: str })),
   overBudget: arr(obj({ unit: str, repaired: bool, statement: str })),
+  defects: arr(obj({
+    id: str,
+    verdict: { type: 'string', enum: ['amended', 'no-change', 'cannot'] },
+    statement: { ...str, description: 'What was amended, why the plan already answers it, or why the plan cannot absorb it' },
+  })),
   summary: str,
 }));
 
@@ -163,7 +168,7 @@ const SCRIBE_SCHEMA = stageSchema(obj({ path: str, sha: str }));
 // ---------------------------------------------------------------- prompts
 
 const RETURN_FIELDS = `
-Besides \`result\`, return: \`assumptions\` — each thing you took as given that the inputs do not state, with the referent it concerns; \`ambiguities\` — each point where the architecture document, the request record, the decomposition plan, or the unit entry leaves open what is built, in what order, or with what scope, classified as scope, goal, requirement, or design, with the referent it concerns (a section, symbol, unit, or gate). Only those documents can be ambiguous. An open point in these instructions, in the return schema, or in how to report (which enum value fits, how many commits, whether a template field applies) is not an ambiguity: resolve it the plainest way and record it as an assumption. No item goes under both; \`contradictions\` — each thing you observed that contradicts the architecture document, the request record, or the unit entry, citing the document path and SHA; \`commits\` — every commit you made, branch and SHA. Empty arrays are valid. Do not pad them and do not omit a real one. An item already listed under "Already recorded" in these instructions is in the ledger: do not report it again in any field, in any wording; report only what is new. The return is one flat object with these four fields beside \`result\`, never inside it.`;
+Besides \`result\`, return: \`assumptions\` — each thing you took as given that the inputs do not state, with the referent it concerns; \`ambiguities\` — each point where the architecture document, the request record, the decomposition plan, or the unit entry leaves open what is built, in what order, or with what scope, classified as scope, goal, requirement, or design, with the referent it concerns (a section, symbol, unit, or gate) and its level: \`plan\` when the decomposition plan or the unit entry is what leaves the point open (a Scope, Publishes, or done-condition line, a dependency, the execution order), \`architecture\` or \`request\` when that document does. Only those documents can be ambiguous. An open point in these instructions, in the return schema, or in how to report (which enum value fits, how many commits, whether a template field applies) is not an ambiguity: resolve it the plainest way and record it as an assumption. No item goes under both; \`contradictions\` — each thing you observed that contradicts the architecture document, the request record, or the unit entry, citing the document path and SHA, with the same level field naming which of the three is contradicted. Plan-level items are amended by the re-plan stage and do not stop the run; a plan defect is not evidence against the architecture or the request unless those documents themselves say otherwise; \`commits\` — every commit you made, branch and SHA. Empty arrays are valid. Do not pad them and do not omit a real one. An item already listed under "Already recorded" in these instructions is in the ledger: do not report it again in any field, in any wording; report only what is new. The return is one flat object with these four fields beside \`result\`, never inside it.`;
 
 function header(ctx, plan) {
   const lines = [
@@ -339,7 +344,7 @@ ${JSON.stringify(review, null, 2)}
 ${RETURN_FIELDS}`;
 }
 
-function mergePrompt(ctx, plan, wave, merges) {
+function mergePrompt(ctx, plan, wave, merges, waveSignals) {
   return `${header(ctx, plan)}
 
 You are in the main checkout on ${ctx.integrationBranch}. Merge each unit branch below into ${ctx.integrationBranch}, in exactly this order, with a merge commit each (\`git merge --no-ff\`). For each unit report clean, resolved, unresolvable, or regressed, with the files involved and the merge SHA. Resolve a conflict only when the resolution is mechanical — both sides' changes apply without judgement about intent; otherwise abort that merge (\`git merge --abort\`), report it unresolvable, and continue with the next unit. Run the project's gates after each merge — the test suite and whatever else the project's own instructions name as a gate (linters, type checks). If a gate fails after a clean or resolved merge, undo that merge (\`git reset --hard\` to the pre-merge tip of ${ctx.integrationBranch}), report the unit as regressed with the failing test files, and continue with the next unit.
@@ -347,7 +352,7 @@ You are in the main checkout on ${ctx.integrationBranch}. Merge each unit branch
 Then, for every unit merged clean or resolved, record a Plan Maintenance completion entry in ${plan.path} naming its completion report and set \`complete: true\` on that unit in the plan's \`\`\`yaml lsf-plan block; commit on ${ctx.integrationBranch} and return the new plan SHA. Do not amend anything else in the plan.
 
 Wave ${wave} merge order:
-${merges.map((m) => `- ${m.unit}: branch ${m.branch} (completion report ${m.completionPath})`).join('\n')}
+${merges.map((m) => `- ${m.unit}: branch ${m.branch} (completion report ${m.completionPath})`).join('\n')}${priorBlock(waveSignals, 'by this wave\'s unit stages')}
 ${RETURN_FIELDS}`;
 }
 
@@ -362,15 +367,18 @@ How this workflow runs, so you do not report its design as a defect: each unit's
 ${RETURN_FIELDS}`;
 }
 
-function replanPrompt(ctx, plan, wave, merged, conflicts, recorded) {
+function replanPrompt(ctx, plan, wave, merged, conflicts, recorded, defects) {
   return `${header(ctx, plan)}
 
 You are in the main checkout on ${ctx.integrationBranch}. Run the phronithm:breakdown skill in re-plan mode over ${plan.path} with the completion reports of wave ${wave}: ${merged.map((m) => m.completionPath).join(', ')}. Diff their deviations, deferrals, and discoveries against every remaining unit's scope, dependencies, and done condition; amend the plan; re-run the quality check over the remaining units, examining the size budget first where a completed unit showed distress; record every amendment in Plan Maintenance. Treat each merge conflict below between units the plan claimed disjoint as a plan defect: record it and add the missing edge or scope correction.
 
-Merge conflicts: ${conflicts.length ? JSON.stringify(conflicts, null, 2) : 'none'}
-Recorded signals this wave: ${recorded.length ? JSON.stringify(recorded, null, 2) : 'none'}
+Plan defects reported this wave — ambiguities and contradictions the stages laid at the plan's or a unit entry's door. Each is yours to absorb: amend the plan (a Scope or Publishes line, a done condition, an edge, the execution order), or show the plan as it stands already answers it. Return a verdict for every id: \`amended\`, \`no-change\` (with what in the plan answers it), or \`cannot\` (with why the plan cannot absorb it — the answer lies in the architecture document or the request record, or needs the requester). An id you do not answer is treated as \`cannot\`.
+${defects.length ? JSON.stringify(defects, null, 2) : 'none'}
 
-Every amendment to a unit's type, dependencies, scope, publishes, gates, or completion, and to the execution order, is made in both the unit's entry and the plan's \`\`\`yaml lsf-plan block, which must agree; the script reads the block. Commit the amended plan on ${ctx.integrationBranch}. Return the new plan SHA; each amendment with its kind (${AMENDMENT_KINDS.join(', ')}), unit, and statement; and every remaining unit over its size budget with whether you repaired it by extracting a preceding design unit or flagging wall-clock rationale. Do not answer whether the architecture document still stands — a separate stage does that. Do not select or execute any unit.
+Merge conflicts: ${conflicts.length ? JSON.stringify(conflicts, null, 2) : 'none'}
+Other recorded signals this wave: ${recorded.length ? JSON.stringify(recorded, null, 2) : 'none'}
+
+Every amendment to a unit's type, dependencies, scope, publishes, gates, or completion, and to the execution order, is made in both the unit's entry and the plan's \`\`\`yaml lsf-plan block, which must agree; the script reads the block. Commit the amended plan on ${ctx.integrationBranch}. Return the new plan SHA; each amendment with its kind (${AMENDMENT_KINDS.join(', ')}), unit, and statement; a verdict per plan defect id; and every remaining unit over its size budget with whether you repaired it by extracting a preceding design unit or flagging wall-clock rationale. Do not answer whether the architecture document still stands — a separate stage does that. Do not select or execute any unit.
 ${RETURN_FIELDS}`;
 }
 
@@ -747,7 +755,7 @@ async function run(rt) {
     let merged = [];
     let conflicts = [];
     if (order.length) {
-      const m = await agent(mergePrompt(ctx, plan, wave, order), { label: `merge:w${wave}`, ...tier(ctx, 'default'), phase: 'Merge', schema: MERGE_SCHEMA });
+      const m = await agent(mergePrompt(ctx, plan, wave, order, waveSignals), { label: `merge:w${wave}`, ...tier(ctx, 'default'), phase: 'Merge', schema: MERGE_SCHEMA });
       if (!m) {
         waveSignals.push(nullReturnSignal({ stage: 'merge', wave }));
       } else {
@@ -794,15 +802,29 @@ async function run(rt) {
     log(`wave ${wave}: merged ${merged.map((r) => r.unit).join(', ') || 'nothing'}; ${conflicts.length} conflict(s); ${evalA.records.length} recorded, ${evalA.stops.length} stop signal(s)`);
     if (evalA.stop) return stopped('wave', evalA.stops, evalA.records);
 
-    // Re-plan from the wave's completion reports.
-    const recorded = evalA.records.map(({ unit, stage, kind, statement, referent }) => ({ unit, stage, kind, statement, referent }));
-    const rp = await agent(replanPrompt(ctx, plan, wave, merged, conflicts, recorded), { label: `replan:w${wave}`, ...tier(ctx, 'planning'), phase: 'Re-plan', schema: REPLAN_SCHEMA });
+    // Re-plan from the wave's completion reports. Plan defects go in with
+    // ids; one the re-plan cannot absorb, or does not answer, is a stop.
+    const flat = ({ unit, stage, kind, statement, referent }) => ({ unit, stage, kind, statement, referent });
+    const defectSignals = evalA.records.filter((s) => s.kind === 'plan-defect');
+    const defects = defectSignals.map((s, i) => ({ id: `pd-${i + 1}`, ...flat(s) }));
+    const recorded = evalA.records.filter((s) => s.kind !== 'plan-defect').map(flat);
+    const rp = await agent(replanPrompt(ctx, plan, wave, merged, conflicts, recorded, defects), { label: `replan:w${wave}`, ...tier(ctx, 'planning'), phase: 'Re-plan', schema: REPLAN_SCHEMA });
     const replanSignals = [];
     let nextPlan = plan;
     if (!rp) {
       replanSignals.push(nullReturnSignal({ stage: 'replan', wave }));
     } else {
       replanSignals.push(...signalsFromStageReturn(rp, { stage: 'replan', wave }));
+      const verdicts = new Map((rp.result.defects ?? []).map((d) => [d.id, d]));
+      defects.forEach((d, i) => {
+        const v = verdicts.get(d.id);
+        if (v && v.verdict !== 'cannot') return;
+        replanSignals.push(signal({
+          kind: 'plan-defect-unabsorbed', source: 'reported', stage: 'replan', unit: d.unit, wave,
+          statement: `${v ? `re-plan cannot absorb: ${v.statement}` : 're-plan gave no verdict'} — [${d.stage}] ${d.statement}`,
+          referent: defectSignals[i].referent,
+        }));
+      });
       for (const a of rp.result.amendments) {
         replanSignals.push(signal({ kind: a.kind, source: 'reported', stage: 'replan', unit: a.unit, wave, statement: a.statement, referent: a.unit }));
       }
