@@ -426,12 +426,12 @@ test('role tiers reach every call: critique sonnet, gate opus, planning fable/me
     const role = c.label.replace(/:.*$/, '');
     seen.add(role);
     if (/^(critique-plan|critique-code|lens-review|critique-design)$/.test(role)) assert.equal(c.opts.model, 'sonnet', c.label);
-    else if (/^(review-gate|obligations)$/.test(role)) assert.equal(c.opts.model, 'opus', c.label);
+    else if (role === 'review-gate') assert.equal(c.opts.model, 'opus', c.label);
     else if (/^(plan|replan|termination)$/.test(role)) assert.deepEqual([c.opts.model, c.opts.effort], ['fable', 'medium'], c.label);
     else if (/^(load|ledger|decision-log)$/.test(role)) assert.deepEqual([c.opts.model, c.opts.effort], ['haiku', 'low'], c.label);
     else assert.equal(c.opts.model, 'sonnet', c.label);
   }
-  for (const r of ['critique-code', 'plan', 'implement', 'merge', 'review-gate', 'replan', 'load']) assert.ok(seen.has(r), r);
+  for (const r of ['critique-code', 'plan', 'implement', 'merge', 'review-gate', 'replan', 'load', 'obligations']) assert.ok(seen.has(r), r);
 });
 
 test('a wave stop scribes once, with the wave\'s records and stops in one rendered table', async () => {

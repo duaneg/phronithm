@@ -35,7 +35,7 @@
 //   maxUnitsPerWave     cap on units started per wave, in execution order; default unbounded
 //   tiers               per-role { model, effort } overrides; roles:
 //                       critique (unit plan critique, code critique, lens
-//                       review), gate (wave gate, obligations), planning
+//                       review), gate (wave gate), planning
 //                       (unit plan, re-plan, termination), mechanical
 //                       (plan-block copy, ledger and decision-log appends),
 //                       default (everything else)
@@ -826,7 +826,7 @@ async function run(rt) {
   }
 
   // Standing obligations.
-  const ob = await agent(obligationsPrompt(ctx, plan), { label: 'obligations', ...tier(ctx, 'gate'), phase: 'Termination', schema: OBLIGATIONS_SCHEMA });
+  const ob = await agent(obligationsPrompt(ctx, plan), { label: 'obligations', ...tier(ctx, 'default'), phase: 'Termination', schema: OBLIGATIONS_SCHEMA });
   if (!ob) return stopOn('obligations', [nullReturnSignal({ stage: 'obligations' })]);
   const obSignals = [];
   for (const o of ob.result.obligations.filter((o) => !o.discharged)) {
