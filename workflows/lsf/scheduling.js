@@ -1,9 +1,9 @@
 // Scheduling logic for the lsf-implement workflow: plan validation, ready-set
-// computation, merge order, signal mapping, the stop rule, and trend flags.
+// computation, merge order, signal mapping, the stop rule, and the digest.
 // Dependency-free; inlined into the workflow script. This file is the source
 // of truth. See docs/design/lsf-workflow.md, "Wave loop" and "Escalation".
 
-import { STOP_KINDS, signal } from './schema.js';
+import { STOP_KINDS, INVALIDATION_FIELDS, signal } from './schema.js';
 
 const BLOCKING_GATE_KINDS = ['organisational', 'release'];
 
@@ -203,42 +203,72 @@ function wavePlan(plan, completed = new Set()) {
 
 // ---------------------------------------------------------------- signals
 
-const AMBIGUITY_KIND = {
-  scope: 'scope-ambiguity',
-  goal: 'goal-ambiguity',
-  requirement: 'requirement-incomplete',
-  design: 'design-ambiguity',
-};
-
-// Map a stage's shared-schema fields into signals. `source` defaults to
-// 'reported'; gate agents (critique, review-gate) pass 'gate'. An ambiguity
-// or contradiction at plan level is a plan defect for the re-plan stage to
-// absorb, whatever its category; one with no level is taken as above the
-// plan. A null stage
-// return is a STOP the caller raises via nullReturnSignal.
-function signalsFromStageReturn(ret, { stage, unit, wave, source = 'reported' }) {
-  const out = [];
-  const base = { source, stage, unit, wave, raisedBy: stage };
-  for (const a of ret.assumptions ?? []) {
-    out.push(signal({ ...base, kind: 'assumption', statement: a.statement, referent: a.referent }));
-  }
-  for (const a of ret.ambiguities ?? []) {
-    // The category is not a referent; without one the statement stands in,
-    // so recurrence never trips on 'scope' meeting 'scope'.
-    const kind = a.level === 'plan' && a.about !== 'design' ? 'plan-defect' : (AMBIGUITY_KIND[a.about] ?? 'scope-ambiguity');
-    out.push(signal({ ...base, kind, statement: a.statement, referent: a.referent || a.statement }));
-  }
-  for (const c of ret.contradictions ?? []) {
-    out.push(signal({ ...base, kind: c.level === 'plan' ? 'plan-defect' : 'assumption-invalidated', statement: c.statement, referent: c.against }));
-  }
-  return out;
-}
+// Signals from stage returns. Only three stages report anything beyond
+// their result — the unit plan (readings), implement (deviations,
+// deferrals, discoveries, distress), and the wave gate (invalidations and
+// notes) — and every one of those is a record except a complete
+// invalidation. The script never classifies free text.
 
 function nullReturnSignal({ stage, unit, wave }) {
   return signal({
     kind: 'agent-null', source: 'structural', stage, unit, wave,
     statement: `${stage} returned null (skipped or terminal error)`, referent: unit ?? stage,
   });
+}
+
+// Unit plan stage: each clause that admitted more than one reading, and the
+// reading the plan took.
+function signalsFromReadings(readings, { unit, wave }) {
+  return (readings ?? []).map((r) => signal({
+    kind: 'reading', source: 'reported', stage: 'plan', unit, wave,
+    statement: `${r.clause} — read as: ${r.reading}`, referent: r.clause,
+  }));
+}
+
+// Implement stage: deviations (including writes outside the Scope line),
+// deferrals, and discoveries, as breakdown's completion report defines them.
+function signalsFromImplement(result, { unit, wave }) {
+  const base = { source: 'reported', stage: 'implement', unit, wave };
+  const out = [];
+  for (const d of result.deviations ?? []) out.push(signal({ ...base, kind: 'deviation', statement: d, referent: unit }));
+  const outside = result.writesOutsideScope ?? [];
+  if (outside.length) {
+    out.push(signal({ ...base, kind: 'deviation', statement: `writes outside the Scope line: ${outside.join(', ')}`, referent: outside.join(',') }));
+  }
+  for (const d of result.deferrals ?? []) out.push(signal({ ...base, kind: 'deferral', statement: d.statement, referent: d.belongsTo }));
+  for (const d of result.discoveries ?? []) out.push(signal({ ...base, kind: 'discovery', statement: d.statement, referent: d.affects }));
+  return out;
+}
+
+// Review stages: Significant and Minor findings are recorded as they stand.
+function signalsFromFindings(findings, { stage, unit, wave, round }) {
+  return (findings ?? []).filter((f) => f.severity !== 'Critical').map((f) => signal({
+    kind: 'finding', source: 'gate', stage, unit, wave,
+    statement: `${f.severity}${round ? ` (round ${round})` : ''}: ${f.statement}`, referent: f.location,
+  }));
+}
+
+// Wave gate: an invalidation with every field present is a STOP; one with a
+// field missing, and every note, is a record.
+function invalidationComplete(inv) {
+  return INVALIDATION_FIELDS.every((k) => typeof inv[k] === 'string' && inv[k].trim() !== '');
+}
+
+function signalsFromGate(result, { wave }) {
+  const base = { source: 'gate', stage: 'review-gate', wave };
+  const out = [];
+  for (const inv of result.invalidations ?? []) {
+    const statement = INVALIDATION_FIELDS.map((k) => `${k}: ${String(inv[k] ?? '').trim() || '—'}`).join('; ');
+    out.push(signal({
+      ...base, kind: invalidationComplete(inv) ? 'architecture-invalidated' : 'architecture-note',
+      statement: invalidationComplete(inv) ? statement : `incomplete invalidation (${INVALIDATION_FIELDS.filter((k) => !String(inv[k] ?? '').trim()).join(', ')} missing) — ${statement}`,
+      referent: inv.section || '',
+    }));
+  }
+  for (const n of result.notes ?? []) {
+    out.push(signal({ ...base, kind: 'architecture-note', statement: n.statement, referent: n.referent }));
+  }
+  return out;
 }
 
 // Signals from the merge stage's structured result.
@@ -268,12 +298,13 @@ function signalsFromMerge(mergeResult, { wave }) {
 }
 
 const DEFAULT_CONFIG = Object.freeze({
-  perStageSignalThreshold: 6, // open ambiguities + contradictions one stage reports for one unit
   distressDeviationThreshold: 4, // deviations + deferrals
   distressDesignDecisionThreshold: 3, // mid-implementation design decisions
 });
 
-// Execution-distress signals from a completion report's distress fields.
+// Execution-distress record from a completion report's distress fields.
+// Re-plan input: breakdown re-examines the size budget where a unit showed
+// distress.
 function distressSignals(distress, { unit, wave }, config = DEFAULT_CONFIG) {
   const cfg = { ...DEFAULT_CONFIG, ...config };
   const reasons = [];
@@ -286,103 +317,22 @@ function distressSignals(distress, { unit, wave }, config = DEFAULT_CONFIG) {
   }
   if (!reasons.length) return [];
   return [signal({
-    kind: 'execution-distress', source: 'structural', stage: 'implement', unit, wave,
+    kind: 'execution-distress', source: 'reported', stage: 'implement', unit, wave,
     statement: reasons.join('; '), referent: unit,
   })];
 }
 
 // ---------------------------------------------------------------- stop rule
 
-function normaliseReferent(r) {
-  return String(r ?? '').trim().toLowerCase();
-}
+// Kinds the re-plan is handed with ids and must return a verdict on.
+const REPLAN_ITEM_KINDS = Object.freeze(['deferral', 'discovery', 'claimed-disjoint-conflict', 'architecture-note', 'execution-distress']);
 
-// Reported kinds that count towards a stage's volume: the open points, not
-// the disclosed choices.
-const VOLUME_KINDS = Object.freeze(['scope-ambiguity', 'goal-ambiguity', 'requirement-incomplete', 'requirement-contradictory', 'assumption-invalidated']);
-
-// Kinds whose referent can recur: the open points and plan defects. Disclosed
-// assumptions are excluded — several read-only stages disclosing the same
-// thing about the same field is boilerplate, not a finding that will not go
-// away.
-const RECURRENCE_KINDS = Object.freeze([...VOLUME_KINDS, 'plan-defect']);
-
-// Volume rules over this wave's signals and the ledger so far. Content-blind:
-// counting only.
-function volumeSignals(waveSignals, prior, { wave, unitsInWave }, config = DEFAULT_CONFIG) {
-  const cfg = { ...DEFAULT_CONFIG, ...config };
-  const out = [];
-
-  // Same referent from two waves. Within one wave the gate is handed the
-  // unit stages' signals and asked whether it agrees, so a second source
-  // naming the same referent is the design working, not recurrence. A signal
-  // whose referent is just its own unit id names nothing in particular
-  // (distress, exit criteria, volume signals) and does not take part.
-  const all = [...prior, ...waveSignals];
-  const byReferent = new Map();
-  for (const s of all) {
-    if (!RECURRENCE_KINDS.includes(s.kind)) continue;
-    const key = normaliseReferent(s.referent);
-    if (!key || key === normaliseReferent(s.unit)) continue;
-    if (!byReferent.has(key)) byReferent.set(key, []);
-    byReferent.get(key).push(s);
-  }
-  for (const [key, sigs] of byReferent) {
-    if (!sigs.some((s) => waveSignals.includes(s))) continue; // only fire when this wave touched it
-    const waves = new Set(sigs.map((s) => s.wave));
-    if (waves.size > 1) {
-      out.push(signal({
-        kind: 'referent-recurrence', source: 'structural', stage: 'stop-rule', wave,
-        statement: `referent named ${sigs.length} times across waves ${[...waves].join(',')}`,
-        referent: key,
-      }));
-    }
-  }
-
-  // Per-stage threshold on open ambiguities and contradictions. A unit
-  // passes through many stages in a wave; the count that means something is
-  // one stage's, not the sum. Disclosed assumptions and design ambiguities
-  // are the prompts asking for a record and do not count: a plan that lists
-  // its choices is the healthy case. Plan defects do not count either: the
-  // re-plan stage absorbs them, and one it cannot absorb stops on its own.
-  const perStage = new Map();
-  for (const s of waveSignals) {
-    if (s.source !== 'reported' || !s.unit) continue;
-    if (VOLUME_KINDS.includes(s.kind)) {
-      const key = `${s.unit}\u0000${s.stage}`;
-      perStage.set(key, (perStage.get(key) ?? 0) + 1);
-    }
-  }
-  for (const [key, n] of perStage) {
-    if (n > cfg.perStageSignalThreshold) {
-      const [unit, stage] = key.split('\u0000');
-      out.push(signal({
-        kind: 'signal-volume', source: 'structural', stage: 'stop-rule', unit, wave,
-        statement: `${n} open ambiguities and contradictions reported by ${stage} for ${unit} (threshold ${cfg.perStageSignalThreshold})`,
-        referent: unit,
-      }));
-    }
-  }
-
-  // Silent wave.
-  if (unitsInWave > 0 && !waveSignals.some((s) => s.source === 'reported')) {
-    out.push(signal({
-      kind: 'silent-wave', source: 'structural', stage: 'stop-rule', wave,
-      statement: `no stage in wave ${wave} reported an assumption, ambiguity, or contradiction`,
-      referent: `wave-${wave}`,
-    }));
-  }
-  return out;
-}
-
-// Classify a wave's signals. `prior` is the ledger from earlier waves.
-// Returns { stop, stops, records, all } where `all` is the wave's signals plus
-// any volume signals, each stamped with its disposition.
-function evaluateWave(waveSignals, prior, ctx, config = DEFAULT_CONFIG) {
-  const all = [...waveSignals, ...volumeSignals(waveSignals, prior, ctx, config)];
+// Classify a wave's signals by kind. Returns { stop, stops, records, all },
+// each signal stamped with its disposition.
+function evaluateWave(waveSignals) {
   const stops = [];
   const records = [];
-  for (const s of all) {
+  for (const s of waveSignals) {
     if (STOP_KINDS.includes(s.kind)) {
       s.disposition = 'stopped';
       stops.push(s);
@@ -391,7 +341,7 @@ function evaluateWave(waveSignals, prior, ctx, config = DEFAULT_CONFIG) {
       records.push(s);
     }
   }
-  return { stop: stops.length > 0, stops, records, all };
+  return { stop: stops.length > 0, stops, records, all: [...waveSignals] };
 }
 
 // ---------------------------------------------------------------- digest
@@ -402,7 +352,6 @@ function countBy(items, key) {
   return counts;
 }
 
-// Three trend flags over the full ledger, plus counts by kind and source.
 // Markdown for the signal ledger: the scribe appends this verbatim. Cell
 // text is one line with pipes escaped so a statement cannot break the table.
 const LEDGER_COLUMNS = ['Wave', 'Unit', 'Stage', 'Source', 'Kind', 'Statement', 'Referent', 'Disposition'];
@@ -418,37 +367,33 @@ function renderLedger(entries, wave) {
   return [...head, ...rows].join('\n') + '\n';
 }
 
-function digest(ledger, { unitsPerWave = {} } = {}) {
+// Counts by kind, source, and disposition, plus what deserves the
+// requester's attention on a run that did not stop: architecture notes,
+// unfixed Significant findings per unit, and units that showed distress.
+function digest(ledger) {
   const waves = [...new Set(ledger.map((s) => s.wave).filter((w) => w !== undefined))].sort((a, b) => a - b);
-
-  // Rising assumption count per unit: strictly increasing over the last three waves.
-  const perWave = waves.map((w) => {
-    const sigs = ledger.filter((s) => s.wave === w && s.kind === 'assumption' && s.unit);
-    const units = unitsPerWave[w] ?? new Set(sigs.map((s) => s.unit)).size;
-    return units ? sigs.length / units : 0;
-  });
-  const tail = perWave.slice(-3);
-  const risingAssumptions = tail.length >= 2 && tail.every((v, i) => i === 0 || v > tail[i - 1]);
-
-  const recurring = [...new Set(
-    ledger.filter((s) => s.kind === 'referent-recurrence').map((s) => s.referent),
-  )];
-  const silentWaves = ledger.filter((s) => s.kind === 'silent-wave').map((s) => s.wave);
-
+  const unfixedSignificant = {};
+  for (const s of ledger) {
+    if (s.kind === 'finding' && /^Significant/.test(s.statement)) unfixedSignificant[s.unit] = (unfixedSignificant[s.unit] ?? 0) + 1;
+  }
   return {
     waves: waves.length,
     byKind: countBy(ledger, 'kind'),
     bySource: countBy(ledger, 'source'),
     byDisposition: countBy(ledger, 'disposition'),
-    trends: { risingAssumptions, assumptionsPerUnitByWave: perWave, recurringReferents: recurring, silentWaves },
+    attention: {
+      architectureNotes: ledger.filter((s) => s.kind === 'architecture-note').map((s) => s.statement),
+      unfixedSignificant,
+      distressedUnits: [...new Set(ledger.filter((s) => s.kind === 'execution-distress').map((s) => s.unit))],
+    },
     note: 'Silence is not evidence: reported-signal recall on premise-level defects is near zero.',
   };
 }
 
 export {
-  DEFAULT_CONFIG, BLOCKING_GATE_KINDS,
+  DEFAULT_CONFIG, BLOCKING_GATE_KINDS, REPLAN_ITEM_KINDS,
   findCycle, ancestors, pathsOverlap, scopesOverlap, overlappingPairs, validatePlan,
   readySet, blockedUnits, mergeOrder, wavePlan,
-  signalsFromStageReturn, nullReturnSignal, signalsFromMerge, distressSignals,
-  volumeSignals, evaluateWave, digest, renderLedger, ledgerHeading,
+  nullReturnSignal, signalsFromReadings, signalsFromImplement, signalsFromFindings, signalsFromGate, invalidationComplete,
+  signalsFromMerge, distressSignals, evaluateWave, digest, renderLedger, ledgerHeading,
 };

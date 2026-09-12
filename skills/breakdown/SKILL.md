@@ -145,7 +145,7 @@ Exploratory units may have a process done condition: "Spike complete: approach d
 
 ### Scope
 
-Each work unit lists the files, modules, or directories it will touch, and names what it **publishes** — the APIs, protocols, schemas, formats, or measured constants other units code against. For each dependency edge, name the artefact that crosses it and the unit that owns it. An artefact more than one unit reads is a named deliverable of exactly one unit. An artefact more than one unit writes is either a unit of its own or a scope conflict requiring a coordination protocol.
+Each work unit lists the files, modules, or directories it will touch, and names what it **publishes** — the APIs, protocols, schemas, formats, or measured constants other units code against. Scope is a coordination declaration for parallel execution, not a limit on what the executor may edit: a unit that must touch a file outside its Scope does so and reports it in its completion report, and re-plan corrects the line where a later unit shares the file. For each dependency edge, name the artefact that crosses it and the unit that owns it. An artefact more than one unit reads is a named deliverable of exactly one unit. An artefact more than one unit writes is either a unit of its own or a scope conflict requiring a coordination protocol.
 
 For teams (human or agent), scope boundaries determine:
 - Which units can be worked on concurrently without conflicts

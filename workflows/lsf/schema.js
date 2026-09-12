@@ -2,57 +2,46 @@
 // workflow scripts (the script cannot import). This file is the source of
 // truth. See docs/design/lsf-workflow.md, "Shared stage schema".
 
-// Signal kinds. The stop rule (scheduling.js) classifies by kind and source
-// only; it never reads a signal's statement.
+// Signal kinds. The stop rule (scheduling.js) classifies by kind only; it
+// never reads a signal's statement. A STOP kind is either computed by the
+// script from a mechanical check, or adjudicated once per wave by the gate
+// or the re-plan in a form the script can check for completeness.
 const STOP_KINDS = Object.freeze([
-  'assumption-invalidated',
-  'requirement-contradictory',
-  'requirement-incomplete',
-  'scope-ambiguity',
-  'goal-ambiguity',
+  'architecture-invalidated', // gate: section, decision, premise, evidence, amendment — all present
+  'plan-defect-unabsorbed', // re-plan: verdict `cannot`, or no verdict
   'done-condition-unevaluable',
   'cycle',
   'unit-over-budget',
-  'plan-defect-unabsorbed',
   'gate-non-convergence',
   'merge-conflict-unresolvable',
+  'merge-regression',
   'environment-gate-drift',
   'no-ready-unit',
   'standing-obligation-undischarged',
   'agent-null',
-  'merge-regression',
-  'handoff-insufficient',
   'precondition',
   'invalid-plan',
   'unserialised-overlap',
-  'execution-distress',
-  'referent-recurrence',
-  'signal-volume',
-  'silent-wave',
 ]);
 
+// RECORD kinds reach the ledger and, where the re-plan can act on them, the
+// re-plan stage. None stops the run.
 const RECORD_KINDS = Object.freeze([
-  'assumption',
-  'design-ambiguity',
-  'plan-defect',
-  'deferral',
-  'scope-reassignment',
-  'new-edge',
-  'claimed-disjoint-conflict',
+  'reading', // plan stage: a clause that admits more than one reading, and the reading taken
+  'deviation', // implement stage: departure from the unit entry, including writes outside Scope
+  'deferral', // implement stage: in-scope work deliberately left to a named unit
+  'discovery', // implement stage: something that changes another unit or a document
+  'execution-distress', // implement stage: breakdown's distress counts over threshold
+  'finding', // review stages: a Significant or Minor finding, left as is
+  'critical-fixed', // fix stage: a Critical finding and its applied fix
+  'architecture-note', // gate: an observation short of an invalidation
+  'claimed-disjoint-conflict', // merge: conflict between units the plan called disjoint, resolved mechanically
+  'amendment', // re-plan: a plan amendment
+  'verdict', // re-plan: amended / no-change verdict on a re-plan item
   'over-budget-repaired',
-  'critical-fixed',
-  'handoff-partial',
 ]);
 
 const SOURCES = Object.freeze(['structural', 'reported', 'gate']);
-
-const AMBIGUITY_ABOUT = Object.freeze(['scope', 'goal', 'requirement', 'design']);
-
-// Which document an ambiguity or contradiction is about. The decomposition
-// plan (a unit entry, its Scope or Publishes line, its done condition, the
-// execution order) is the re-plan stage's to amend; the architecture document
-// and the request record are above the plan.
-const SIGNAL_LEVELS = Object.freeze(['plan', 'architecture', 'request']);
 
 const GATE_KINDS = Object.freeze(['environment', 'organisational', 'release', 'data']);
 
@@ -60,41 +49,11 @@ const GATE_KINDS = Object.freeze(['environment', 'organisational', 'release', 'd
 // stage appends from the plan's Meta-Tasks section.
 const UNIT_TYPES = Object.freeze(['foundation', 'feature', 'integration', 'design', 'refactor', 'bug-fix', 'polish', 'meta']);
 
-// Fields every agent() in the three workflows returns in addition to `result`.
+// Re-plan amendment kinds, as breakdown's re-plan mode names them.
+const AMENDMENT_KINDS = Object.freeze(['deferral', 'scope-reassignment', 'new-edge', 'done-condition', 'execution-order', 'unit-added']);
+
+// The one field every agent() in the three workflows returns beside `result`.
 const STAGE_COMMON_PROPERTIES = Object.freeze({
-  assumptions: {
-    type: 'array',
-    items: {
-      type: 'object',
-      properties: { statement: { type: 'string' }, referent: { type: 'string' } },
-      required: ['statement', 'referent'],
-    },
-  },
-  ambiguities: {
-    type: 'array',
-    items: {
-      type: 'object',
-      properties: {
-        statement: { type: 'string' },
-        about: { type: 'string', enum: AMBIGUITY_ABOUT },
-        level: { type: 'string', enum: SIGNAL_LEVELS, description: 'Which document leaves the point open: the decomposition plan or unit entry (plan), the architecture document, or the request record' },
-        referent: { type: 'string', description: 'What the ambiguity concerns: a document section, symbol, unit, or gate' },
-      },
-      required: ['statement', 'about', 'level', 'referent'],
-    },
-  },
-  contradictions: {
-    type: 'array',
-    items: {
-      type: 'object',
-      properties: {
-        statement: { type: 'string' },
-        level: { type: 'string', enum: SIGNAL_LEVELS, description: 'Which document is contradicted: the decomposition plan or unit entry (plan), the architecture document, or the request record' },
-        against: { type: 'string', description: 'Document path and commit SHA' },
-      },
-      required: ['statement', 'level', 'against'],
-    },
-  },
   commits: {
     type: 'array',
     items: {
@@ -105,10 +64,9 @@ const STAGE_COMMON_PROPERTIES = Object.freeze({
   },
 });
 
-const STAGE_COMMON_REQUIRED = Object.freeze(['assumptions', 'ambiguities', 'contradictions', 'commits']);
+const STAGE_COMMON_REQUIRED = Object.freeze(['commits']);
 
-// Build the JSON Schema for one stage's return: the shared fields plus a
-// stage-specific `result`.
+// Build the JSON Schema for one stage's return: `result` plus `commits`.
 function stageSchema(resultSchema) {
   if (!resultSchema || resultSchema.type !== 'object') {
     throw new Error('stageSchema: resultSchema must be a JSON Schema object type');
@@ -119,6 +77,21 @@ function stageSchema(resultSchema) {
     required: ['result', ...STAGE_COMMON_REQUIRED],
   };
 }
+
+// An architecture invalidation as the wave gate returns it. The script stops
+// only when every field is non-empty; anything less is a note.
+const INVALIDATION_FIELDS = Object.freeze(['section', 'decision', 'premise', 'evidence', 'amendment']);
+const INVALIDATION_SCHEMA = Object.freeze({
+  type: 'object',
+  properties: {
+    section: { type: 'string', description: 'Heading of the architecture section whose decision no longer stands' },
+    decision: { type: 'string', description: 'What that section decides, quoted or closely paraphrased' },
+    premise: { type: 'string', description: 'What the decision rests on' },
+    evidence: { type: 'string', description: 'File and line, test, or completion-report line showing the premise false' },
+    amendment: { type: 'string', description: 'What the section should now say' },
+  },
+  required: INVALIDATION_FIELDS,
+});
 
 // The decomposition plan reduced to what the script reads — the dependency
 // graph, scopes, gates, and execution order — as graph.js produces it from
@@ -199,8 +172,9 @@ const MERGE_RESULT_SCHEMA = Object.freeze({
   required: ['integrationBranch', 'merges'],
 });
 
-// Completion-report fields the stop rule reads (breakdown's execution-distress
-// signals). Other report fields are prose for the re-plan agent.
+// Completion-report fields the distress rule reads (breakdown's
+// execution-distress signals). Other report fields are prose for the
+// re-plan agent.
 const DISTRESS_SCHEMA = Object.freeze({
   type: 'object',
   properties: {
@@ -231,8 +205,8 @@ function escalation({ workflow, planSha, wave, stage, signals, decisionNeeded })
 }
 
 export {
-  STOP_KINDS, RECORD_KINDS, SOURCES, AMBIGUITY_ABOUT, SIGNAL_LEVELS, GATE_KINDS, UNIT_TYPES,
+  STOP_KINDS, RECORD_KINDS, SOURCES, GATE_KINDS, UNIT_TYPES, AMENDMENT_KINDS,
   STAGE_COMMON_PROPERTIES, STAGE_COMMON_REQUIRED, stageSchema,
-  PLAN_SCHEMA, MERGE_RESULT_SCHEMA, DISTRESS_SCHEMA,
+  INVALIDATION_FIELDS, INVALIDATION_SCHEMA, PLAN_SCHEMA, MERGE_RESULT_SCHEMA, DISTRESS_SCHEMA,
   signal, escalation,
 };

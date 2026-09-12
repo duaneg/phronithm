@@ -3,20 +3,18 @@
 Design for running the `phronithm:large-scale-feature` lifecycle end-to-end
 under the Claude Code Workflow tool: a deterministic script orchestrates a fleet
 of agents, holds no judgement, and is restartable from any point. Human
-attention is spent only on meta-level signals — invalidated assumptions,
-contradictory or incomplete requirements, divergence, scope and goal ambiguity
-— never on procedural sign-off.
+attention is spent only on two things: signals the script can verify
+mechanically, and one adjudicated judgement per wave — that the architecture
+document no longer stands — delivered in a form the script checks for
+completeness and the requester can act on. Never procedural sign-off, and
+never a free-text discrepancy an agent chose to file under a heading.
 
 Status: `lsf-implement` exists (`workflows/lsf/implement.js`, built into
 `workflows/lsf-implement.js`) and is tested against a stubbed runtime. The
 plugin loader registers it as `phronithm:lsf-implement` (confirmed 2026-09-10
 against Claude Code 2.1.267: the loader reads `workflows/` non-recursively,
-so `workflows/lsf/` is ignored); it has not been run under the Workflow tool.
-`lsf-brief` and `lsf-architecture` do not exist yet.
-
-Detection of these meta-level signals by agents cannot be made reliable at
-present (measured, see Escalation). The design therefore treats surfacing as
-the primary control: every signal, absorbed or not, reaches the requester.
+so `workflows/lsf/` is ignored). The signal model below has not yet run
+under the Workflow tool. `lsf-brief` and `lsf-architecture` do not exist yet.
 
 ## Constraints from the Workflow tool
 
@@ -62,9 +60,19 @@ holds no loop state and makes no orchestration decisions.
 
 The judgement the lifecycle needs lives in agents, each a fresh context with a
 schema-typed return. Every gate the skills describe (critique, review-gate
-questions, re-plan) is a top-level `agent()` call, so the nesting policy in
+question, re-plan) is a top-level `agent()` call, so the nesting policy in
 [subagent-protocol](${CLAUDE_PLUGIN_ROOT}/docs/subagent-protocol.md) is satisfied structurally — no
 agent spawns another.
+
+**The principle the stop rule follows.** The script stops only on a signal
+that is mechanically verified, or adjudicated once per wave against a
+concrete referent with a required concrete consequence. Agents are not asked
+to classify what they notice; free-text discrepancies never reach the stop
+rule. They reach the ledger and the re-plan. Measured recall on premise-level
+defects at the gate's tier is near zero (Escalation below); per-stage
+discovery fields, measured over three runs, yield literal but immaterial
+document-versus-code discrepancies restated by every stage that reads the
+same documents, and nothing material the wave gate does not also raise.
 
 ## Lifecycle mapping
 
@@ -79,23 +87,14 @@ agent spawns another.
 **Deliberate divergence from the skill.** LSF Phase 1 step 7 and Phase 2
 step 3 require requester sign-off on the fix for each Critical critique
 finding. This design drops that: the gate loop applies fixes autonomously, at
-the Critical-only bar, in both `lsf-brief` and `lsf-architecture`. The
-requester touchpoint is replaced by the escalation channel: the fix agent,
-before applying a fix for a Critical, classifies under the shared schema
-whether the fix alters a requirement, the request record, or the goal; if so
-it applies nothing and the finding surfaces as a contradiction signal against
-the request record or architecture document (the `contradictions` field, not
-`ambiguities`) and stops the run. A Critical repairable within the document is fixed without
-stopping. This follows the requester's stated preference that procedural
-sign-offs be removed and only meta-level signals surface. The compensating
-control is a self-reported judgement of unmeasured reliability, in the family
-the Escalation section measures as weakest. The residual risk — a
-requirement-altering fix misclassified as document-internal and applied
-silently — is not detectable by the run; the mitigation is that every Critical
-and its applied fix is written to the signal ledger (Surfacing below) so the
-requester can review the fixes the loop applied (kind `critical-fixed`,
-RECORD; also emitted by `lsf-implement`'s plan and code gates). It is the
-first thing the signal-layer measurement should target.
+the Critical-only bar, in all three workflows. The fix stage applies every
+Critical it can repair within the artefact under critique; a Critical it
+declines — because the repair would change the unit entry, the architecture
+document, or the request record, or because it cannot repair it — is a
+structural stop (`gate-non-convergence`, with the finding and the reason in
+the escalation record). The requester sees the finding and decides. Every
+applied fix is written to the signal ledger (kind `critical-fixed`) so the
+requester can review what the loop changed.
 
 Three workflows rather than one so each phase break stays a fresh-context
 boundary, which the skill already requires, and so that an escalation in one
@@ -103,24 +102,42 @@ phase relaunches only that phase. The session runs them in sequence, pausing
 only on an escalation record.
 
 `phronithm:feature` is not invoked inside the workflow — it needs
-ExitPlanMode approval, which no workflow agent can obtain. Its work-unit-mode
-phases are decomposed into stages instead:
+ExitPlanMode approval, which no workflow agent can obtain. The workflow
+carries its own unit plan template and stages instead:
 
 1. **plan** agent: implementation plan from the architecture document and the
-   unit entry, returned inline and committed by the same agent.
+   unit entry, in the workflow's own template (Goal, Context, Readings,
+   Design, Steps, Verification), returned inline and committed by the same
+   agent. The Readings section records every clause of the entry or the
+   architecture document that admitted more than one reading, or named
+   something that does not exist as named, with the reading taken. The plan
+   takes the reading; it does not raise a question.
 2. **critique** loop over the plan (Critical-only bar, round number in prompt,
    hard cap per the [critique gate](${CLAUDE_PLUGIN_ROOT}/docs/critique-gate.md)).
+   A reading the critic judges wrong is a finding at the severity its
+   consequence warrants.
 3. **implement** agent, `isolation: 'worktree'`: re-probes the unit's
    environment gates against their plan-time pins (drift is a STOP signal, see
    Stop rule); resets its worktree to the integration branch; executes the
-   plan single-shot, with no per-step critique loop — a deliberate
-   simplification of feature's Phase 4; commits on its branch; returns
-   branch, path, and the completion-report fields.
+   plan single-shot, with no per-step critique loop; commits on its branch;
+   returns branch, path, and the completion-report fields: deviations,
+   files written outside the Scope line, deferrals with the receiving unit,
+   discoveries with the unit or architecture section they affect, distress
+   counts, the done-condition verdict.
 4. **review** stage over the branch diff: the static-analysis pre-scan, then
    one critique-code gate at the Critical-only bar, then lens review per unit
-   type. Feature's per-step critique is dropped, not moved here.
+   type. The code critique evaluates the done condition under the plan's
+   readings; an unmet condition, or a reading the code does not bear out, is
+   Critical. Significant and Minor findings are recorded, not fixed.
 5. **completion-report** is assembled from the implement and review returns and
    committed by a scribe agent.
+
+**What a unit entry's fields mean to a stage.** Scope is a coordination
+declaration: the files this unit writes that another unit in flight might
+also write. The scheduler reads it for overlap. It does not limit what the
+work may edit; a file the work needs outside the Scope line is changed and
+reported, and the re-plan corrects the line where a later unit shares the
+file. Every unit-stage prompt states this.
 
 Organisational and release gates cannot be probed by an agent; a unit carrying
 one is never ready until the decision log records the gate as cleared, and a
@@ -139,10 +156,11 @@ loop:
   if ready is empty: break
   results = parallel(ready.map(unit => runUnit(unit, plan.sha)))   // barrier
   merged  = merge(results, in plan execution order)               // agent, sequential
-  signals = structural(results, merged) ∪ reported(results, merged)
-  if any signal is STOP: return escalation(signals, plan.sha)         // plan defects are RECORD
-  plan    = replan(plan, results.reports, merged.conflicts, signals)  // agent, commits; a verdict per plan defect
-  if replan yields STOP signal, or leaves a plan defect unabsorbed: return escalation(...)
+  gate    = invalidations and notes from the wave gate             // agent, one question
+  signals = structural(results, merged) ∪ gate
+  if any signal is STOP: return escalation(signals, plan.sha)
+  plan    = replan(plan, results.reports, merged.conflicts, items)  // agent, commits; a verdict per item
+  if replan yields STOP signal, or leaves an item unabsorbed: return escalation(...)
 ```
 
 **The script reads only the dependency graph, and reads it from a block.**
@@ -150,13 +168,12 @@ The plan carries its graph as a `\`\`\`yaml lsf-plan` block and the decision
 log its decisions as a `\`\`\`yaml lsf-decisions` block
 ([plan graph](${CLAUDE_PLUGIN_ROOT}/docs/plan-graph.md)). `load` is a copy agent
 that runs `git show` and returns the blocks verbatim, then `graph.js` parses,
-joins clearances onto gates, and validates. The copy agent has no interpretive
-authority: its reported ambiguities and contradictions are recorded, never
-stops. Every structural defect — unreadable block, unknown or duplicate unit,
-bad gate kind, a decision clearing an unknown or environment gate, a cycle, an
-overlapping-scope pair with no dependency path — is a STOP. The same path
-re-reads the plan after re-plan and termination, from the SHA those stages
-return; no stage returns a graph inline.
+joins clearances onto gates, and validates. The copy agent returns nothing
+but the blocks. Every structural defect — unreadable block, unknown or
+duplicate unit, bad gate kind, a decision clearing an unknown or environment
+gate, a cycle, an overlapping-scope pair with no dependency path — is a STOP.
+The same path re-reads the plan after re-plan and termination, from the SHA
+those stages return; no stage returns a graph inline.
 
 Breakdown may reconcile overlapping-scope parallel units by a prose
 coordination protocol; the workflow does not read prose. Every such protocol
@@ -164,7 +181,7 @@ is encoded in the block either as an edge (serialise = an edge from the
 earlier unit to the later) or as symbol-level scope (`file::symbol` for each
 function or class a unit owns within a shared file). Symbol ownership is a
 claim the plan makes; a merge conflict between two units the plan called
-disjoint surfaces as a plan defect at re-plan.
+disjoint is a re-plan item.
 
 **Termination stage.** When no units remain, a breakdown-mode agent reads the
 plan's Meta-Tasks and Standing Obligations sections and returns two lists:
@@ -184,11 +201,22 @@ cost of an escalation to one wave: in-flight units finish, nothing new starts.
 **Merge is an explicit stage**, sequenced after the wave and before re-plan.
 It merges each unit's branch into the integration branch in plan execution
 order and reports, per unit, clean or conflicting with the files involved. A
-conflict between units the plan claimed disjoint is a plan defect: it is passed
-to re-plan as a discovery and recorded in Plan Maintenance. A conflict the
-merge agent cannot resolve mechanically is a STOP signal. Merge order is a
-function of the plan, so a re-plan can change the order of later waves; the
-merge stage never chooses.
+conflict between units the plan claimed disjoint, resolved mechanically, is
+a re-plan item. A conflict the merge agent cannot resolve mechanically is a
+STOP signal, as is a clean merge after which the project's gates fail (the
+stage undoes it and reports the unit regressed). Merge order is a function of
+the plan, so a re-plan can change the order of later waves; the merge stage
+never chooses.
+
+**The wave gate asks one question**: does anything this wave invalidate the
+architecture document — does any decision it makes rest on a premise the
+merged code or the completion reports show false. An invalidation is
+returned in a fixed form: section, decision, premise, evidence, amendment
+(what the section should now say). The script stops only when all five
+fields are present; an invalidation missing a field, and every note the gate
+returns besides, is recorded and handed to the re-plan. The gate is told not
+to re-evaluate done conditions or review findings (the unit stages did, at
+the bar this workflow sets) and not to report the workflow's own process.
 
 **Prompts embed the plan's commit SHA** (and the unit entry verbatim), never a
 path alone. A re-plan produces a new SHA, every downstream prompt changes, and
@@ -198,118 +226,86 @@ path only would replay a cached result against a plan that no longer exists.
 ## Escalation
 
 The script stops on a deterministic rule over signals. It never judges a
-signal's content; it classifies by source and declared kind.
+signal's content; it classifies by declared kind, and the kinds an agent can
+declare are only those whose consequence the script can check.
 
 ### Signal sources
 
-In descending reliability:
+1. **Structural** — computed by the script or by mechanical checks in the
+   stages: a done condition that cannot be evaluated in position; a merge
+   conflict or regression; a cycle in the amended graph; critique-gate
+   non-convergence (hard cap, a systemic verdict, or a Critical the fix stage
+   declined); agent returned null; an environment gate probe failing against
+   its pin; an invalid plan at load.
+2. **Adjudicated** — one judgement per wave, in a form the script checks: the
+   wave gate's complete invalidation, and the re-plan's verdict on each item
+   it was handed. Measured recall on premise- and requirements-level defects
+   at the sonnet pin is 0/14 (see
+   [critic-fidelity-summary](${CLAUDE_PLUGIN_ROOT}/docs/investigations/critic-fidelity-summary.md));
+   the gate runs at the opus tier, and its reliability in this form is
+   unmeasured (Testing below).
+3. **Recorded** — what the three reporting stages return beyond their
+   result: the plan's readings, implement's deviations, deferrals,
+   discoveries and distress, the gate's notes, and the review stages'
+   Significant and Minor findings. Records reach the ledger; deferrals,
+   discoveries, claimed-disjoint conflicts, distress and gate notes also
+   reach the re-plan as items with ids.
 
-1. **Structural** — computed by the script or by mechanical checks in the merge
-   and re-plan stages: a done condition that fails or cannot be evaluated in
-   position; a merge conflict; a cycle in the amended graph; critique-gate
-   non-convergence or hard cap; agent returned null; an environment gate
-   probe failing against its pin.
-2. **Reported** — mandatory fields in every stage's return schema (below). Each
-   agent must state what it assumed, what it found ambiguous, and what it saw
-   that contradicts the architecture document, the request record, or the
-   plan. Every ambiguity and contradiction carries a level — `plan`,
-   `architecture`, or `request` — naming which document leaves the point
-   open or is contradicted; the stop rule reads the level, not the category.
-   Forced fields beat volunteered remarks; they also invite boilerplate, which
-   the measurement plan addresses. The re-plan agent's size-budget verdicts belong
-   here too: breakdown defines the budget by judged load factors, not a
-   mechanical threshold.
-3. **Gate agents** — the critique gate and the LSF review-gate questions run as
-   an agent per wave ("do this wave's discoveries invalidate the architecture
-   document?"). Measured recall on premise- and requirements-level defects at
-   the sonnet pin is 0/14 (see
-   [critic-fidelity-summary](${CLAUDE_PLUGIN_ROOT}/docs/investigations/critic-fidelity-summary.md)); this
-   source is the weakest on exactly the signals that matter most.
+No other stage returns anything beyond its result and its commits. A
+discrepancy a critic notices is a finding with a severity, handled by the
+gate loop it belongs to.
 
 ### Stop rule
 
-RECORD (autonomous; amend the plan, note in Plan Maintenance, continue):
-anything the re-plan can absorb — a deferral, a scope reassignment, a new
-edge, a claimed-disjoint conflict resolved mechanically, an over-budget unit
-repaired by extracting a preceding `design` unit or flagged with wall-clock
-rationale — breakdown's two sanctioned repairs; and every ambiguity or
-contradiction reported at plan level (a Scope, Publishes, or done-condition
-line, a dependency, the execution order), whatever its category. These
-reach the re-plan stage as plan defects with ids, and the re-plan returns a
-verdict for each: amended, no change needed (citing what in the plan answers
-it), or cannot absorb.
+RECORD (ledger; the re-plan absorbs what it can): every reading, deviation,
+deferral, discovery, distress record, unfixed Significant or Minor finding,
+applied Critical fix, gate note, mechanically resolved claimed-disjoint
+conflict, re-plan amendment, and re-plan verdict of `amended` or `no-change`.
 
-STOP (return an escalation record): anything above the plan —
+STOP (return an escalation record):
 
-- an assumption in the architecture document or request record reported
-  invalidated, by any source;
-- a requirement in the architecture document or request record reported
-  contradictory or incomplete;
-- scope or goal ambiguity in the architecture document or request record,
-  reported by any stage;
-- a plan defect the re-plan cannot absorb, or gives no verdict on;
+- an architecture invalidation from the wave gate with all five fields
+  present;
+- a re-plan item the re-plan cannot absorb, or gives no verdict on;
 - a done condition that cannot be evaluated as written;
 - a re-plan producing a cycle, or a unit over budget that extraction cannot
   repair;
-- critique-gate non-convergence or hard cap;
-- an unresolvable merge conflict, or a clean merge after which the test suite
-  fails (the merge stage undoes it and reports the unit regressed);
-- a review-gate handoff rated insufficient (partial is RECORD);
-- a plan that fails the load checks: unknown or duplicate units, an
-  overlapping-scope pair with no edge, or the main checkout not on the
-  integration branch;
+- critique-gate non-convergence: hard cap, a systemic verdict, or a Critical
+  finding the fix stage declined;
+- an unresolvable merge conflict, or a clean merge after which the project's
+  gates fail;
+- a plan that fails the load checks: unreadable block, unknown or duplicate
+  units, an overlapping-scope pair with no edge, a bad clearance, or the main
+  checkout not on the integration branch;
 - an environment gate that has drifted from its plan-time pin, or a wave with
   no ready unit because of uncleared organisational or release gates;
 - an undischarged standing obligation at termination;
 - an agent returning null (skipped or terminal error).
 
-STOP on volume, independent of any single signal's content — these rules
-need no detection quality, only counting:
-
-- a completion report carrying breakdown's execution-distress signals
-  (context near exhaustion, three or more mid-implementation design
-  decisions, four or more deviations and deferrals; thresholds in the
-  scheduling config);
-- the same referent named in open ambiguities, contradictions, or plan
-  defects from two different waves — a referent that is only the signal's own
-  unit id does not count, and an ambiguity with no referent uses its
-  statement. Disclosed assumptions do not take part (several read-only stages
-  disclosing the same thing about the same field is boilerplate), and a
-  second source in the same wave is not recurrence: the gate is handed the
-  unit stages' signals and asked whether it agrees;
-- one stage's open ambiguities and contradictions for one unit exceeding a
-  threshold set in the workflow's arguments — disclosed assumptions, design
-  ambiguities, and plan defects do not count: the prompts ask for the first
-  two, and the re-plan absorbs the third;
-- a wave in which no stage reports any assumption, ambiguity, or contradiction
-  — silence across a whole wave is more likely under-reporting than
-  cleanliness, given the recall figures above.
-
-The rule biases towards stopping on weak signals. Detection of meta-level
-defects by agents cannot be made reliable at present; the mitigation is to
-surface everything so the requester can see a run going wrong before the
-script can know it (Surfacing below).
+There are no volume or recurrence rules; counting reported signals measures
+verbosity, not trouble in the work.
 
 ### Surfacing
 
 Every signal, RECORD or STOP, is surfaced — the requester's ability to notice
-drift is the control the design actually relies on.
+drift is a control the design relies on alongside the stop rule.
 
 - **Signal ledger.** Append-only file in the repo,
   `docs/plans/<name>-signals.md`: wave, unit, stage, source, kind, statement,
-  referent, disposition (recorded / stopped / decided-by-requester with the
-  decision-log entry). The script renders each wave's rows as a Markdown
-  table; a haiku scribe agent appends that text verbatim and commits,
-  once per wave (a stop rides in the same append). The plan's Plan
-  Maintenance section records amendments; the ledger records why.
+  referent, disposition. The script renders each wave's rows as a Markdown
+  table; a haiku scribe agent appends that text verbatim and commits, once
+  per wave (a stop rides in the same append; a wave with no signals appends
+  nothing). The plan's Plan Maintenance section records amendments; the
+  ledger records why.
 - **Live narration.** The script calls `log()` at every wave boundary with the
   counts by kind and source, the units merged, conflicts, and the re-plan's
   amendment summary, so the run is readable in `/workflows` while in flight.
 - **Return value.** Every workflow returns the full ledger and a digest,
   whether it completed or stopped. The session presents the digest after every
-  run, not only on escalation, with three trend flags computed by the script:
-  rising assumption count per unit across waves; the same referent recurring;
-  and silent waves. A clean completion is presented with the same digest and
+  run, not only on escalation: counts by kind, source and disposition, and
+  what deserves attention on a run that did not stop — the gate's
+  architecture notes, unfixed Significant findings per unit, and units that
+  showed distress. A clean completion is presented with the same digest and
   the explicit note that silence is not evidence.
 - **Decision log.** Requester decisions live in the repo
   (`docs/plans/<name>-decisions.md`) as a `\`\`\`yaml lsf-decisions` block,
@@ -324,9 +320,9 @@ The session does not always relaunch the workflow that stopped. Per STOP kind:
 
 | STOP kind | Relaunch | Inputs |
 |-----------|----------|--------|
-| Requirement contradictory or incomplete; goal ambiguity | `lsf-brief` | Decision log SHA; the amended request record. The session then runs `lsf-architecture` and `lsf-implement` in sequence without a further prompt, handing the Phase 3 state below to `lsf-architecture`. |
-| Architecture assumption invalidated; scope ambiguity; done condition unevaluable as written | `lsf-architecture` | Decision log SHA; Phase 3 state if any — existing decomposition plan, completion reports, integration branch |
-| Cycle or unrepairable budget excess; gate non-convergence or cap; unresolvable merge conflict; null agent | Same workflow | Decision log SHA |
+| Architecture invalidated; a re-plan item unabsorbed because the answer lies in the architecture document or the request record | `lsf-architecture` (or `lsf-brief` when the requester's decision amends the request record; the session then runs the later workflows in sequence without a further prompt) | Decision log SHA; the amended document; Phase 3 state — existing decomposition plan, completion reports, integration branch |
+| Done condition unevaluable as written | `lsf-architecture` | Decision log SHA; Phase 3 state |
+| Everything else: cycle or unrepairable budget excess; gate non-convergence; unresolvable merge conflict or regression; environment drift; gated units; null agent; load failure; undischarged obligation | Same workflow | Decision log SHA |
 
 Returning to an earlier phase is the skill's own rule ("return to the earliest
 affected phase; do not patch forward"). Phase 3 work already merged is not
@@ -347,14 +343,12 @@ reconciliation first:
    that adapt or revert it; merge conflicts and other Phase 3 signals inform
    the risk registry and parallel-stream claims.
 
-Breakdown runs grounded in what was actually built, rather than planning blind
-and being patched afterwards. Any new unit breakdown marks as already
-satisfied by standing work is a claim, not a completion: it is recorded
-complete only after a verify agent evaluates its done condition against the
-integration branch. A failed condition makes it new work; an unevaluable one
-is a STOP. `lsf-implement` is then relaunched against the new plan SHA; every
-prompt changes, so resume has nothing to replay and it is a fresh run in
-effect.
+Any new unit breakdown marks as already satisfied by standing work is a
+claim, not a completion: it is recorded complete only after a verify agent
+evaluates its done condition against the integration branch. A failed
+condition makes it new work; an unevaluable one is a STOP. `lsf-implement` is
+then relaunched against the new plan SHA; every prompt changes, so resume has
+nothing to replay and it is a fresh run in effect.
 
 ### Escalation record
 
@@ -367,7 +361,9 @@ Returned by the workflow; presented verbatim by the session.
 ```
 
 `plan_sha`, `wave`, and `unit` are set by `lsf-implement` only; `stage` names
-the research, synthesis, critique, or breakdown stage in the other two.
+the research, synthesis, critique, or breakdown stage in the other two. An
+architecture invalidation's statement carries the gate's five fields, so the
+question the requester sees includes the proposed amendment.
 
 Signals in one wave surface together. The requester's decisions are committed
 to a decision log in the repo by a scribe agent at the start of the relaunch,
@@ -375,29 +371,26 @@ then referenced by SHA in affected prompts — state never lives only in `args`.
 
 ## Shared stage schema
 
-Every `agent()` in the three workflows returns at least:
+Every `agent()` in the three workflows returns:
 
 ```
 { result: <stage-specific>,
-  assumptions: [ { statement, referent } ],
-  ambiguities: [ { statement, about: "scope" | "goal" | "requirement" | "design", referent } ],
-  contradictions: [ { statement, against: <doc path + SHA> } ],
   commits: [ { branch, sha } ] }
 ```
 
-Empty arrays are valid. The script maps `ambiguities` and `contradictions`
-straight into signals. Ambiguities can only be about the architecture document,
-request record, plan, or unit entry, and carry a referent; an open point in a
-stage's own instructions is resolved plainly and recorded as an assumption.
+Nothing else. The stages that report beyond their result do so in
+stage-specific `result` fields with defined shapes:
 
-Each finding enters the ledger once. Every stage after a unit's plan receives
-the signals the unit's earlier stages recorded, and the review-gate agent
-receives the wave's, under an "Already recorded" heading with the instruction
-to report only what is new; a stale filename in a Scope line is recorded by
-the plan stage, not again by each of the seven that follow. The gate is also
-told the workflow's own rules — the critique pass bar, that re-plan follows
-the gate, that the script selects the wave's units — so it does not report
-them as defects, and that exit criteria are the done condition as written.
+- **plan**: `readings: [{ clause, reading }]`.
+- **implement**: `deviations`, `writesOutsideScope`, `deferrals: [{ statement,
+  belongsTo }]`, `discoveries: [{ statement, affects }]`, `distress`,
+  `doneCondition: { evaluable, met, evidence }`.
+- **review stages**: `findings: [{ severity, statement, location }]`, `systemic`.
+- **fix**: `applied`, `notApplied: [{ finding, reason }]`.
+- **wave gate**: `invalidations: [{ section, decision, premise, evidence,
+  amendment }]`, `notes: [{ statement, referent }]`.
+- **re-plan**: `amendments: [{ kind, unit, statement }]`, `verdicts: [{ id,
+  verdict: amended | no-change | cannot, statement }]`, `overBudget`.
 
 ## Persistence
 
@@ -416,11 +409,12 @@ The Workflow tool itself is not tested. What is tested is the script's own
 logic and the signal layer.
 
 **Scheduling logic** — ready-set computation, wave partitioning, merge order,
-stop rule — is a dependency-free JavaScript module (`workflows/lsf/scheduling.js`, with
-the shared schema in `schema.js` and the block parser in `graph.js`),
-unit-tested outside Claude Code with `node --test`, and inlined into the
-script (the script cannot import). The inlining is a copy step and the only
-place drift can enter; the module files are the source of truth.
+signal mapping, stop rule, digest — is a dependency-free JavaScript module
+(`workflows/lsf/scheduling.js`, with the shared schema in `schema.js` and the
+block parser in `graph.js`), unit-tested outside Claude Code with
+`node --test`, and inlined into the script (the script cannot import). The
+inlining is a copy step and the only place drift can enter; the module files
+are the source of truth.
 
 `graph.js` parses the YAML subset the blocks are written in, maps the plan
 block onto `PLAN_SCHEMA`, applies decision-log clearances, and reports every
@@ -434,13 +428,10 @@ one contains or equals an entry of the other: a directory contains the paths
 under it, a bare file contains its symbols, and two symbols of one file
 overlap only when they are the same symbol. Completed units pair with
 nothing. Units count as serialised when a dependency path runs
-between them in either direction. Signals from `ambiguities` map by
-`about`: scope and goal to their STOP kinds, requirement to
-`requirement-incomplete`, design to a RECORD kind. Every `contradictions`
-entry is `assumption-invalidated`. Volume thresholds (per-stage open-signal count,
-distress deviation and design-decision counts) are the module's config
-object, overridable from the workflow's `args`. `renderLedger` produces the
-wave's ledger table the scribe appends.
+between them in either direction. `signalsFromGate` stops on an invalidation
+only when all five fields are non-empty. Distress thresholds are the
+module's config object, overridable from the workflow's `args`.
+`renderLedger` produces the wave's ledger table the scribe appends.
 
 **Signal layer** (tentative): a synthetic feature in the bench repo with
 injected defects — a deferral, a claimed-disjoint conflict, a unit whose
@@ -448,12 +439,13 @@ completion invalidates an architecture assumption, a contradictory
 requirement, a requirement-altering critique fix that should have stopped the
 run — run end-to-end and scored on whether each defect reaches an
 escalation record, at which wave, and from which source. Same shape as the
-critic-fidelity measurement. Not yet committed to.
+critic-fidelity measurement. The wave gate's precision and recall in the
+five-field form is the first thing it should measure. Not yet committed to.
 
 ## Model tiers
 
 Each stage call carries a role tier (`args.tiers` overrides per role):
-gate (critique, lens review, architecture gate, obligations) runs opus;
+gate (critique, lens review, wave gate, obligations) runs opus;
 planning (unit plan, re-plan, termination) runs fable at medium effort;
 mechanical (plan-block copy, decision-log and ledger appends) runs haiku at
 low effort, since the script has already rendered what they write and the
@@ -463,8 +455,5 @@ model.
 
 ## Open questions
 
-- Whether `phronithm:feature`'s work-unit mode should itself be restructured
-  to match the five stages above, so the two paths stay one contract, or the
-  workflow carries its own stage prompts.
 - Whether the three workflows are exposed as separate plugin workflows or one
   with a phase argument.

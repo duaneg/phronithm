@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import {
   findCycle, pathsOverlap, overlappingPairs, validatePlan,
   readySet, blockedUnits, mergeOrder, wavePlan,
-  signalsFromStageReturn, nullReturnSignal, signalsFromMerge, distressSignals,
-  volumeSignals, evaluateWave, digest, renderLedger, ledgerHeading,
+  nullReturnSignal, signalsFromReadings, signalsFromImplement, signalsFromFindings, signalsFromGate, invalidationComplete,
+  signalsFromMerge, distressSignals, evaluateWave, digest, renderLedger, ledgerHeading, REPLAN_ITEM_KINDS,
 } from '../scheduling.js';
+import { STOP_KINDS, RECORD_KINDS } from '../schema.js';
 import { signal } from '../schema.js';
 
 const unit = (id, opts = {}) => ({
@@ -139,58 +140,68 @@ test('wavePlan partitions the diamond into three waves and stops at a gate', () 
   assert.deepEqual(wavePlan(p), [['A'], ['B', 'C']]);
 });
 
-test('signalsFromStageReturn maps the shared fields by kind', () => {
-  const ret = {
-    result: {},
-    assumptions: [{ statement: 'schema is stable', referent: 'docs/arch.md#schema' }],
-    ambiguities: [
-      { statement: 'which tenants', about: 'scope' },
-      { statement: 'is latency a goal', about: 'goal' },
-      { statement: 'missing SLA', about: 'requirement' },
-      { statement: 'retry policy', about: 'design' },
-    ],
-    contradictions: [{ statement: 'arch says sync', against: 'docs/arch.md@abc' }],
-    commits: [],
-  };
-  const sigs = signalsFromStageReturn(ret, { stage: 'implement', unit: 'B', wave: 2 });
-  assert.deepEqual(sigs.map((s) => s.kind), [
-    'assumption', 'scope-ambiguity', 'goal-ambiguity', 'requirement-incomplete', 'design-ambiguity', 'assumption-invalidated',
-  ]);
-  assert.ok(sigs.every((s) => s.source === 'reported' && s.unit === 'B' && s.wave === 2));
-  assert.equal(sigs[5].referent, 'docs/arch.md@abc');
+test('signalsFromReadings records each reading against its clause', () => {
+  const sigs = signalsFromReadings([{ clause: 'Scope: tests/test_core_geom_svgpath.py', reading: 'tests/test_svgpath_document.py, the file that owns _classify' }], { unit: 'B', wave: 1 });
+  assert.equal(sigs.length, 1);
+  assert.equal(sigs[0].kind, 'reading');
+  assert.equal(sigs[0].source, 'reported');
+  assert.equal(sigs[0].stage, 'plan');
+  assert.equal(sigs[0].referent, 'Scope: tests/test_core_geom_svgpath.py');
+  assert.match(sigs[0].statement, /read as: tests\/test_svgpath_document\.py/);
+  assert.deepEqual(signalsFromReadings(undefined, { unit: 'B', wave: 1 }), []);
 });
 
-test('signalsFromStageReturn: plan-level ambiguities and contradictions are plan defects; other levels keep their kind', () => {
-  const ret = {
-    result: {},
-    ambiguities: [
-      { statement: 'Scope omits CLAUDE.md', about: 'scope', level: 'plan', referent: 'unit B Scope' },
-      { statement: 'done condition is an outcome', about: 'requirement', level: 'plan', referent: 'unit B done condition' },
-      { statement: 'retry policy', about: 'design', level: 'plan', referent: 'unit B plan' },
-      { statement: 'which tenants', about: 'scope', level: 'architecture', referent: '§3' },
-      { statement: 'missing SLA', about: 'requirement', level: 'request', referent: 'request record' },
-    ],
-    contradictions: [
-      { statement: 'Publishes names a member §4.11 lacks', level: 'plan', against: 'docs/plans/f-breakdown.md@p1' },
-      { statement: 'arch says sync', level: 'architecture', against: 'docs/arch.md@abc' },
-    ],
-  };
-  const sigs = signalsFromStageReturn(ret, { stage: 'critique-plan', unit: 'B', wave: 1, source: 'gate' });
-  assert.deepEqual(sigs.map((s) => s.kind), [
-    'plan-defect', 'plan-defect', 'design-ambiguity', 'scope-ambiguity', 'requirement-incomplete', 'plan-defect', 'assumption-invalidated',
-  ]);
-  const ev = evaluateWave(sigs, [], { wave: 1, unitsInWave: 1 });
-  assert.deepEqual(ev.records.map((s) => s.kind), ['plan-defect', 'plan-defect', 'design-ambiguity', 'plan-defect']);
+test('signalsFromImplement records deviations, writes outside Scope, deferrals, and discoveries', () => {
+  const sigs = signalsFromImplement({
+    deviations: ['added a sibling predicate instead of widening'],
+    writesOutsideScope: ['CLAUDE.md', 'tests/stubs.py'],
+    deferrals: [{ statement: 'export path left unrotated', belongsTo: 'render-export' }],
+    discoveries: [{ statement: 'loophole-compound has no edge to render-export', affects: 'loophole-compound' }],
+  }, { unit: 'B', wave: 2 });
+  assert.deepEqual(sigs.map((s) => s.kind), ['deviation', 'deviation', 'deferral', 'discovery']);
+  assert.ok(sigs.every((s) => s.source === 'reported' && s.stage === 'implement' && s.unit === 'B' && s.wave === 2));
+  assert.match(sigs[1].statement, /writes outside the Scope line: CLAUDE\.md, tests\/stubs\.py/);
+  assert.equal(sigs[2].referent, 'render-export');
+  assert.equal(sigs[3].referent, 'loophole-compound');
+  assert.deepEqual(signalsFromImplement({}, { unit: 'B', wave: 2 }), []);
 });
 
-test('signalsFromStageReturn tolerates missing arrays', () => {
-  assert.deepEqual(signalsFromStageReturn({ result: {} }, { stage: 'plan' }), []);
+test('signalsFromFindings records Significant and Minor findings and skips Critical', () => {
+  const sigs = signalsFromFindings([
+    { severity: 'Critical', statement: 'wrong', location: 'a.py:1' },
+    { severity: 'Significant', statement: 'fragile', location: 'a.py:2' },
+    { severity: 'Minor', statement: 'naming', location: 'a.py:3' },
+  ], { stage: 'critique-code', unit: 'B', wave: 1, round: 2 });
+  assert.deepEqual(sigs.map((s) => [s.kind, s.source, s.referent]), [['finding', 'gate', 'a.py:2'], ['finding', 'gate', 'a.py:3']]);
+  assert.match(sigs[0].statement, /^Significant \(round 2\): fragile/);
+});
+
+const inv = (over = {}) => ({ section: '§4.8', decision: 'two-tone families are two-part groups', premise: 'nested art classifies to a group', evidence: 'svgpath.py:120; brazier parses to a bare Glyph', amendment: 'nested art must be authored as siblings, or _classify keeps ids on holes', ...over });
+
+test('signalsFromGate: a complete invalidation stops; an incomplete one and every note is recorded', () => {
+  assert.ok(invalidationComplete(inv()));
+  assert.ok(!invalidationComplete(inv({ amendment: '' })));
+  assert.ok(!invalidationComplete(inv({ evidence: '  ' })));
+  const sigs = signalsFromGate({
+    invalidations: [inv(), inv({ amendment: '' })],
+    notes: [{ statement: 'N3 trigger fired, no owner', referent: 'architecture §6 N3' }],
+  }, { wave: 1 });
+  assert.deepEqual(sigs.map((s) => s.kind), ['architecture-invalidated', 'architecture-note', 'architecture-note']);
+  assert.ok(sigs.every((s) => s.source === 'gate' && s.stage === 'review-gate' && s.wave === 1));
+  assert.equal(sigs[0].referent, '§4.8');
+  assert.match(sigs[0].statement, /section: §4\.8; decision: .*; premise: .*; evidence: .*; amendment: nested art/);
+  assert.match(sigs[1].statement, /^incomplete invalidation \(amendment missing\)/);
+  assert.equal(sigs[2].referent, 'architecture §6 N3');
+  const ev = evaluateWave(sigs);
+  assert.equal(ev.stop, true);
+  assert.deepEqual(ev.stops.map((s) => s.kind), ['architecture-invalidated']);
+  assert.deepEqual(ev.records.map((s) => s.disposition), ['recorded', 'recorded']);
 });
 
 test('nullReturnSignal is a structural STOP', () => {
   const s = nullReturnSignal({ stage: 'review', unit: 'C', wave: 1 });
   assert.equal(s.kind, 'agent-null');
-  assert.equal(evaluateWave([s], [], { wave: 1, unitsInWave: 1 }).stop, true);
+  assert.equal(evaluateWave([s]).stop, true);
 });
 
 test('signalsFromMerge distinguishes resolved from unresolvable conflicts', () => {
@@ -205,9 +216,11 @@ test('signalsFromMerge distinguishes resolved from unresolvable conflicts', () =
   }, { wave: 2 });
   assert.deepEqual(sigs.map((s) => s.kind), ['claimed-disjoint-conflict', 'merge-conflict-unresolvable', 'merge-regression']);
   assert.ok(sigs.every((s) => s.source === 'structural'));
+  const ev = evaluateWave(sigs);
+  assert.deepEqual(ev.records.map((s) => s.kind), ['claimed-disjoint-conflict']);
 });
 
-test('distressSignals fires on any breakdown distress signal and is quiet otherwise', () => {
+test('distressSignals is a record on any breakdown distress signal and quiet otherwise', () => {
   const calm = { contextNearExhaustion: false, midImplementationDesignDecisions: 0, deviations: 1, deferrals: 1 };
   assert.deepEqual(distressSignals(calm, { unit: 'B', wave: 1 }), []);
   const cases = [
@@ -219,147 +232,54 @@ test('distressSignals fires on any breakdown distress signal and is quiet otherw
     const sigs = distressSignals(c, { unit: 'B', wave: 1 });
     assert.equal(sigs.length, 1);
     assert.equal(sigs[0].kind, 'execution-distress');
+    assert.equal(evaluateWave(sigs).stop, false);
   }
   assert.deepEqual(distressSignals({ ...calm, deviations: 3 }, { unit: 'B', wave: 1 }, { distressDeviationThreshold: 10 }), []);
   assert.deepEqual(distressSignals({ ...calm, midImplementationDesignDecisions: 2 }, { unit: 'B', wave: 1 }), [], 'two design decisions are ordinary');
 });
 
-const reported = (kind, opts) => signal({ source: 'reported', stage: 'implement', statement: kind, ...opts, kind });
-
-test('evaluateWave records assumptions and design ambiguities, stops on the rest', () => {
-  const sigs = [
-    reported('assumption', { unit: 'B', wave: 1, referent: 'r1' }),
-    reported('design-ambiguity', { unit: 'B', wave: 1, referent: 'r2' }),
-  ];
-  const r = evaluateWave(sigs, [], { wave: 1, unitsInWave: 1 });
-  assert.equal(r.stop, false);
-  assert.deepEqual(r.records.map((s) => s.disposition), ['recorded', 'recorded']);
-  const r2 = evaluateWave([reported('scope-ambiguity', { unit: 'B', wave: 1, referent: 'r3' })], [], { wave: 1, unitsInWave: 1 });
-  assert.equal(r2.stop, true);
-  assert.equal(r2.stops[0].disposition, 'stopped');
-});
-
-test('a wave with units and no reported signal stops as silent', () => {
-  const r = evaluateWave([], [], { wave: 1, unitsInWave: 2 });
-  assert.deepEqual(r.stops.map((s) => s.kind), ['silent-wave']);
-  const empty = evaluateWave([], [], { wave: 1, unitsInWave: 0 });
+test('the stop rule reads kind alone: every STOP kind stops, every RECORD kind is recorded, and re-plan items are records', () => {
+  for (const k of STOP_KINDS) assert.equal(evaluateWave([signal({ kind: k, source: 'structural', stage: 's', statement: k })]).stop, true, k);
+  for (const k of RECORD_KINDS) assert.equal(evaluateWave([signal({ kind: k, source: 'reported', stage: 's', statement: k })]).stop, false, k);
+  for (const k of REPLAN_ITEM_KINDS) assert.ok(RECORD_KINDS.includes(k), k);
+  const empty = evaluateWave([]);
   assert.equal(empty.stop, false);
-});
-
-test('the same referent from two waves stops, for open points and plan defects', () => {
-  const prior = [reported('scope-ambiguity', { unit: 'A', wave: 1, referent: 'Auth Token Format' })];
-  const now = [reported('plan-defect', { unit: 'B', wave: 2, referent: 'auth token format ' })];
-  const v = volumeSignals(now, prior, { wave: 2, unitsInWave: 1 });
-  assert.deepEqual(v.map((s) => s.kind), ['referent-recurrence']);
-  assert.equal(v[0].referent, 'auth token format');
-  assert.doesNotMatch(v[0].statement, /sources/);
-});
-
-test('recurrence ignores assumptions: read-only stages disclosing the same field is boilerplate', () => {
-  const prior = [reported('assumption', { unit: 'A', wave: 1, referent: 'commits field' })];
-  const now = [
-    reported('assumption', { unit: 'B', wave: 2, referent: 'commits field' }),
-    signal({ kind: 'assumption', source: 'gate', stage: 'review-gate', wave: 2, statement: 's', referent: 'commits field' }),
-  ];
-  assert.deepEqual(volumeSignals(now, prior, { wave: 2, unitsInWave: 1 }), []);
-});
-
-test('the same referent from two sources in one wave does not recur', () => {
-  const now = [
-    reported('scope-ambiguity', { unit: 'B', wave: 1, referent: 'x' }),
-    signal({ kind: 'assumption-invalidated', source: 'gate', stage: 'review-gate', unit: 'B', wave: 1, statement: 's', referent: 'x' }),
-    reported('scope-ambiguity', { unit: 'C', wave: 1, referent: 'x' }),
-  ];
-  assert.deepEqual(volumeSignals(now, [], { wave: 1, unitsInWave: 2 }), []);
-});
-
-test('recurrence only fires for referents this wave touched', () => {
-  const prior = [
-    reported('assumption', { unit: 'A', wave: 1, referent: 'x' }),
-    reported('assumption', { unit: 'A', wave: 2, referent: 'x' }),
-  ];
-  const now = [reported('assumption', { unit: 'B', wave: 3, referent: 'y' })];
-  assert.deepEqual(volumeSignals(now, prior, { wave: 3, unitsInWave: 1 }), []);
-});
-
-test('per-stage signal threshold is configurable and counts one stage\'s open ambiguities and contradictions, not the unit\'s total', () => {
-  const now = Array.from({ length: 3 }, (_, i) => reported('scope-ambiguity', { unit: 'B', wave: 1, referent: `r${i}` }));
-  now.push(reported('assumption-invalidated', { unit: 'B', wave: 1, referent: 'r9' }));
-  assert.deepEqual(volumeSignals(now, [], { wave: 1, unitsInWave: 1 }), []);
-  const v = volumeSignals(now, [], { wave: 1, unitsInWave: 1 }, { perStageSignalThreshold: 3 });
-  assert.deepEqual(v.map((s) => s.kind), ['signal-volume']);
-  assert.equal(v[0].unit, 'B');
-  assert.match(v[0].statement, /by implement for B/);
-  // The same four spread over four stages is no one stage's volume.
-  const spread = now.map((s, i) => ({ ...s, stage: `stage${i}` }));
-  assert.deepEqual(volumeSignals(spread, [], { wave: 1, unitsInWave: 1 }, { perStageSignalThreshold: 3 }), []);
-  // Disclosed assumptions and design ambiguities are not volume, however many.
-  const disclosed = Array.from({ length: 8 }, (_, i) => reported(i % 2 ? 'assumption' : 'design-ambiguity', { unit: 'B', wave: 1, referent: `d${i}` }));
-  assert.deepEqual(volumeSignals(disclosed, [], { wave: 1, unitsInWave: 1 }, { perStageSignalThreshold: 3 }), []);
-});
-
-test('plan defects do not count towards the per-stage threshold', () => {
-  const now = Array.from({ length: 8 }, (_, i) => reported('plan-defect', { unit: 'B', wave: 1, stage: 'plan', referent: `r${i}` }));
-  assert.deepEqual(volumeSignals(now, [], { wave: 1, unitsInWave: 1 }), []);
+  assert.deepEqual(empty.all, []);
 });
 
 test('renderLedger is one table under a wave heading, one line per row, pipes and newlines neutralised', () => {
   const rows = [
-    { wave: 2, unit: 'B', stage: 'plan', source: 'reported', kind: 'assumption', statement: 'a | b\nc', referent: 'x', disposition: 'recorded' },
-    { unit: null, stage: 'stop-rule', source: 'structural', kind: 'signal-volume', statement: 's', referent: 'B', disposition: 'stopped' },
+    { wave: 2, unit: 'B', stage: 'plan', source: 'reported', kind: 'reading', statement: 'a | b\nc', referent: 'x', disposition: 'recorded' },
+    { unit: null, stage: 'merge', source: 'structural', kind: 'merge-regression', statement: 's', referent: 'B', disposition: 'stopped' },
   ];
   const md = renderLedger(rows, 2);
   const lines = md.split('\n');
   assert.equal(lines[0], '## Wave 2');
   assert.equal(lines[2], '| Wave | Unit | Stage | Source | Kind | Statement | Referent | Disposition |');
-  assert.equal(lines[4], '| 2 | B | plan | reported | assumption | a \\| b c | x | recorded |');
-  assert.equal(lines[5], '| 2 | — | stop-rule | structural | signal-volume | s | B | stopped |');
+  assert.equal(lines[4], '| 2 | B | plan | reported | reading | a \\| b c | x | recorded |');
+  assert.equal(lines[5], '| 2 | — | merge | structural | merge-regression | s | B | stopped |');
   assert.equal(lines.length, 7); // trailing newline
   assert.match(ledgerHeading('f'), /^# Signal ledger: f\n/);
 });
 
-test('a referent that is only the signal\'s own unit id never recurs; an ambiguity without a referent uses its statement', () => {
-  const now = [
-    reported('assumption', { unit: 'B', wave: 1, referent: 'B' }),
-    signal({ kind: 'execution-distress', source: 'structural', stage: 'implement', unit: 'B', wave: 1, statement: 's', referent: 'B' }),
-    signal({ kind: 'done-condition-unevaluable', source: 'gate', stage: 'review-gate', unit: 'B', wave: 1, statement: 's', referent: 'b' }),
-  ];
-  assert.deepEqual(volumeSignals(now, [], { wave: 1, unitsInWave: 1 }), []);
-  const sigs = signalsFromStageReturn({
-    ambiguities: [{ statement: 'which order?', about: 'scope' }, { statement: 'what size?', about: 'scope', referent: 'Scene.fixture' }],
-  }, { stage: 'plan', unit: 'B', wave: 1 });
-  assert.deepEqual(sigs.map((s) => s.referent), ['which order?', 'Scene.fixture']);
-  const later = { ...sigs[0], wave: 2 };
-  assert.deepEqual(volumeSignals([later], [sigs[0]], { wave: 2, unitsInWave: 1 }).map((s) => s.referent), ['which order?'], 'the statement is a referent that can recur');
-});
-
-test('digest computes counts and the three trend flags', () => {
+test('digest counts by kind, source and disposition, and lists what needs attention', () => {
+  const rec = (kind, opts) => signal({ source: 'reported', stage: 'implement', statement: kind, disposition: 'recorded', ...opts, kind });
   const ledger = [
-    reported('assumption', { unit: 'A', wave: 1, referent: 'a' }),
-    reported('assumption', { unit: 'B', wave: 2, referent: 'b' }),
-    reported('assumption', { unit: 'B', wave: 2, referent: 'c' }),
-    reported('assumption', { unit: 'C', wave: 3, referent: 'd' }),
-    reported('assumption', { unit: 'C', wave: 3, referent: 'e' }),
-    reported('assumption', { unit: 'C', wave: 3, referent: 'f' }),
-    signal({ kind: 'referent-recurrence', source: 'structural', stage: 'stop-rule', wave: 3, statement: 's', referent: 'b' }),
-    signal({ kind: 'silent-wave', source: 'structural', stage: 'stop-rule', wave: 1, statement: 's', referent: 'wave-1' }),
+    rec('reading', { unit: 'A', wave: 1, stage: 'plan' }),
+    signal({ kind: 'finding', source: 'gate', stage: 'critique-code', unit: 'A', wave: 1, statement: 'Significant: x', disposition: 'recorded' }),
+    signal({ kind: 'finding', source: 'gate', stage: 'lens-review', unit: 'A', wave: 1, statement: 'Minor: y', disposition: 'recorded' }),
+    signal({ kind: 'finding', source: 'gate', stage: 'critique-code', unit: 'B', wave: 2, statement: 'Significant: z', disposition: 'recorded' }),
+    signal({ kind: 'architecture-note', source: 'gate', stage: 'review-gate', wave: 2, statement: 'N3 has no owner', referent: '§6', disposition: 'recorded' }),
+    rec('execution-distress', { unit: 'B', wave: 2 }),
+    rec('execution-distress', { unit: 'B', wave: 2 }),
   ];
   const d = digest(ledger);
-  assert.equal(d.waves, 3);
-  assert.equal(d.byKind.assumption, 6);
-  assert.deepEqual(d.bySource, { reported: 6, structural: 2 });
-  assert.equal(d.trends.risingAssumptions, true);
-  assert.deepEqual(d.trends.recurringReferents, ['b']);
-  assert.deepEqual(d.trends.silentWaves, [1]);
+  assert.equal(d.waves, 2);
+  assert.equal(d.byKind.finding, 3);
+  assert.deepEqual(d.bySource, { reported: 3, gate: 4 });
+  assert.deepEqual(d.byDisposition, { recorded: 7 });
+  assert.deepEqual(d.attention.architectureNotes, ['N3 has no owner']);
+  assert.deepEqual(d.attention.unfixedSignificant, { A: 1, B: 1 });
+  assert.deepEqual(d.attention.distressedUnits, ['B']);
   assert.match(d.note, /not evidence/);
-});
-
-test('digest uses unitsPerWave when given', () => {
-  const ledger = [
-    reported('assumption', { unit: 'A', wave: 1, referent: 'a' }),
-    reported('assumption', { unit: 'B', wave: 2, referent: 'b' }),
-  ];
-  const d = digest(ledger, { unitsPerWave: { 1: 1, 2: 4 } });
-  assert.deepEqual(d.trends.assumptionsPerUnitByWave, [1, 0.25]);
-  assert.equal(d.trends.risingAssumptions, false);
 });

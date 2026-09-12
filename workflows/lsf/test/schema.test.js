@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  stageSchema, signal, escalation, STOP_KINDS, RECORD_KINDS, STAGE_COMMON_REQUIRED,
+  stageSchema, signal, escalation, STOP_KINDS, RECORD_KINDS, STAGE_COMMON_REQUIRED, INVALIDATION_SCHEMA, INVALIDATION_FIELDS,
 } from '../schema.js';
 
 test('stageSchema wraps a result schema with the shared fields', () => {
@@ -9,11 +9,12 @@ test('stageSchema wraps a result schema with the shared fields', () => {
   assert.equal(s.type, 'object');
   assert.deepEqual(s.required, ['result', ...STAGE_COMMON_REQUIRED]);
   for (const r of s.required) assert.ok(r in s.properties, `${r} declared`);
-  assert.deepEqual(s.properties.ambiguities.items.properties.about.enum, ['scope', 'goal', 'requirement', 'design']);
-  assert.deepEqual(s.properties.ambiguities.items.properties.level.enum, ['plan', 'architecture', 'request']);
-  assert.deepEqual(s.properties.contradictions.items.properties.level.enum, ['plan', 'architecture', 'request']);
-  assert.ok(s.properties.ambiguities.items.required.includes('level'));
-  assert.ok(s.properties.contradictions.items.required.includes('level'));
+  assert.deepEqual(Object.keys(s.properties), ['result', 'commits'], 'commits is the only shared field');
+});
+
+test('an invalidation requires all five fields', () => {
+  assert.deepEqual(INVALIDATION_SCHEMA.required, INVALIDATION_FIELDS);
+  assert.deepEqual([...INVALIDATION_FIELDS], ['section', 'decision', 'premise', 'evidence', 'amendment']);
 });
 
 test('stageSchema rejects a non-object result schema', () => {
@@ -23,8 +24,8 @@ test('stageSchema rejects a non-object result schema', () => {
 
 test('signal requires a kind and a known source', () => {
   assert.throws(() => signal({ source: 'reported', stage: 'plan' }));
-  assert.throws(() => signal({ kind: 'assumption', source: 'volunteered', stage: 'plan' }));
-  const s = signal({ kind: 'assumption', source: 'reported', stage: 'plan', statement: 'x' });
+  assert.throws(() => signal({ kind: 'reading', source: 'volunteered', stage: 'plan' }));
+  const s = signal({ kind: 'reading', source: 'reported', stage: 'plan', statement: 'x' });
   assert.equal(s.referent, '');
   assert.equal(s.raisedBy, 'plan');
   assert.ok(!('unit' in s));

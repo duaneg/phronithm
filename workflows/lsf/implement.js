@@ -12,6 +12,12 @@
 // (docs/plan-graph.md). A copy agent fetches the blocks; graph.js parses
 // them. No agent interprets the plan's prose on the script's behalf.
 //
+// The script stops only on structural signals (merge, tests, gate cap,
+// null returns, plan validity) and on two adjudicated ones: the wave gate's
+// complete architecture invalidation and the re-plan's `cannot` verdict.
+// Everything else agents report is recorded in the ledger and handed to the
+// re-plan.
+//
 // args:
 //   name                feature name; default paths derive from it
 //   planSha             commit SHA of the decomposition plan to load (required)
@@ -34,12 +40,13 @@
 //                       default (everything else)
 
 import {
-  stageSchema, MERGE_RESULT_SCHEMA, DISTRESS_SCHEMA, RECORD_KINDS, signal, escalation,
+  stageSchema, MERGE_RESULT_SCHEMA, DISTRESS_SCHEMA, INVALIDATION_SCHEMA, AMENDMENT_KINDS, signal, escalation,
 } from './schema.js';
 import { loadGraph } from './graph.js';
 import {
-  DEFAULT_CONFIG, validatePlan, readySet, blockedUnits, mergeOrder, wavePlan,
-  signalsFromStageReturn, nullReturnSignal, signalsFromMerge, distressSignals, evaluateWave, digest, renderLedger, ledgerHeading,
+  DEFAULT_CONFIG, REPLAN_ITEM_KINDS, validatePlan, readySet, blockedUnits, mergeOrder, wavePlan,
+  nullReturnSignal, signalsFromReadings, signalsFromImplement, signalsFromFindings, signalsFromGate,
+  signalsFromMerge, distressSignals, evaluateWave, digest, renderLedger, ledgerHeading,
 } from './scheduling.js';
 
 const WORKFLOW = 'lsf-implement';
@@ -93,6 +100,10 @@ const UNIT_PLAN_SCHEMA = stageSchema(obj({
   ...COMMIT_FIELDS,
   path: str,
   planText: { ...str, description: 'The implementation plan verbatim' },
+  readings: arr(obj({
+    clause: { ...str, description: 'The clause of the unit entry or architecture document that admitted more than one reading, or named something that does not exist as named' },
+    reading: { ...str, description: 'The reading the plan takes' },
+  })),
 }));
 
 const FINDING = obj({
@@ -110,7 +121,7 @@ const FINDINGS_SCHEMA = stageSchema(obj({
 const FIX_SCHEMA = stageSchema(obj({
   ...COMMIT_FIELDS,
   applied: arr(obj({ finding: str, fix: str })),
-  notApplied: arr(obj({ finding: str, reason: str, altersRequirement: bool })),
+  notApplied: arr(obj({ finding: str, reason: str })),
   planText: { ...str, description: 'The amended plan verbatim, when the subject is a plan; empty otherwise' },
 }));
 
@@ -118,9 +129,13 @@ const IMPLEMENT_SCHEMA = stageSchema(obj({
   ...COMMIT_FIELDS,
   gateProbe: arr(obj({ name: str, pin: str, observed: str, drifted: bool })),
   distress: DISTRESS_SCHEMA,
-  deviations: strings,
-  deferrals: arr(obj({ statement: str, belongsTo: str })),
-  discoveries: strings,
+  deviations: { ...strings, description: 'Departures from the unit entry\'s scope or publishes, one statement each' },
+  writesOutsideScope: { ...strings, description: 'Files changed that the unit entry\'s Scope line does not name' },
+  deferrals: arr(obj({ statement: str, belongsTo: { ...str, description: 'The unit the deferred work belongs to' } })),
+  discoveries: arr(obj({
+    statement: str,
+    affects: { ...str, description: 'The unit whose scope, dependencies, or done condition this changes, or the architecture section it bears on' },
+  })),
   doneCondition: obj({ evaluable: bool, met: bool, evidence: str }),
   standingObligations: arr(obj({ statement: str, status: str })),
   summary: str,
@@ -134,18 +149,15 @@ const MERGE_SCHEMA = stageSchema(obj({
 }, [...MERGE_RESULT_SCHEMA.required, 'planSha']));
 
 const GATE_SCHEMA = stageSchema(obj({
-  invalidatesArchitecture: bool,
-  handoff: { type: 'string', enum: ['sufficient', 'partial', 'insufficient'] },
-  exitCriteria: arr(obj({ unit: str, met: bool, statement: str })),
+  invalidations: arr(INVALIDATION_SCHEMA),
+  notes: arr(obj({ statement: str, referent: { ...str, description: 'A document section, unit, symbol, or file' } })),
 }));
-
-const AMENDMENT_KINDS = RECORD_KINDS.filter((k) => !['assumption', 'design-ambiguity', 'plan-defect'].includes(k));
 
 const REPLAN_SCHEMA = stageSchema(obj({
   planSha: { ...str, description: 'Plan SHA after the amendments were committed; the plan SHA given when nothing changed' },
   amendments: arr(obj({ kind: { type: 'string', enum: AMENDMENT_KINDS }, unit: str, statement: str })),
   overBudget: arr(obj({ unit: str, repaired: bool, statement: str })),
-  defects: arr(obj({
+  verdicts: arr(obj({
     id: str,
     verdict: { type: 'string', enum: ['amended', 'no-change', 'cannot'] },
     statement: { ...str, description: 'What was amended, why the plan already answers it, or why the plan cannot absorb it' },
@@ -168,7 +180,7 @@ const SCRIBE_SCHEMA = stageSchema(obj({ path: str, sha: str }));
 // ---------------------------------------------------------------- prompts
 
 const RETURN_FIELDS = `
-Besides \`result\`, return: \`assumptions\` — each thing you took as given that the inputs do not state, with the referent it concerns; \`ambiguities\` — each point where the architecture document, the request record, the decomposition plan, or the unit entry leaves open what is built, in what order, or with what scope, classified as scope, goal, requirement, or design, with the referent it concerns (a section, symbol, unit, or gate) and its level: \`plan\` when the decomposition plan or the unit entry is what leaves the point open (a Scope, Publishes, or done-condition line, a dependency, the execution order), \`architecture\` or \`request\` when that document does. Only those documents can be ambiguous. An open point in these instructions, in the return schema, or in how to report (which enum value fits, how many commits, whether a template field applies) is not an ambiguity: resolve it the plainest way and record it as an assumption. No item goes under both; \`contradictions\` — each thing you observed that contradicts the architecture document, the request record, or the unit entry, citing the document path and SHA, with the same level field naming which of the three is contradicted. Plan-level items are amended by the re-plan stage and do not stop the run; a plan defect is not evidence against the architecture or the request unless those documents themselves say otherwise; \`commits\` — every commit you made, branch and SHA. Empty arrays are valid. Do not pad them and do not omit a real one. An item already listed under "Already recorded" in these instructions is in the ledger: do not report it again in any field, in any wording; report only what is new. The return is one flat object with these four fields beside \`result\`, never inside it.`;
+Besides \`result\`, return \`commits\`: every commit you made, branch and SHA; an empty array when none. Nothing else: no questions or remarks outside the fields named. The return is one flat object.`;
 
 function header(ctx, plan) {
   const lines = [
@@ -187,19 +199,14 @@ function worktree(base) {
   return `You are running in a git worktree of the repository. Before anything else run \`git reset --hard ${base} && git clean -fd\` so the worktree matches that branch exactly, with no leftover untracked files from an earlier attempt. Make all changes and commits here; never touch other worktrees or the main checkout. Report your branch (\`git rev-parse --abbrev-ref HEAD\`) and HEAD SHA in \`result\`.`;
 }
 
+// What the unit entry's fields mean to a stage. Scope is read by the
+// scheduler for overlap between units in flight; it is not a permission
+// list, and a stage that treats it as one reports a defect that is not there.
+const ENTRY_SEMANTICS = `The entry's Scope line declares the files this unit writes that another unit in flight might also write; the scheduler reads it for overlap. It does not limit what the work may edit. A file the work needs to change outside the Scope line is changed, and reported as such where a stage asks for it — never treated as a question. A clause of the entry or of the architecture document that admits more than one reading, or names something that does not exist as named (a file, a test, a function), is read the plainest way consistent with the code; the unit plan records the reading and later stages hold to it.`;
+
 function unitBlock(plan, unit) {
-  return `Work unit: ${unit.id} (type: ${unit.type})\nUnit entry: the \`### ${unit.id}\` section under \`## Work Units\` in ${plan.path} @ ${plan.sha}. Read it first (\`git show ${plan.sha}:${plan.path}\`); it is requirement text, taken verbatim.`;
-}
-
-// Signals earlier stages recorded, handed to later stages so each finding
-// enters the ledger once instead of once per stage.
-function priorBlock(signals, scope) {
-  if (!signals.length) return '';
-  const rows = signals.map((s) => `- [${s.stage}] ${s.kind}: ${s.statement} (referent: ${s.referent})`);
-  return `
-
-Already recorded ${scope} (in the ledger; do not report these again, resolved or not — only what is new):
-${rows.join('\n')}`;
+  return `Work unit: ${unit.id} (type: ${unit.type})
+Unit entry: the \`### ${unit.id}\` section under \`## Work Units\` in ${plan.path} @ ${plan.sha}. Read it first (\`git show ${plan.sha}:${plan.path}\`); it is requirement text, taken verbatim. ${ENTRY_SEMANTICS}`;
 }
 
 function decisionLogPrompt(ctx, decisions) {
@@ -233,7 +240,7 @@ function copyPrompt(ctx, sha) {
 
 Copy stage. Run \`git show ${sha}:${ctx.planPath}\` and return, in \`planBlock\`, its \`\`\`yaml lsf-plan fenced block verbatim: from the opening fence line to the closing fence line inclusive, every character unchanged. ${decisions} Also return the branch the main checkout is on (\`git rev-parse --abbrev-ref HEAD\`) and the commit SHA of ${ctx.architectureDoc} on ${ctx.integrationBranch} (\`git rev-list -1 ${ctx.integrationBranch} -- ${ctx.architectureDoc}\`).
 
-Do not read, assess, or summarise the prose. Do not correct, reformat, or complete anything in the blocks; do not add units, edges, or gates. This stage copies; the script parses and checks the blocks itself. Anything you would report about the plan's content is outside this stage's scope: leave \`assumptions\`, \`ambiguities\`, and \`contradictions\` empty unless the copy itself could not be made faithfully.
+Do not read, assess, or summarise the prose. Do not correct, reformat, or complete anything in the blocks; do not add units, edges, or gates. This stage copies; the script parses and checks the blocks itself.
 ${RETURN_FIELDS}`;
 }
 
@@ -243,7 +250,16 @@ ${worktree(ctx.integrationBranch)}
 
 ${unitBlock(plan, unit)}
 
-Write the implementation plan for this unit following the phronithm:feature skill's Phase 3 in work-unit mode: the architecture document is the primary design input; the unit's done condition, adopted verbatim, is a success criterion; each standing obligation naming the unit is a requirement. Do not re-explore what the architecture document and unit entry settle. The plan must be self-contained — a fresh context can implement from it alone — and carry the work-unit context section (unit entry verbatim, decomposition plan path and SHA, standing obligations). Keep it within the unit's size budget: about six steps, at most one open design decision. This workflow's own stages replace feature's later phases: the implement stage runs the plan single-shot, a critique gate and lens review follow, and a completion report is written for the unit — so the plan carries no "Remaining phases" section and mandates no implementation summary (\`docs/plans/${unit.id}-implementation.md\`); the completion report is that record. Save it to docs/plans/${unit.id}-plan.md and commit. Return branch, SHA, path, and the plan text verbatim.
+Write the implementation plan for this unit. The architecture document is the primary design input; the unit's done condition, adopted verbatim, is a success criterion; each standing obligation naming the unit is a requirement. Do not re-explore what the architecture document and unit entry settle. Keep it within the unit's size budget: about six steps, at most one open design decision. Sections, in order:
+
+1. **Goal** — the unit entry verbatim, and the done condition as the success criterion.
+2. **Context** — the architecture sections relied on, the decomposition plan path and SHA, standing obligations naming the unit.
+3. **Readings** — every clause of the entry or the architecture document that admitted more than one reading, or named something that does not exist as named, with the reading taken and the evidence for it. Return the same list in \`readings\`. Take the reading; do not raise a question and do not stop.
+4. **Design** — the decisions the plan makes, with the one open design decision at most, and why.
+5. **Steps** — about six, each with what it changes and how it is verified, in an order that keeps the project's gates green after every step.
+6. **Verification** — how the done condition will be evaluated exactly as written, under the readings above.
+
+The plan must be self-contained: a fresh context can implement from it alone. It carries no "Remaining phases" section and mandates no implementation summary document; this workflow's own stages run the plan single-shot, review the result, and write the unit's completion report. Save it to docs/plans/${unit.id}-plan.md and commit. Return branch, SHA, path, the plan text verbatim, and the readings.
 ${RETURN_FIELDS}`;
 }
 
@@ -252,7 +268,7 @@ function planCritiquePrompt(ctx, plan, unit, planText, round) {
 
 ${unitBlock(plan, unit)}
 
-Critique the implementation plan below with type critique-design. This is round ${round} of the critique gate. Pass bar: no Critical findings. Report Significant and Minor findings; they are recorded, not fixed. Set \`systemic\` when the findings indicate a structural defect that iteration will not resolve. Continue through to completion — do not stop to wait for instruction.
+Critique the implementation plan below with type critique-design. This is round ${round} of the critique gate. Pass bar: no Critical findings. Report Significant and Minor findings; they are recorded, not fixed. The plan's Readings section records how it read clauses that admitted more than one reading; a reading you judge wrong is a finding at the severity its consequence warrants, not a separate remark. Set \`systemic\` when the findings indicate a structural defect that iteration will not resolve. Continue through to completion — do not stop to wait for instruction.
 
 --- implementation plan (docs/plans/${unit.id}-plan.md) ---
 ${planText}
@@ -270,7 +286,7 @@ Critique gate round ${round} found these Critical findings against the ${subject
 
 ${JSON.stringify(criticals, null, 2)}
 
-Fix each finding that is repairable within the ${subject}, then commit. Before applying any fix, classify it: if the fix would alter the unit entry, the architecture document, or the request record, apply nothing for that finding, list it under \`notApplied\` with \`altersRequirement: true\`, and record it under \`contradictions\` against the document it would alter. ${subject === 'plan' ? 'Return the amended plan text verbatim in `planText`.' : 'Run the tests after fixing; a fix that breaks a test is not applied. Leave `planText` empty.'}
+Fix each finding that is repairable within the ${subject}, then commit. A finding you decline to fix — because the repair would change the unit entry, the architecture document, or the request record, or because you cannot repair it — goes under \`notApplied\` with the reason. The run stops on a declined finding and the requester decides, so decline only when the repair is genuinely outside the ${subject}. ${subject === 'plan' ? 'Return the amended plan text verbatim in `planText`.' : 'Run the tests after fixing; a fix that breaks a test is not applied. Leave `planText` empty.'}
 ${RETURN_FIELDS}`;
 }
 
@@ -280,11 +296,11 @@ ${worktree(planBranch)}
 
 ${unitBlock(plan, unit)}
 
-Implementation plan: docs/plans/${unit.id}-plan.md on this branch.
+Implementation plan: docs/plans/${unit.id}-plan.md on this branch. Hold to its Readings section.
 
 First re-probe every external gate in the unit entry against its plan-time pin: probe environment gates mechanically (binaries and versions, fonts, services, accounts, data sets); organisational and release gates are already cleared per the decision log and need no probe. Report each under \`gateProbe\`. If any gate has drifted, implement nothing — return the probe results with every other \`result\` field empty, zero, or false, and stop.
 
-Otherwise execute the plan in full, single-shot, committing as you go with the project's commit discipline. There is no per-step critique here, and no implementation summary document: the completion report a later stage writes from your return is that record, so do not write \`docs/plans/${unit.id}-implementation.md\` even if the plan text mentions one. Then evaluate the done condition exactly as written and report whether it is evaluable in position and whether it is met, with evidence. Record as they arise: deviations from the unit entry's scope or publishes; deferrals — work in scope deliberately not implemented, naming the unit it belongs to; discoveries that add work to, reassign work between, or invalidate an assumption of another unit; the status of each standing obligation the unit carries. Report execution distress honestly: whether context is near exhaustion, how many design decisions you took mid-implementation, the deviation and deferral counts.
+Otherwise execute the plan in full, single-shot, committing as you go with the project's commit discipline. There is no per-step critique here, and no implementation summary document: the completion report a later stage writes from your return is that record, so do not write \`docs/plans/${unit.id}-implementation.md\` even if the plan text mentions one. Then evaluate the done condition exactly as written, under the plan's readings, and report whether it is evaluable in position and whether it is met, with evidence. Record as they arise: deviations from the unit entry's scope or publishes; the files you changed that the Scope line does not name, under \`writesOutsideScope\`; deferrals — work in scope deliberately not implemented, naming the unit it belongs to; discoveries — anything you learned that changes another unit's scope, dependencies, or done condition, or that the architecture document states otherwise, naming the unit or the section; the status of each standing obligation the unit carries. Report execution distress honestly: whether context is near exhaustion, how many design decisions you took mid-implementation, the deviation and deferral counts.
 ${RETURN_FIELDS}`;
 }
 
@@ -304,7 +320,7 @@ ${worktree(branch)}
 
 ${unitBlock(plan, unit)}
 
-Run the phronithm:critique skill with type critique-code over this branch's diff against ${ctx.integrationBranch} (\`git diff ${ctx.integrationBranch}...HEAD\`), reading surrounding code as needed. This is round ${round} of the critique gate. Pass bar: no Critical findings. Also evaluate the unit's done condition against this branch; a done condition that is not met is a Critical finding. Set \`systemic\` when the findings indicate a structural defect that iteration will not resolve. Do not modify anything and do not spawn subagents. Continue through to completion — do not stop to wait for instruction.
+Run the phronithm:critique skill with type critique-code over this branch's diff against ${ctx.integrationBranch} (\`git diff ${ctx.integrationBranch}...HEAD\`), reading surrounding code as needed. This is round ${round} of the critique gate. Pass bar: no Critical findings. Also evaluate the unit's done condition against this branch under the readings in docs/plans/${unit.id}-plan.md; a done condition that is not met, or a reading the code does not bear out, is a Critical finding. Set \`systemic\` when the findings indicate a structural defect that iteration will not resolve. Do not modify anything and do not spawn subagents. Continue through to completion — do not stop to wait for instruction.
 ${RETURN_FIELDS}`;
 }
 
@@ -334,7 +350,7 @@ ${worktree(branch)}
 
 ${unitBlock(plan, unit)}
 
-Write the completion report for this unit to docs/plans/${unit.id}-completion.md and commit. Contents, per phronithm:feature's completion-report: done-condition verdict with achieved rigour; deviations from the unit entry's scope and publishes; deferrals, each naming the receiving unit; discoveries affecting sibling or downstream units; status of each standing obligation; external-gate re-verification results; execution signals; and the footer "Run \`/phronithm:breakdown\` in re-plan mode with the decomposition plan and this report before starting any dependent unit." Assemble it from the implement and review stage returns below; do not re-derive or soften them.
+Write the completion report for this unit to docs/plans/${unit.id}-completion.md and commit. Contents, per phronithm:feature's completion-report: done-condition verdict with achieved rigour; deviations from the unit entry's scope and publishes, including files written outside the Scope line; deferrals, each naming the receiving unit; discoveries affecting sibling or downstream units or the architecture document; status of each standing obligation; external-gate re-verification results (state "none" when the entry names no gates); execution signals; review findings left unfixed, with severity; and the footer "Run \`/phronithm:breakdown\` in re-plan mode with the decomposition plan and this report before starting any dependent unit." Assemble it from the implement and review stage returns below; do not re-derive or soften them.
 
 --- implement stage return ---
 ${JSON.stringify(impl, null, 2)}
@@ -344,41 +360,45 @@ ${JSON.stringify(review, null, 2)}
 ${RETURN_FIELDS}`;
 }
 
-function mergePrompt(ctx, plan, wave, merges, waveSignals) {
+function mergePrompt(ctx, plan, wave, merges) {
   return `${header(ctx, plan)}
 
 You are in the main checkout on ${ctx.integrationBranch}. Merge each unit branch below into ${ctx.integrationBranch}, in exactly this order, with a merge commit each (\`git merge --no-ff\`). For each unit report clean, resolved, unresolvable, or regressed, with the files involved and the merge SHA. Resolve a conflict only when the resolution is mechanical — both sides' changes apply without judgement about intent; otherwise abort that merge (\`git merge --abort\`), report it unresolvable, and continue with the next unit. Run the project's gates after each merge — the test suite and whatever else the project's own instructions name as a gate (linters, type checks). If a gate fails after a clean or resolved merge, undo that merge (\`git reset --hard\` to the pre-merge tip of ${ctx.integrationBranch}), report the unit as regressed with the failing test files, and continue with the next unit.
 
-Then, for every unit merged clean or resolved, record a Plan Maintenance completion entry in ${plan.path} naming its completion report and set \`complete: true\` on that unit in the plan's \`\`\`yaml lsf-plan block; commit on ${ctx.integrationBranch} and return the new plan SHA. Do not amend anything else in the plan.
+Then, for every unit merged clean or resolved, record a Plan Maintenance completion entry in ${plan.path} naming its completion report and set \`complete: true\` on that unit in the plan's \`\`\`yaml lsf-plan block; one commit on ${ctx.integrationBranch}; return the new plan SHA. Do not amend anything else in the plan; the re-plan stage does that.
 
 Wave ${wave} merge order:
-${merges.map((m) => `- ${m.unit}: branch ${m.branch} (completion report ${m.completionPath})`).join('\n')}${priorBlock(waveSignals, 'by this wave\'s unit stages')}
+${merges.map((m) => `- ${m.unit}: branch ${m.branch} (completion report ${m.completionPath})`).join('\n')}
 ${RETURN_FIELDS}`;
 }
 
-function gatePrompt(ctx, plan, wave, merged, waveSignals) {
+function gatePrompt(ctx, plan, wave, merged) {
   return `${header(ctx, plan)}
 
 Wave ${wave} of Phase 3 has merged these units into ${ctx.integrationBranch}: ${merged.map((m) => m.unit).join(', ')}. Their completion reports are at ${merged.map((m) => m.completionPath).join(', ')}.
 
-Answer the phronithm:large-scale-feature review-gate questions for this wave. Do the units' discoveries, deviations, and deferrals invalidate any assumption or decision in the architecture document? Report each invalidation under \`contradictions\` against the architecture document, and set \`invalidatesArchitecture\`. Does each unit meet its exit criteria? Exit criteria are the unit entry's done condition as written, evaluated at the rigour it states, plus a completion report that is complete; a higher bar you would prefer is a contradiction or an ambiguity to report, not an unmet criterion. Is the handoff state self-contained — could a fresh context continue Phase 3 from the committed documents alone? Report new ambiguities under \`ambiguities\`. Do not modify anything.
+Answer one question: do this wave's results invalidate the architecture document at ${ctx.architectureDoc} @ ${ctx.architectureSha ?? 'HEAD'} — does any decision the document makes rest on a premise the merged code or the completion reports show to be false? Read the reports, then the merged code the reports and the document point at.
 
-How this workflow runs, so you do not report its design as a defect: each unit's critique gates pass on no Critical findings; Significant and Minor findings are recorded in the ledger and not fixed. The re-plan stage runs after this gate, from the completion reports and your answers, so its absence now is expected. The units of this wave were selected by the script from the plan's ready set, capped by argument, not chosen by any agent.${priorBlock(waveSignals, 'by this wave\'s stages')}
+For each such case return an invalidation with all five fields: \`section\` (the heading), \`decision\` (what the section decides, quoted or closely paraphrased), \`premise\` (what the decision rests on), \`evidence\` (file and line, test, or report line showing the premise false), and \`amendment\` (what the section should now say). An invalidation stops the run and is put to the requester with the amendment you propose, so fill every field; a case where you cannot say what the section should now say is a note, not an invalidation. A discrepancy that changes no decision — a stale line number, a signature widened compatibly, a count that does not match — is a note at most.
+
+Return under \`notes\` what the re-plan or the requester should know that is not an invalidation: an open decision whose trigger has fired and which no unit owns; a discrepancy between a document and the code; a deviation or deferral the reports disclose that bears on a unit not yet started. Each note names a referent.
+
+Do not re-evaluate the units' done conditions or review findings: the unit stages did that at the bar this workflow sets (Critical findings fixed, Significant and Minor recorded), and the completion reports carry the outcome. Do not report this workflow's own process as a defect. Do not modify anything.
 ${RETURN_FIELDS}`;
 }
 
-function replanPrompt(ctx, plan, wave, merged, conflicts, recorded, defects) {
+function replanPrompt(ctx, plan, wave, merged, conflicts, items, records) {
   return `${header(ctx, plan)}
 
-You are in the main checkout on ${ctx.integrationBranch}. Run the phronithm:breakdown skill in re-plan mode over ${plan.path} with the completion reports of wave ${wave}: ${merged.map((m) => m.completionPath).join(', ')}. Diff their deviations, deferrals, and discoveries against every remaining unit's scope, dependencies, and done condition; amend the plan; re-run the quality check over the remaining units, examining the size budget first where a completed unit showed distress; record every amendment in Plan Maintenance. Treat each merge conflict below between units the plan claimed disjoint as a plan defect: record it and add the missing edge or scope correction.
+You are in the main checkout on ${ctx.integrationBranch}. Run the phronithm:breakdown skill in re-plan mode over ${plan.path} with the completion reports of wave ${wave}: ${merged.map((m) => m.completionPath).join(', ')}. Diff their deviations, deferrals, and discoveries against every remaining unit's scope, dependencies, and done condition; amend the plan; re-run the quality check over the remaining units, examining the size budget first where a completed unit showed distress; record every amendment in Plan Maintenance. Treat each merge conflict below between units the plan claimed disjoint as a plan defect: record it and add the missing edge or scope correction. A file a unit wrote outside its Scope line is a Scope correction where a later unit shares the file.
 
-Plan defects reported this wave — ambiguities and contradictions the stages laid at the plan's or a unit entry's door. Each is yours to absorb: amend the plan (a Scope or Publishes line, a done condition, an edge, the execution order), or show the plan as it stands already answers it. Return a verdict for every id: \`amended\`, \`no-change\` (with what in the plan answers it), or \`cannot\` (with why the plan cannot absorb it — the answer lies in the architecture document or the request record, or needs the requester). An id you do not answer is treated as \`cannot\`.
-${defects.length ? JSON.stringify(defects, null, 2) : 'none'}
+Items this wave, each with an id — deferrals, discoveries, claimed-disjoint conflicts, the gate's notes, and distress. Each is yours to absorb: amend the plan (a Scope or Publishes line, a done condition, an edge, the execution order, a unit added), or show the plan as it stands already answers it. Return a verdict for every id: \`amended\`, \`no-change\` (with what in the plan answers it), or \`cannot\` (with why the plan cannot absorb it — the answer lies in the architecture document or the request record, or needs the requester). An id you do not answer is treated as \`cannot\` and stops the run.
+${items.length ? JSON.stringify(items, null, 2) : 'none'}
 
 Merge conflicts: ${conflicts.length ? JSON.stringify(conflicts, null, 2) : 'none'}
-Other recorded signals this wave: ${recorded.length ? JSON.stringify(recorded, null, 2) : 'none'}
+Other records this wave (readings, deviations, unfixed findings): ${records.length ? JSON.stringify(records, null, 2) : 'none'}
 
-Every amendment to a unit's type, dependencies, scope, publishes, gates, or completion, and to the execution order, is made in both the unit's entry and the plan's \`\`\`yaml lsf-plan block, which must agree; the script reads the block. Commit the amended plan on ${ctx.integrationBranch}. Return the new plan SHA; each amendment with its kind (${AMENDMENT_KINDS.join(', ')}), unit, and statement; a verdict per plan defect id; and every remaining unit over its size budget with whether you repaired it by extracting a preceding design unit or flagging wall-clock rationale. Do not answer whether the architecture document still stands — a separate stage does that. Do not select or execute any unit.
+Every amendment to a unit's type, dependencies, scope, publishes, gates, or completion, and to the execution order, is made in both the unit's entry and the plan's \`\`\`yaml lsf-plan block, which must agree; the script reads the block. Commit the amended plan on ${ctx.integrationBranch}. Return the new plan SHA; each amendment with its kind (${AMENDMENT_KINDS.join(', ')}), unit, and statement; a verdict per item id; and every remaining unit over its size budget with whether you repaired it by extracting a preceding design unit or flagging wall-clock rationale. Do not answer whether the architecture document still stands — the gate did. Do not select or execute any unit.
 ${RETURN_FIELDS}`;
 }
 
@@ -411,7 +431,7 @@ function ledgerPrompt(ctx, plan, wave, entries) {
 Append stage. You are in the main checkout on ${ctx.integrationBranch}. Append the Markdown between the markers below to the end of ${ctx.ledgerPath}, every character unchanged, preceded by one blank line. If the file does not exist, create it with this heading first:
 
 ${ledgerHeading(ctx.name)}
-Do not reword, reorder, merge, or drop rows, and never edit earlier content. Commit on ${ctx.integrationBranch} with the message "docs(${ctx.name}): append wave ${wave} signal ledger entries" and return the path and SHA. Leave \`assumptions\`, \`ambiguities\`, and \`contradictions\` empty unless the append itself could not be made faithfully.
+Do not reword, reorder, merge, or drop rows, and never edit earlier content. Commit on ${ctx.integrationBranch} with the message "docs(${ctx.name}): append wave ${wave} signal ledger entries" and return the path and SHA.
 
 <<<LEDGER
 ${renderLedger(entries, wave)}LEDGER>>>
@@ -423,8 +443,10 @@ ${RETURN_FIELDS}`;
 // Bounded critique loop shared by the plan gate and the code review gate.
 // `round(n)` returns [{ stage, ret }] for the round's reviewers; `fix(n,
 // criticals)` returns the fix stage's return. Returns { ok, reason, rounds,
-// findings } and pushes signals as it goes.
-async function critiqueLoop({ round, fix, onFix, collect, stageCtx, signals }) {
+// findings } and pushes signals as it goes. Significant and Minor findings
+// are recorded; a Critical the fix stage declines, a systemic verdict, or
+// the round cap is a structural stop.
+async function critiqueLoop({ round, fix, onFix, stageCtx, signals }) {
   const findings = [];
   for (let n = 1; n <= GATE_MAX_ROUNDS; n++) {
     const rets = await round(n);
@@ -433,7 +455,7 @@ async function critiqueLoop({ round, fix, onFix, collect, stageCtx, signals }) {
         signals.push(nullReturnSignal(stageCtx(stage)));
         return { ok: false, reason: 'agent-null', rounds: n, findings };
       }
-      collect(ret, stage);
+      signals.push(...signalsFromFindings(ret.result.findings, { ...stageCtx(stage), round: n }));
     }
     const criticals = rets.flatMap(({ stage, ret }) =>
       ret.result.findings.filter((f) => f.severity === 'Critical').map((f) => ({ ...f, stage })));
@@ -462,25 +484,23 @@ async function critiqueLoop({ round, fix, onFix, collect, stageCtx, signals }) {
       signals.push(nullReturnSignal(stageCtx('fix')));
       return { ok: false, reason: 'agent-null', rounds: n, findings };
     }
-    collect(fixed, 'fix');
     for (const a of fixed.result.applied) {
       signals.push(signal({
         ...stageCtx('fix'), kind: 'critical-fixed', source: 'structural',
         statement: `round ${n}: ${a.finding} — fixed: ${a.fix}`, referent: a.finding,
       }));
     }
-    const altering = fixed.result.notApplied.filter((x) => x.altersRequirement);
-    if (altering.length) {
-      // The fix agent also reports these under contradictions; this is the
-      // structural guarantee that they stop the loop.
-      for (const a of altering) {
+    if (fixed.result.notApplied.length) {
+      // A declined Critical stays Critical; the loop cannot pass, so stop
+      // here rather than burn rounds to the cap.
+      for (const a of fixed.result.notApplied) {
         signals.push(signal({
-          ...stageCtx('fix'), kind: 'assumption-invalidated', source: 'structural',
-          statement: `fix not applied, would alter a requirement: ${a.finding} — ${a.reason}`,
-          referent: stageCtx().unit,
+          ...stageCtx('fix'), kind: 'gate-non-convergence', source: 'structural',
+          statement: `round ${n}: Critical finding declined by the fix stage — ${a.finding}: ${a.reason}`,
+          referent: a.finding,
         }));
       }
-      return { ok: false, reason: 'requirement-altering-fix', rounds: n, findings };
+      return { ok: false, reason: 'declined', rounds: n, findings };
     }
     onFix(fixed);
   }
@@ -494,38 +514,34 @@ async function critiqueLoop({ round, fix, onFix, collect, stageCtx, signals }) {
 async function runUnit(rt, ctx, plan, unit, wave) {
   const signals = [];
   const stageCtx = (stage) => ({ stage, unit: unit.id, wave });
-  const collect = (ret, stage) => signals.push(...signalsFromStageReturn(ret, stageCtx(stage)));
   const result = { unit: unit.id, type: unit.type, branch: null, completionPath: null, distress: null, signals, aborted: null };
   const abort = (stage) => { result.aborted = stage; return result; };
   const opts = (label, extra = {}) => ({ label: `${label}:${unit.id}`, phase: 'Units', ...tier(ctx, 'default'), ...extra });
-  // Every stage after the plan sees what the unit's earlier stages recorded.
-  const prior = (prompt) => prompt + priorBlock(signals, `for this unit by earlier stages`);
 
   // 1. plan
   const planned = await rt.agent(unitPlanPrompt(ctx, plan, unit), opts('plan', { isolation: 'worktree', schema: UNIT_PLAN_SCHEMA, ...tier(ctx, 'planning') }));
   if (!planned) { signals.push(nullReturnSignal(stageCtx('plan'))); return abort('plan'); }
-  collect(planned, 'plan');
+  signals.push(...signalsFromReadings(planned.result.readings, stageCtx('plan')));
   let branch = planned.result.branch;
   let planText = planned.result.planText;
 
   // 2. critique gate over the plan
   const planGate = await critiqueLoop({
-    collect, stageCtx, signals,
+    stageCtx, signals,
     round: async (n) => [{
       stage: 'critique-plan',
-      ret: await rt.agent(prior(planCritiquePrompt(ctx, plan, unit, planText, n)),
+      ret: await rt.agent(planCritiquePrompt(ctx, plan, unit, planText, n),
         opts(`critique-plan:r${n}`, { agentType: 'phronithm:critic', schema: FINDINGS_SCHEMA, ...tier(ctx, 'gate') })),
     }],
-    fix: (n, criticals) => rt.agent(prior(fixPrompt(ctx, plan, unit, branch, 'plan', criticals, n)),
+    fix: (n, criticals) => rt.agent(fixPrompt(ctx, plan, unit, branch, 'plan', criticals, n),
       opts(`fix-plan:r${n}`, { isolation: 'worktree', schema: FIX_SCHEMA })),
     onFix: (fixed) => { branch = fixed.result.branch; planText = fixed.result.planText; },
   });
   if (!planGate.ok) return abort('critique-plan');
 
   // 3. implement
-  const impl = await rt.agent(prior(implementPrompt(ctx, plan, unit, branch)), opts('implement', { isolation: 'worktree', schema: IMPLEMENT_SCHEMA }));
+  const impl = await rt.agent(implementPrompt(ctx, plan, unit, branch), opts('implement', { isolation: 'worktree', schema: IMPLEMENT_SCHEMA }));
   if (!impl) { signals.push(nullReturnSignal(stageCtx('implement'))); return abort('implement'); }
-  collect(impl, 'implement');
   const drifted = impl.result.gateProbe.filter((g) => g.drifted);
   for (const g of drifted) {
     signals.push(signal({
@@ -536,6 +552,7 @@ async function runUnit(rt, ctx, plan, unit, wave) {
   if (drifted.length) return abort('implement');
   branch = impl.result.branch;
   result.distress = impl.result.distress;
+  signals.push(...signalsFromImplement(impl.result, stageCtx('implement')));
   signals.push(...distressSignals(impl.result.distress, { unit: unit.id, wave }, ctx.config));
   if (!impl.result.doneCondition.evaluable) {
     signals.push(signal({
@@ -548,7 +565,7 @@ async function runUnit(rt, ctx, plan, unit, wave) {
   // 4. review gate over the branch diff
   const lenses = LENSES_BY_TYPE[unit.type] ?? LENSES_BY_TYPE.feature;
   const reviewGate = await critiqueLoop({
-    collect, stageCtx, signals,
+    stageCtx, signals,
     round: async (n) => {
       const reviewers = unit.type === 'design'
         ? [['critique-design', designCritiquePrompt(ctx, plan, unit, branch, n)]]
@@ -558,13 +575,13 @@ async function runUnit(rt, ctx, plan, unit, wave) {
           ...(lenses.length ? [['lens-review', lensReviewPrompt(ctx, plan, unit, branch, lenses, n)]] : []),
         ];
       const rets = await rt.parallel(reviewers.map(([stage, prompt]) => () =>
-        rt.agent(prior(prompt), opts(`${stage}:r${n}`, {
+        rt.agent(prompt, opts(`${stage}:r${n}`, {
           isolation: 'worktree', schema: FINDINGS_SCHEMA,
           ...(stage === 'static-analysis' ? { model: undefined, effort: undefined } : tier(ctx, 'gate')),
         }))));
       return reviewers.map(([stage], i) => ({ stage, ret: rets[i] ?? null }));
     },
-    fix: (n, criticals) => rt.agent(prior(fixPrompt(ctx, plan, unit, branch, 'code', criticals, n)),
+    fix: (n, criticals) => rt.agent(fixPrompt(ctx, plan, unit, branch, 'code', criticals, n),
       opts(`fix-code:r${n}`, { isolation: 'worktree', schema: FIX_SCHEMA })),
     onFix: (fixed) => { branch = fixed.result.branch; },
   });
@@ -572,9 +589,8 @@ async function runUnit(rt, ctx, plan, unit, wave) {
 
   // 5. completion report
   const review = { rounds: reviewGate.rounds, findings: reviewGate.findings };
-  const report = await rt.agent(prior(completionPrompt(ctx, plan, unit, branch, impl.result, review)), opts('completion-report', { isolation: 'worktree', schema: COMPLETION_SCHEMA }));
+  const report = await rt.agent(completionPrompt(ctx, plan, unit, branch, impl.result, review), opts('completion-report', { isolation: 'worktree', schema: COMPLETION_SCHEMA }));
   if (!report) { signals.push(nullReturnSignal(stageCtx('completion-report'))); return abort('completion-report'); }
-  collect(report, 'completion-report');
   result.branch = report.result.branch;
   result.completionPath = report.result.path;
   return result;
@@ -617,13 +633,12 @@ async function run(rt) {
   };
 
   const ledger = [];
-  const unitsPerWave = {};
   let plan = { path: ctx.planPath, sha: ctx.planSha, units: [], executionOrder: [] };
   let wave = 0;
 
   const outcome = (status, extra = {}) => ({
     status, workflow: WORKFLOW, planSha: plan.sha, integrationBranch: ctx.integrationBranch, waves: wave,
-    ledger, digest: digest(ledger, { unitsPerWave }), ...extra,
+    ledger, digest: digest(ledger), ...extra,
   });
   const scribed = new Set();
   const scribeLedger = async (entries) => {
@@ -657,14 +672,12 @@ async function run(rt) {
   }
 
   // Plan graph at a SHA. A copy agent returns the fenced blocks verbatim;
-  // graph.js parses and validates. The copy agent has no interpretive
-  // authority: its reported ambiguities and contradictions are recorded,
-  // never stops. Structural problems (unreadable block, unknown unit, cycle,
-  // unserialised overlap, bad clearance) are STOP signals.
+  // graph.js parses and validates. Structural problems (unreadable block,
+  // unknown unit, cycle, unserialised overlap, bad clearance) are STOP
+  // signals.
   const loadPlan = async (sha, label, w) => {
     const copy = await agent(copyPrompt(ctx, sha), { label, ...tier(ctx, 'mechanical'), phase: 'Load', schema: COPY_SCHEMA });
-    if (!copy) return { plan: null, copy: null, records: [], stops: [nullReturnSignal({ stage: 'load', wave: w })] };
-    const records = signalsFromStageReturn(copy, { stage: 'load', wave: w }).map((x) => ({ ...x, disposition: 'recorded' }));
+    if (!copy) return { plan: null, copy: null, stops: [nullReturnSignal({ stage: 'load', wave: w })] };
     const g = loadGraph({ planMarkdown: copy.result.planBlock, decisionsMarkdown: ctx.decisionLogSha ? copy.result.decisionsBlock : null });
     const stops = g.problems.map((p) => signal({ ...p, source: 'structural', stage: 'load', wave: w }));
     let loadedPlan = null;
@@ -672,7 +685,7 @@ async function run(rt) {
       loadedPlan = { ...g.plan, path: ctx.planPath, sha };
       stops.push(...validatePlan(loadedPlan).map((p) => signal({ ...p, source: 'structural', stage: 'load', wave: w })));
     }
-    return { plan: loadedPlan, copy, records, stops };
+    return { plan: loadedPlan, copy, stops };
   };
 
   // Load.
@@ -686,10 +699,9 @@ async function run(rt) {
       statement: `main checkout is on ${first.copy.result.headBranch}, not ${ctx.integrationBranch}`, referent: ctx.integrationBranch,
     }));
   }
-  ledger.push(...first.records);
-  const loadEval = evaluateWave(loadSignals, [], { wave: 0, unitsInWave: 0 }, ctx.config);
+  const loadEval = evaluateWave(loadSignals);
   ledger.push(...loadEval.all);
-  if (loadEval.stop || !first.plan) return stopped('load', loadEval.stops, [...first.records, ...loadEval.records]);
+  if (loadEval.stop || !first.plan) return stopped('load', loadEval.stops, loadEval.records);
   plan = first.plan;
   log(`loaded ${plan.units.length} units @ ${plan.sha}; ${ctx.decisionLogSha ? 'decision log applied' : 'no decision log'}; projected waves: ${wavePlan(plan).map((w) => w.join('+')).join(' | ') || 'none'}`);
 
@@ -715,20 +727,15 @@ async function run(rt) {
       terminationRan = true;
       const term = await agent(terminationPrompt(ctx, plan), { label: 'termination', ...tier(ctx, 'planning'), phase: 'Termination', schema: TERMINATION_SCHEMA });
       if (!term) return stopOn('termination', [nullReturnSignal({ stage: 'termination' })]);
-      const termSignals = signalsFromStageReturn(term, { stage: 'termination' });
       const re = await loadPlan(term.result.planSha, 'load:termination', wave);
-      ledger.push(...re.records);
-      termSignals.push(...re.stops);
-      const termEval = evaluateWave(termSignals, ledger, { wave, unitsInWave: 0 }, ctx.config);
+      const termEval = evaluateWave(re.stops);
       ledger.push(...termEval.all);
       if (termEval.stop) return stopped('termination', termEval.stops, termEval.records);
       plan = re.plan;
       if (term.result.directEdits.length) {
         const edits = await agent(directEditsPrompt(ctx, plan, term.result.directEdits), { label: 'direct-edits', ...tier(ctx, 'default'), phase: 'Termination', schema: SCRIBE_SCHEMA });
         if (!edits) return stopOn('direct-edits', [nullReturnSignal({ stage: 'direct-edits' })]);
-        ledger.push(...signalsFromStageReturn(edits, { stage: 'direct-edits' }).map((s) => ({ ...s, disposition: 'recorded' })));
       }
-      await scribeLedger(termEval.records);
       log(`termination: ${term.result.appendedUnits.length} meta unit(s) appended, ${term.result.directEdits.length} direct edit(s)`);
       continue;
     }
@@ -737,7 +744,6 @@ async function run(rt) {
     if (wave > ctx.maxWaves) {
       return outcome('wave-cap', { note: `stopped after ${ctx.maxWaves} waves (args.maxWaves); ${plan.units.length - completed.size} unit(s) remain` });
     }
-    unitsPerWave[wave] = ready.length;
     log(`wave ${wave}: ${ready.map((u) => u.id).join(', ')}`);
 
     // Units, then barrier: merge needs every branch.
@@ -755,11 +761,10 @@ async function run(rt) {
     let merged = [];
     let conflicts = [];
     if (order.length) {
-      const m = await agent(mergePrompt(ctx, plan, wave, order, waveSignals), { label: `merge:w${wave}`, ...tier(ctx, 'default'), phase: 'Merge', schema: MERGE_SCHEMA });
+      const m = await agent(mergePrompt(ctx, plan, wave, order), { label: `merge:w${wave}`, ...tier(ctx, 'default'), phase: 'Merge', schema: MERGE_SCHEMA });
       if (!m) {
         waveSignals.push(nullReturnSignal({ stage: 'merge', wave }));
       } else {
-        waveSignals.push(...signalsFromStageReturn(m, { stage: 'merge', wave }));
         waveSignals.push(...signalsFromMerge(m.result, { wave }));
         for (const x of m.result.merges) {
           if (x.status === 'clean' || x.status === 'resolved') { completed.add(x.unit); merged.push(byUnit.get(x.unit)); }
@@ -769,64 +774,48 @@ async function run(rt) {
       }
     }
 
-    // Review-gate questions for the wave.
+    // The wave gate: one question, does the wave invalidate the architecture.
     if (merged.length) {
-      const g = await agent(gatePrompt(ctx, plan, wave, merged, waveSignals), { label: `review-gate:w${wave}`, ...tier(ctx, 'gate'), phase: 'Gate', schema: GATE_SCHEMA });
+      const g = await agent(gatePrompt(ctx, plan, wave, merged), { label: `review-gate:w${wave}`, ...tier(ctx, 'gate'), phase: 'Gate', schema: GATE_SCHEMA });
       if (!g) waveSignals.push(nullReturnSignal({ stage: 'review-gate', wave }));
-      else {
-        waveSignals.push(...signalsFromStageReturn(g, { stage: 'review-gate', wave, source: 'gate' }));
-        if (g.result.invalidatesArchitecture && !(g.contradictions ?? []).length) {
-          waveSignals.push(signal({
-            kind: 'assumption-invalidated', source: 'gate', stage: 'review-gate', wave,
-            statement: 'review gate reports the wave invalidates the architecture document (no contradiction itemised)',
-            referent: `${ctx.architectureDoc} @ ${ctx.architectureSha}`,
-          }));
-        }
-        if (g.result.handoff !== 'sufficient') {
-          waveSignals.push(signal({
-            kind: g.result.handoff === 'insufficient' ? 'handoff-insufficient' : 'handoff-partial', source: 'gate', stage: 'review-gate', wave,
-            statement: `handoff state rated ${g.result.handoff}`, referent: `wave-${wave}`,
-          }));
-        }
-        for (const c of g.result.exitCriteria.filter((c) => !c.met)) {
-          waveSignals.push(signal({
-            kind: 'done-condition-unevaluable', source: 'gate', stage: 'review-gate', unit: c.unit, wave,
-            statement: `exit criteria not met: ${c.statement}`, referent: c.statement,
-          }));
-        }
-      }
+      else waveSignals.push(...signalsFromGate(g.result, { wave }));
     }
 
-    const evalA = evaluateWave(waveSignals, ledger, { wave, unitsInWave: ready.length }, ctx.config);
+    const evalA = evaluateWave(waveSignals);
     ledger.push(...evalA.all);
     log(`wave ${wave}: merged ${merged.map((r) => r.unit).join(', ') || 'nothing'}; ${conflicts.length} conflict(s); ${evalA.records.length} recorded, ${evalA.stops.length} stop signal(s)`);
     if (evalA.stop) return stopped('wave', evalA.stops, evalA.records);
 
-    // Re-plan from the wave's completion reports. Plan defects go in with
-    // ids; one the re-plan cannot absorb, or does not answer, is a stop.
+    // Re-plan from the wave's completion reports. Items go in with ids; one
+    // the re-plan cannot absorb, or does not answer, is a stop.
     const flat = ({ unit, stage, kind, statement, referent }) => ({ unit, stage, kind, statement, referent });
-    const defectSignals = evalA.records.filter((s) => s.kind === 'plan-defect');
-    const defects = defectSignals.map((s, i) => ({ id: `pd-${i + 1}`, ...flat(s) }));
-    const recorded = evalA.records.filter((s) => s.kind !== 'plan-defect').map(flat);
-    const rp = await agent(replanPrompt(ctx, plan, wave, merged, conflicts, recorded, defects), { label: `replan:w${wave}`, ...tier(ctx, 'planning'), phase: 'Re-plan', schema: REPLAN_SCHEMA });
+    const itemSignals = evalA.records.filter((s) => REPLAN_ITEM_KINDS.includes(s.kind));
+    const items = itemSignals.map((s, i) => ({ id: `rp-${i + 1}`, ...flat(s) }));
+    const records = evalA.records.filter((s) => !REPLAN_ITEM_KINDS.includes(s.kind)).map(flat);
+    const rp = await agent(replanPrompt(ctx, plan, wave, merged, conflicts, items, records), { label: `replan:w${wave}`, ...tier(ctx, 'planning'), schema: REPLAN_SCHEMA, phase: 'Re-plan' });
     const replanSignals = [];
     let nextPlan = plan;
     if (!rp) {
       replanSignals.push(nullReturnSignal({ stage: 'replan', wave }));
     } else {
-      replanSignals.push(...signalsFromStageReturn(rp, { stage: 'replan', wave }));
-      const verdicts = new Map((rp.result.defects ?? []).map((d) => [d.id, d]));
-      defects.forEach((d, i) => {
-        const v = verdicts.get(d.id);
-        if (v && v.verdict !== 'cannot') return;
+      const verdicts = new Map((rp.result.verdicts ?? []).map((v) => [v.id, v]));
+      items.forEach((it, i) => {
+        const v = verdicts.get(it.id);
+        if (v && v.verdict !== 'cannot') {
+          replanSignals.push(signal({
+            kind: 'verdict', source: 'reported', stage: 'replan', unit: it.unit, wave,
+            statement: `${it.id} ${v.verdict}: ${v.statement} — [${it.stage}] ${it.kind}: ${it.statement}`, referent: itemSignals[i].referent,
+          }));
+          return;
+        }
         replanSignals.push(signal({
-          kind: 'plan-defect-unabsorbed', source: 'reported', stage: 'replan', unit: d.unit, wave,
-          statement: `${v ? `re-plan cannot absorb: ${v.statement}` : 're-plan gave no verdict'} — [${d.stage}] ${d.statement}`,
-          referent: defectSignals[i].referent,
+          kind: 'plan-defect-unabsorbed', source: 'reported', stage: 'replan', unit: it.unit, wave,
+          statement: `${v ? `re-plan cannot absorb: ${v.statement}` : 're-plan gave no verdict'} — [${it.stage}] ${it.kind}: ${it.statement}`,
+          referent: itemSignals[i].referent,
         }));
       });
       for (const a of rp.result.amendments) {
-        replanSignals.push(signal({ kind: a.kind, source: 'reported', stage: 'replan', unit: a.unit, wave, statement: a.statement, referent: a.unit }));
+        replanSignals.push(signal({ kind: 'amendment', source: 'reported', stage: 'replan', unit: a.unit, wave, statement: `${a.kind}: ${a.statement}`, referent: a.unit }));
       }
       for (const b of rp.result.overBudget) {
         replanSignals.push(signal({
@@ -835,13 +824,12 @@ async function run(rt) {
         }));
       }
       const re = await loadPlan(rp.result.planSha, `load:w${wave}`, wave);
-      ledger.push(...re.records);
       replanSignals.push(...re.stops);
       if (re.plan) nextPlan = re.plan;
     }
-    const evalB = evaluateWave(replanSignals, ledger, { wave, unitsInWave: 0 }, ctx.config);
+    const evalB = evaluateWave(replanSignals);
     ledger.push(...evalB.all);
-    const waveRecords = [...evalA.all, ...evalB.records, ...ledger.filter((x) => x.stage === 'load' && x.wave === wave && x.disposition === 'recorded')];
+    const waveRecords = [...evalA.all, ...evalB.records];
     if (evalB.stop) return stopped('replan', evalB.stops, waveRecords);
     await scribeLedger(waveRecords);
     plan = nextPlan;
@@ -852,17 +840,16 @@ async function run(rt) {
   // Standing obligations.
   const ob = await agent(obligationsPrompt(ctx, plan), { label: 'obligations', ...tier(ctx, 'gate'), phase: 'Termination', schema: OBLIGATIONS_SCHEMA });
   if (!ob) return stopOn('obligations', [nullReturnSignal({ stage: 'obligations' })]);
-  const obSignals = signalsFromStageReturn(ob, { stage: 'obligations' });
+  const obSignals = [];
   for (const o of ob.result.obligations.filter((o) => !o.discharged)) {
     obSignals.push(signal({
       kind: 'standing-obligation-undischarged', source: 'structural', stage: 'obligations',
       statement: o.statement, referent: o.statement,
     }));
   }
-  const obEval = evaluateWave(obSignals, ledger, { wave, unitsInWave: 0 }, ctx.config);
+  const obEval = evaluateWave(obSignals);
   ledger.push(...obEval.all);
   if (obEval.stop) return stopped('obligations', obEval.stops, obEval.records);
-  await scribeLedger(obEval.records);
 
   log(`complete: ${completed.size} unit(s) over ${wave} wave(s); silence is not evidence`);
   return outcome('complete');

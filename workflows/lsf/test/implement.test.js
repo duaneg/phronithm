@@ -4,7 +4,7 @@ import { run, GATE_MAX_ROUNDS } from '../implement.js';
 
 // ---------------------------------------------------------------- stub runtime
 
-const ret = (result, extra = {}) => ({ result, assumptions: [], ambiguities: [], contradictions: [], commits: [], ...extra });
+const ret = (result, extra = {}) => ({ result, commits: [], ...extra });
 const unit = (id, opts = {}) => ({ id, type: 'feature', complete: false, dependencies: [], scope: [`src/${id}`], gates: [], ...opts });
 const graph = (sha, units) => ({ sha, path: 'docs/plans/f-breakdown.md', units, executionOrder: units.map((u) => u.id) });
 
@@ -31,6 +31,13 @@ function toBlock(plan) {
 const copied = (plan, extra = {}) => ret({ planBlock: toBlock(plan), decisionsBlock: '', headBranch: 'integration', architectureSha: 'arch1', ...extra });
 
 const NO_DISTRESS = { contextNearExhaustion: false, midImplementationDesignDecisions: 0, deviations: 0, deferrals: 0 };
+const implemented = (u, over = {}) => ({
+  branch: `impl-${u}`, sha: 'i', gateProbe: [], distress: NO_DISTRESS, deviations: [], writesOutsideScope: [], deferrals: [], discoveries: [],
+  doneCondition: { evaluable: true, met: true, evidence: 'tests pass' }, standingObligations: [], summary: 'done', ...over,
+});
+// Ids of the re-plan items in a re-plan prompt, each given the same verdict.
+const itemIds = (prompt) => [...prompt.matchAll(/"id": "(rp-\d+)"/g)].map((m) => m[1]);
+const verdictsFor = (prompt, verdict) => itemIds(prompt).map((id) => ({ id, verdict, statement: 'ok' }));
 const NO_FINDINGS = ret({ findings: [], systemic: false, summary: 'clean' });
 
 // Default handlers by label prefix (the part before the first ':'). A test
@@ -39,13 +46,10 @@ function defaults(plan) {
   let sha = 0;
   return {
     load: (p, o, u, state) => copied(state.plan),
-    plan: (p, o, u) => ret({ branch: `plan-${u}`, sha: 'p', path: `docs/plans/${u}-plan.md`, planText: `plan for ${u}` }),
+    plan: (p, o, u) => ret({ branch: `plan-${u}`, sha: 'p', path: `docs/plans/${u}-plan.md`, planText: `plan for ${u}`, readings: [] }),
     'critique-plan': () => NO_FINDINGS,
     'fix-plan': (p, o, u) => ret({ branch: `fixed-${u}`, sha: 'f', applied: [{ finding: `x-${u}`, fix: 'y' }], notApplied: [], planText: 'fixed' }),
-    implement: (p, o, u) => ret({
-      branch: `impl-${u}`, sha: 'i', gateProbe: [], distress: NO_DISTRESS, deviations: [], deferrals: [], discoveries: [],
-      doneCondition: { evaluable: true, met: true, evidence: 'tests pass' }, standingObligations: [], summary: 'done',
-    }, { assumptions: [{ statement: `assumed for ${u}`, referent: u }] }),
+    implement: (p, o, u) => ret(implemented(u)),
     'static-analysis': () => NO_FINDINGS,
     'critique-code': () => NO_FINDINGS,
     'lens-review': () => NO_FINDINGS,
@@ -56,10 +60,10 @@ function defaults(plan) {
       merges: state.mergeOrder.map((id) => ({ unit: id, status: 'clean', files: [], sha: 'm' })),
       planSha: `merged${++sha}`,
     }),
-    'review-gate': () => ret({ invalidatesArchitecture: false, handoff: 'sufficient', exitCriteria: [] }),
+    'review-gate': () => ret({ invalidations: [], notes: [] }),
     replan: (p, o, u, state) => {
       state.plan = { ...state.plan, sha: `replan${++sha}`, units: state.plan.units.map((x) => ({ ...x, complete: state.completed.has(x.id) })) };
-      return ret({ planSha: state.plan.sha, amendments: [], overBudget: [], summary: 'no change' });
+      return ret({ planSha: state.plan.sha, amendments: [], overBudget: [], verdicts: verdictsFor(p, 'amended'), summary: 'no change' });
     },
     ledger: () => ret({ path: 'docs/plans/f-signals.md', sha: 'l' }),
     termination: (p, o, u, state) => ret({ planSha: state.plan.sha, appendedUnits: [], directEdits: [] }),
@@ -111,7 +115,7 @@ test('maxUnitsPerWave caps each wave in execution order and defers the rest', as
   assert.ok(labels().indexOf('merge:w1') < labels().indexOf('implement:C'));
 });
 
-test('clean run: two waves, termination, obligations, complete', async () => {
+test('clean run: two waves, termination, obligations, complete; silence stops nothing', async () => {
   const { rt, labels } = runtime(twoWaves());
   const out = await run(rt);
   assert.equal(out.status, 'complete');
@@ -123,8 +127,10 @@ test('clean run: two waves, termination, obligations, complete', async () => {
   assert.ok(l.indexOf('replan:w1') < l.indexOf('plan:B'));
   assert.ok(l.includes('termination') && l.includes('obligations'));
   assert.ok(!l.includes('direct-edits'));
-  assert.equal(out.digest.trends.silentWaves.length, 0);
+  assert.ok(!l.includes('ledger:w1'), 'nothing to scribe on a wave with no signals');
+  assert.equal(out.ledger.length, 0);
   assert.equal(out.escalation, undefined);
+  assert.match(out.digest.note, /not evidence/);
 });
 
 test('the re-planned SHA appears in the next wave\'s prompts', async () => {
@@ -137,81 +143,114 @@ test('the re-planned SHA appears in the next wave\'s prompts', async () => {
   assert.match(planA.prompt, /@ plan0/);
 });
 
-test('a contradiction from implement stops the wave with an escalation record', async () => {
+test('every unit stage is told what the Scope line means; only commits are asked for beside result', async () => {
+  const { rt, calls } = runtime(twoWaves());
+  await run(rt);
+  for (const c of calls) {
+    assert.doesNotMatch(c.prompt, /assumptions|ambiguities|contradictions/, c.label);
+    assert.match(c.prompt, /return `commits`/, c.label);
+  }
+  for (const l of ['plan:A', 'critique-plan:r1:A', 'implement:A', 'critique-code:r1:A', 'lens-review:r1:A', 'completion-report:A']) {
+    assert.match(calls.find((c) => c.label === l).prompt, /Scope line declares the files this unit writes[^]*does not limit what the work may edit/, l);
+  }
+  const plan = calls.find((c) => c.label === 'plan:A').prompt;
+  assert.match(plan, /\*\*Readings\*\*/);
+  assert.doesNotMatch(plan, /phronithm:feature/);
+  const gate = calls.find((c) => c.label === 'review-gate:w1').prompt;
+  assert.match(gate, /Answer one question/);
+  assert.match(gate, /all five fields/);
+  assert.match(gate, /Do not re-evaluate the units' done conditions/);
+});
+
+const gateInvalidation = (over = {}) => ({
+  section: '§4.8', decision: 'two-tone families are two-part groups with named parts', premise: 'nested art classifies to a GlyphGroup',
+  evidence: 'svgpath.py:_classify; brazier ring+fire parses to a bare Glyph', amendment: 'nested art is authored as siblings; _classify keeps ids on holes', ...over,
+});
+
+test('a complete architecture invalidation from the gate stops the wave with the amendment in the escalation', async () => {
   const { rt, labels } = runtime(twoWaves(), {
-    implement: (p, o, u) => ret({
-      branch: `impl-${u}`, sha: 'i', gateProbe: [], distress: NO_DISTRESS, deviations: [], deferrals: [], discoveries: [],
-      doneCondition: { evaluable: true, met: true, evidence: 'ok' }, standingObligations: [], summary: 'done',
-    }, { contradictions: [{ statement: 'schema differs', against: 'docs/architecture/f.md @ arch1' }] }),
+    'review-gate': () => ret({ invalidations: [gateInvalidation()], notes: [] }),
   });
   const out = await run(rt);
   assert.equal(out.status, 'stopped');
   assert.equal(out.escalation.stage, 'wave');
   assert.equal(out.escalation.wave, 1);
   assert.equal(out.escalation.plan_sha, 'merged1', 'merge recorded completion before the stop');
-  assert.deepEqual(out.escalation.signals.map((s) => s.kind), ['assumption-invalidated']);
+  assert.deepEqual(out.escalation.signals.map((s) => [s.kind, s.source]), [['architecture-invalidated', 'gate']]);
   assert.equal(out.escalation.decision_needed.length, 1);
+  assert.match(out.escalation.decision_needed[0].question, /amendment: nested art is authored as siblings/);
   const l = labels();
   assert.ok(l.includes('ledger:w1'), 'ledger scribed before returning');
   assert.ok(!l.includes('replan:w1'), 'no re-plan after a stop');
   assert.ok(!l.includes('plan:B'));
 });
 
-const planDefect = (p, o, u) => ret({ branch: `plan-${u}`, sha: 'p', path: `docs/plans/${u}-plan.md`, planText: `plan for ${u}` },
-  { ambiguities: [{ statement: 'Scope omits CLAUDE.md', about: 'scope', level: 'plan', referent: `${u} Scope` }],
-    contradictions: [{ statement: 'Publishes names an extra member', level: 'plan', against: `docs/plans/f-breakdown.md@plan0 ${u} Publishes` }] });
-
-test('plan-level ambiguities and contradictions reach the re-plan with ids instead of stopping the wave', async () => {
+test('an invalidation missing a field, and every note, is recorded and handed to the re-plan as an item', async () => {
   const seen = [];
-  const { rt, calls, labels } = runtime(twoWaves(), {
-    plan: planDefect,
+  const { rt, calls } = runtime(twoWaves(), {
+    'review-gate': () => ret({ invalidations: [gateInvalidation({ amendment: '' })], notes: [{ statement: 'N3 trigger fired; no unit owns it', referent: '§6 N3' }] }),
     replan: (p, o, u, state) => {
       seen.push(p);
-      state.plan = { ...state.plan, sha: `replan-x`, units: state.plan.units.map((x) => ({ ...x, complete: state.completed.has(x.id) })) };
-      const ids = [...p.matchAll(/"id": "(pd-\d+)"/g)].map((m) => m[1]);
-      return ret({ planSha: state.plan.sha, amendments: [], overBudget: [],
-        defects: ids.map((id, i) => ({ id, verdict: i ? 'no-change' : 'amended', statement: 'ok' })), summary: 'absorbed' });
+      state.plan = { ...state.plan, sha: `replan-x${seen.length}`, units: state.plan.units.map((x) => ({ ...x, complete: state.completed.has(x.id) })) };
+      return ret({ planSha: state.plan.sha, amendments: [{ kind: 'unit-added', unit: 'N3', statement: 'owner for N3' }], overBudget: [], verdicts: verdictsFor(p, 'amended'), summary: 'absorbed' });
     },
   });
   const out = await run(rt);
-  assert.equal(out.status, 'complete', JSON.stringify(out.ledger.filter((s) => s.disposition === 'stopped')));
-  const l = labels();
-  assert.ok(l.includes('replan:w1') && l.includes('replan:w2'));
+  assert.equal(out.status, 'complete', JSON.stringify(out.escalation?.signals));
+  assert.equal(out.digest.byKind['architecture-note'], 4, 'two notes per wave, both waves');
+  assert.equal(out.digest.byKind.verdict, 4);
+  assert.equal(out.digest.byKind.amendment, 2);
+  assert.deepEqual(out.digest.attention.architectureNotes.slice(0, 2).map((s) => s.slice(0, 24)), ['incomplete invalidation ', 'N3 trigger fired; no uni']);
   const w1 = calls.find((c) => c.label === 'replan:w1').prompt;
-  assert.match(w1, /Plan defects reported this wave[^]*"id": "pd-1"[^]*"kind": "plan-defect"[^]*"id": "pd-2"/);
-  assert.doesNotMatch(w1.split('Other recorded signals this wave')[1], /plan-defect/);
-  assert.ok(out.ledger.filter((s) => s.kind === 'plan-defect').every((s) => s.disposition === 'recorded'));
-  const merge = calls.find((c) => c.label === 'merge:w1').prompt;
-  assert.match(merge, /Already recorded by this wave's unit stages[^]*\[plan\] plan-defect: Scope omits CLAUDE.md/);
+  assert.match(w1, /Items this wave[^]*"id": "rp-1"[^]*"kind": "architecture-note"[^]*"id": "rp-2"/);
+  assert.doesNotMatch(w1.split('Other records this wave')[1], /architecture-note/);
 });
 
-test('a plan defect the re-plan cannot absorb, or does not answer, stops after the re-plan', async () => {
-  for (const defects of [[{ id: 'pd-1', verdict: 'cannot', statement: 'needs the requester' }, { id: 'pd-2', verdict: 'amended', statement: 'fixed' }], []]) {
-    const { rt, labels } = runtime(twoWaves(), {
-      plan: planDefect,
-      replan: (p, o, u, state) => ret({ planSha: state.plan.sha, amendments: [], overBudget: [], defects, summary: 's' }),
-    });
-    const out = await run(rt);
-    assert.equal(out.status, 'stopped');
-    assert.equal(out.escalation.stage, 'replan');
-    const stops = out.ledger.filter((s) => s.disposition === 'stopped');
-    assert.deepEqual(stops.map((s) => s.kind), defects.length ? ['plan-defect-unabsorbed'] : ['plan-defect-unabsorbed', 'plan-defect-unabsorbed']);
-    assert.equal(stops[0].referent, 'A Scope');
-    assert.match(stops[0].statement, defects.length ? /cannot absorb: needs the requester — \[plan\] Scope omits CLAUDE.md/ : /no verdict — \[plan\] Scope omits CLAUDE.md/);
-    assert.ok(labels().includes('replan:w1') && !labels().includes('plan:B'));
-  }
-});
-
-test('a silent wave stops the run', async () => {
-  const { rt } = runtime(twoWaves(), {
-    implement: (p, o, u) => ret({
-      branch: `impl-${u}`, sha: 'i', gateProbe: [], distress: NO_DISTRESS, deviations: [], deferrals: [], discoveries: [],
-      doneCondition: { evaluable: true, met: true, evidence: 'ok' }, standingObligations: [], summary: 'done',
-    }),
+test('deferrals, discoveries, and distress reach the re-plan with ids; readings, deviations, and findings ride along as records', async () => {
+  const { rt, calls } = runtime(twoWaves(), {
+    plan: (p, o, u) => ret({ branch: `plan-${u}`, sha: 'p', path: `docs/plans/${u}-plan.md`, planText: `plan for ${u}`,
+      readings: [{ clause: 'Scope: tests/test_missing.py', reading: 'tests/test_present.py' }] }),
+    implement: (p, o, u) => ret(implemented(u, {
+      deviations: ['sibling predicate instead of widening'], writesOutsideScope: ['CLAUDE.md'],
+      deferrals: [{ statement: 'export left unrotated', belongsTo: 'B' }],
+      discoveries: [{ statement: 'B needs an edge to C', affects: 'B' }],
+      distress: { ...NO_DISTRESS, midImplementationDesignDecisions: 3 },
+    })),
+    'critique-code': () => ret({ findings: [{ severity: 'Significant', statement: 'fragile', location: 'a.py:2' }], systemic: false, summary: 's' }),
   });
   const out = await run(rt);
-  assert.equal(out.status, 'stopped');
-  assert.deepEqual(out.escalation.signals.map((s) => s.kind), ['silent-wave']);
+  assert.equal(out.status, 'complete', JSON.stringify(out.escalation?.signals));
+  const w1 = calls.find((c) => c.label === 'replan:w1').prompt;
+  const items = w1.split('Items this wave')[1].split('Merge conflicts')[0];
+  for (const k of ['"kind": "deferral"', '"kind": "discovery"', '"kind": "execution-distress"']) assert.match(items, new RegExp(k));
+  assert.deepEqual(itemIds(w1), ['rp-1', 'rp-2', 'rp-3']);
+  const records = w1.split('Other records this wave')[1];
+  for (const k of ['"kind": "reading"', '"kind": "deviation"', '"kind": "finding"']) assert.match(records, new RegExp(k));
+  assert.match(records, /writes outside the Scope line: CLAUDE\.md/);
+  const kinds = out.ledger.filter((s) => s.wave === 1 && s.unit === 'A').map((s) => s.kind);
+  assert.deepEqual([...new Set(kinds)].sort(), ['deferral', 'deviation', 'discovery', 'execution-distress', 'finding', 'reading', 'verdict']);
+  assert.ok(out.ledger.every((s) => s.disposition === 'recorded'));
+  assert.deepEqual(out.digest.attention.unfixedSignificant, { A: 1, B: 1 });
+  assert.deepEqual(out.digest.attention.distressedUnits, ['A', 'B']);
+});
+
+test('an item the re-plan cannot absorb, or does not answer, stops after the re-plan', async () => {
+  for (const mode of ['cannot', 'missing']) {
+    const { rt, labels } = runtime(twoWaves(), {
+      implement: (p, o, u) => ret(implemented(u, { discoveries: [{ statement: 'B needs C first', affects: 'B' }, { statement: 'C is redundant', affects: 'C' }] })),
+      replan: (p, o, u, state) => ret({ planSha: state.plan.sha, amendments: [], overBudget: [],
+        verdicts: mode === 'cannot' ? [{ id: 'rp-1', verdict: 'cannot', statement: 'needs the requester' }, { id: 'rp-2', verdict: 'amended', statement: 'dropped' }] : [], summary: 's' }),
+    });
+    const out = await run(rt);
+    assert.equal(out.status, 'stopped', mode);
+    assert.equal(out.escalation.stage, 'replan');
+    const stops = out.ledger.filter((s) => s.disposition === 'stopped');
+    assert.deepEqual(stops.map((s) => s.kind), mode === 'cannot' ? ['plan-defect-unabsorbed'] : ['plan-defect-unabsorbed', 'plan-defect-unabsorbed'], mode);
+    assert.equal(stops[0].referent, 'B');
+    assert.match(stops[0].statement, mode === 'cannot' ? /cannot absorb: needs the requester — \[implement\] discovery: B needs C first/ : /no verdict — \[implement\] discovery: B needs C first/);
+    assert.ok(labels().includes('replan:w1') && !labels().includes('plan:B'));
+    if (mode === 'cannot') assert.equal(out.ledger.filter((s) => s.kind === 'verdict').length, 1);
+  }
 });
 
 test('critique gate hits the hard cap: fixes on rounds 1-3, stop on round 4, no implement', async () => {
@@ -227,31 +266,38 @@ test('critique gate hits the hard cap: fixes on rounds 1-3, stop on round 4, no 
   assert.ok(!l.includes('merge:w1'), 'nothing to merge');
 });
 
-test('a fix that would alter a requirement stops the gate', async () => {
+test('a Critical the fix stage declines stops the gate at once', async () => {
   let round = 0;
-  const { rt } = runtime(twoWaves(), {
+  const { rt, labels } = runtime(twoWaves(), {
     'critique-plan': () => (++round === 1
       ? ret({ findings: [{ severity: 'Critical', statement: 'bad', location: 'plan' }], systemic: false, summary: 's' })
       : NO_FINDINGS),
-    'fix-plan': (p, o, u) => ret({ branch: `fixed-${u}`, sha: 'f', applied: [], notApplied: [{ finding: 'bad', reason: 'changes the entry', altersRequirement: true }], planText: '' },
-      { contradictions: [{ statement: 'entry wrong', against: 'docs/plans/f-breakdown.md @ plan0' }] }),
+    'fix-plan': (p, o, u) => ret({ branch: `fixed-${u}`, sha: 'f', applied: [], notApplied: [{ finding: 'bad', reason: 'changes the entry' }], planText: '' }),
   });
   const out = await run(rt);
   assert.equal(out.status, 'stopped');
-  assert.ok(out.escalation.signals.every((s) => s.kind === 'assumption-invalidated'));
-  assert.ok(out.escalation.signals.some((s) => s.source === 'structural'));
+  assert.deepEqual(out.escalation.signals.map((s) => [s.kind, s.source]), [['gate-non-convergence', 'structural']]);
+  assert.match(out.escalation.signals[0].statement, /declined by the fix stage — bad: changes the entry/);
+  assert.equal(labels().filter((x) => x.startsWith('critique-plan')).length, 1);
 });
 
 test('environment gate drift aborts the unit before implementation', async () => {
   const { rt, labels } = runtime(twoWaves(), {
-    implement: (p, o, u) => ret({
-      branch: '', sha: '', gateProbe: [{ name: 'node', pin: '22.1', observed: '20.0', drifted: true }], distress: NO_DISTRESS,
-      deviations: [], deferrals: [], discoveries: [], doneCondition: { evaluable: false, met: false, evidence: '' }, standingObligations: [], summary: '',
-    }, { assumptions: [{ statement: 'x', referent: 'y' }] }),
+    implement: (p, o, u) => ret(implemented(u, { branch: '', sha: '', gateProbe: [{ name: 'node', pin: '22.1', observed: '20.0', drifted: true }], doneCondition: { evaluable: false, met: false, evidence: '' } })),
   });
   const out = await run(rt);
   assert.equal(out.status, 'stopped');
   assert.deepEqual(out.escalation.signals.map((s) => s.kind), ['environment-gate-drift']);
+  assert.ok(!labels().some((x) => x.startsWith('critique-code')));
+});
+
+test('an unevaluable done condition stops the unit before review', async () => {
+  const { rt, labels } = runtime(twoWaves(), {
+    implement: (p, o, u) => ret(implemented(u, { doneCondition: { evaluable: false, met: false, evidence: 'names a test that does not exist' } })),
+  });
+  const out = await run(rt);
+  assert.equal(out.status, 'stopped');
+  assert.deepEqual(out.escalation.signals.map((s) => s.kind), ['done-condition-unevaluable']);
   assert.ok(!labels().some((x) => x.startsWith('critique-code')));
 });
 
@@ -262,6 +308,17 @@ test('an unresolvable merge conflict stops; the unit is not completed', async ()
   const out = await run(rt);
   assert.equal(out.status, 'stopped');
   assert.deepEqual(out.escalation.signals.map((s) => s.kind), ['merge-conflict-unresolvable']);
+});
+
+test('a mechanically resolved conflict between claimed-disjoint units is a re-plan item, not a stop', async () => {
+  const { rt, calls } = runtime(twoWaves(), {
+    merge: (p, o, u, state) => ret({ integrationBranch: 'integration', merges: state.mergeOrder.map((id) => ({ unit: id, status: 'resolved', files: ['CLAUDE.md'], sha: 'm' })), planSha: 'm1' }),
+  });
+  const out = await run(rt);
+  assert.equal(out.status, 'complete', JSON.stringify(out.escalation?.signals));
+  const w1 = calls.find((c) => c.label === 'replan:w1').prompt;
+  assert.match(w1, /"kind": "claimed-disjoint-conflict"/);
+  assert.match(w1, /Merge conflicts: \[[^]*"status": "resolved"/);
 });
 
 test('load: wrong branch is a precondition stop; invalid plan stops before any unit', async () => {
@@ -348,25 +405,6 @@ test('a clean merge that regresses the suite stops and does not complete the uni
   assert.deepEqual(out.escalation.signals.map((s) => s.kind), ['merge-regression']);
 });
 
-test('review-gate dedicated fields become signals even when the generic arrays are empty', async () => {
-  const { rt } = runtime(twoWaves(), {
-    'review-gate': () => ret({ invalidatesArchitecture: true, handoff: 'insufficient', exitCriteria: [] }),
-  });
-  const out = await run(rt);
-  assert.equal(out.status, 'stopped');
-  assert.deepEqual(out.escalation.signals.map((s) => s.kind).sort(), ['assumption-invalidated', 'handoff-insufficient']);
-  assert.ok(out.escalation.signals.every((s) => s.source === 'gate'));
-});
-
-test('a partial handoff is recorded, not stopped', async () => {
-  const { rt } = runtime(twoWaves(), {
-    'review-gate': () => ret({ invalidatesArchitecture: false, handoff: 'partial', exitCriteria: [] }),
-  });
-  const out = await run(rt);
-  assert.equal(out.status, 'complete');
-  assert.equal(out.digest.byKind['handoff-partial'], 2);
-});
-
 test('fixed Critical findings reach the ledger on a passing gate', async () => {
   let round = 0;
   const { rt, calls } = runtime(twoWaves(), {
@@ -394,42 +432,22 @@ test('role tiers reach every call: gate opus, planning fable/medium, mechanical 
     else if (/^(load|ledger|decision-log)$/.test(role)) assert.deepEqual([c.opts.model, c.opts.effort], ['haiku', 'low'], c.label);
     else assert.equal(c.opts.model, 'sonnet', c.label);
   }
-  for (const r of ['critique-code', 'plan', 'implement', 'merge', 'review-gate', 'replan', 'load', 'ledger']) assert.ok(seen.has(r), r);
+  for (const r of ['critique-code', 'plan', 'implement', 'merge', 'review-gate', 'replan', 'load']) assert.ok(seen.has(r), r);
 });
 
 test('a wave stop scribes once, with the wave\'s records and stops in one rendered table', async () => {
   const { rt, calls } = runtime(twoWaves(), {
-    implement: (p, o, u) => ret({
-      branch: `impl-${u}`, sha: 'i', gateProbe: [], distress: NO_DISTRESS, deviations: [], deferrals: [], discoveries: [],
-      doneCondition: { evaluable: true, met: true, evidence: 'ok' }, standingObligations: [], summary: 'done',
-    }, { assumptions: [{ statement: 'a | b', referent: 'r' }], contradictions: [{ statement: 'schema differs', against: 'docs/architecture/f.md @ arch1' }] }),
+    implement: (p, o, u) => ret(implemented(u, { deviations: ['a | b'] })),
+    'review-gate': () => ret({ invalidations: [gateInvalidation()], notes: [] }),
   });
   await run(rt);
   const scribes = calls.filter((c) => c.label === 'ledger:w1');
   assert.equal(scribes.length, 1);
   const p = scribes[0].prompt;
   assert.match(p, /<<<LEDGER\n## Wave 1\n/);
-  assert.match(p, /\| 1 \| A \| implement \| reported \| assumption \| a \\\| b \| r \| recorded \|/);
-  assert.match(p, /\| assumption-invalidated \| schema differs \| docs\/architecture\/f.md @ arch1 \| stopped \|/);
+  assert.match(p, /\| 1 \| A \| implement \| reported \| deviation \| a \\\| b \| A \| recorded \|/);
+  assert.match(p, /\| architecture-invalidated \| section: §4\.8; [^|]* \| §4\.8 \| stopped \|/);
   assert.match(p, /# Signal ledger: f/);
-});
-
-test('each stage after the plan sees the unit\'s earlier signals; the gate sees the wave\'s', async () => {
-  const { rt, calls } = runtime(twoWaves(), {
-    plan: (p, o, u) => ret({ branch: `plan-${u}`, sha: 'p', path: `docs/plans/${u}-plan.md`, planText: `plan for ${u}` },
-      { ambiguities: [{ statement: 'which file?', about: 'scope', referent: 'Scope' }] }),
-  });
-  await run(rt);
-  const of = (label) => calls.find((c) => c.label === label).prompt;
-  assert.doesNotMatch(of('plan:A'), /Already recorded for this unit/);
-  for (const l of ['critique-plan:r1:A', 'implement:A', 'critique-code:r1:A', 'lens-review:r1:A', 'completion-report:A']) {
-    assert.match(of(l), /Already recorded for this unit by earlier stages[^]*\[plan\] scope-ambiguity: which file\? \(referent: Scope\)/, l);
-  }
-  const gate = of('review-gate:w1');
-  assert.match(gate, /Already recorded by this wave's stages[^]*\[plan\] scope-ambiguity: which file\?/);
-  assert.match(gate, /\[implement\] assumption: assumed for A/);
-  assert.match(gate, /pass on no Critical findings/);
-  assert.match(gate, /re-plan stage runs after this gate/);
 });
 
 test('args.tiers overrides a role without disturbing the others', async () => {
@@ -442,22 +460,14 @@ test('args.tiers overrides a role without disturbing the others', async () => {
   assert.equal(calls.find((c) => c.label.startsWith('plan:')).opts.model, 'fable');
 });
 
-test('load: the copy stage cannot stop the run by reporting; a bad block or bad clearance does', async () => {
-  const chatty = runtime(twoWaves(), {
-    load: (p, o, u, s) => ret({ planBlock: toBlock(s.plan), decisionsBlock: '', headBranch: 'integration', architectureSha: 'arch1' },
-      { ambiguities: [{ statement: 'which order?', about: 'scope' }], contradictions: [{ statement: 'x', against: 'y @ z' }] }),
-  });
-  const out = await run(chatty.rt);
-  assert.equal(out.status, 'complete');
-  assert.ok(out.ledger.filter((x) => x.stage === 'load').every((x) => x.disposition === 'recorded'));
-  assert.equal(out.digest.byKind['scope-ambiguity'], out.ledger.filter((x) => x.stage === 'load').length / 2, 'every copy call reported one of each');
-
+test('load: a bad block stops before any unit; the copy stage returns only the blocks', async () => {
   const garbled = runtime(twoWaves(), { load: () => ret({ planBlock: 'units: [', decisionsBlock: '', headBranch: 'integration', architectureSha: 'a' }) });
   const outG = await run(garbled.rt);
   assert.equal(outG.status, 'stopped');
   assert.equal(outG.escalation.stage, 'load');
   assert.deepEqual(outG.escalation.signals.map((x) => [x.kind, x.source]), [['invalid-plan', 'structural']]);
   assert.ok(!garbled.labels().some((x) => x.startsWith('plan:')));
+  assert.match(garbled.calls[0].prompt, /This stage copies; the script parses/);
 });
 
 test('load: a decision log clears an organisational gate; clearing an environment gate is a stop', async () => {

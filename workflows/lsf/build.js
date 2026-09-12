@@ -14,13 +14,13 @@ const MODULES = ['schema.js', 'graph.js', 'scheduling.js', 'implement.js'];
 
 const META = `export const meta = {
   name: 'lsf-implement',
-  description: 'Phase 3 of phronithm:large-scale-feature: wave loop over a decomposition plan — plan, critique, implement, review, merge, re-plan — stopping on meta-level signals',
+  description: 'Phase 3 of phronithm:large-scale-feature: wave loop over a decomposition plan — plan, critique, implement, review, merge, re-plan — stopping on structural signals and adjudicated architecture invalidation',
   whenToUse: 'After lsf-architecture has committed a decomposition plan. Pass args { name, planSha, architectureDoc, integrationBranch, ... }; see the header comment in workflows/lsf/implement.js.',
   phases: [
     { title: 'Load', detail: 'decision log, plan graph, validation' },
     { title: 'Units', detail: 'per unit: plan, critique, implement, review, completion report' },
     { title: 'Merge', detail: 'unit branches into the integration branch, plan order' },
-    { title: 'Gate', detail: 'review-gate questions for the wave' },
+    { title: 'Gate', detail: 'does the wave invalidate the architecture document' },
     { title: 'Re-plan', detail: 'breakdown re-plan mode over the wave\\'s completion reports' },
     { title: 'Ledger', detail: 'signal ledger scribe' },
     { title: 'Termination', detail: 'meta-tasks and standing obligations' },
