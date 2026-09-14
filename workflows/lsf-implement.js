@@ -1037,10 +1037,10 @@ const GATE_MAX_ROUNDS = 4; // critique gate hard cap
 const DEFAULT_MAX_WAVES = 20;
 // Model and effort per role.
 const DEFAULT_TIERS = Object.freeze({
-  critique: { model: 'sonnet' },
-  gate: { model: 'opus' },
-  planning: { model: 'opus', effort: 'medium' },
-  default: { model: 'sonnet' },
+  critique: { model: 'opus', effort: 'low' },
+  gate: { model: 'opus', effort: 'medium' },
+  planning: { model: 'opus', effort: 'high' },
+  default: { model: 'opus', effort: 'low' },
   // Copy and append stages: the script has rendered the content or pinned
   // it to a SHA; the agent only moves it into the repo, and the parser
   // checks the result on the next load.

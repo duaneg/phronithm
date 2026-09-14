@@ -547,18 +547,18 @@ test('fixed Critical findings reach the ledger on a passing gate', async () => {
   assert.match(ledger1.prompt, /critical-fixed/);
 });
 
-test('role tiers reach every call: critique sonnet, gate opus, planning opus/medium, mechanical haiku/low, default sonnet', async () => {
+test('role tiers reach every call: critique opus/low, gate opus/medium, planning opus/high, mechanical haiku/low, default opus/low', async () => {
   const { rt, calls } = runtime(twoWaves());
   await run(rt);
   const seen = new Set();
   for (const c of calls) {
     const role = c.label.replace(/:.*$/, '');
     seen.add(role);
-    if (/^(critique-plan|critique-code|lens-review|critique-design)$/.test(role)) assert.equal(c.opts.model, 'sonnet', c.label);
-    else if (role === 'review-gate') assert.equal(c.opts.model, 'opus', c.label);
-    else if (/^(plan|replan|termination)$/.test(role)) assert.deepEqual([c.opts.model, c.opts.effort], ['opus', 'medium'], c.label);
+    if (/^(critique-plan|critique-code|lens-review|critique-design)$/.test(role)) assert.deepEqual([c.opts.model, c.opts.effort], ['opus', 'low'], c.label);
+    else if (role === 'review-gate') assert.deepEqual([c.opts.model, c.opts.effort], ['opus', 'medium'], c.label);
+    else if (/^(plan|replan|termination)$/.test(role)) assert.deepEqual([c.opts.model, c.opts.effort], ['opus', 'high'], c.label);
     else if (/^(load|ledger|decision-log)$/.test(role)) assert.deepEqual([c.opts.model, c.opts.effort], ['haiku', 'low'], c.label);
-    else assert.equal(c.opts.model, 'sonnet', c.label);
+    else assert.deepEqual([c.opts.model, c.opts.effort], ['opus', 'low'], c.label);
   }
   for (const r of ['critique-code', 'plan', 'implement', 'merge', 'review-gate', 'replan', 'load', 'obligations']) assert.ok(seen.has(r), r);
 });
@@ -579,12 +579,12 @@ test('a wave stop scribes once, with the wave\'s records and stops in one render
 });
 
 test('args.tiers overrides a role without disturbing the others', async () => {
-  const { rt, calls } = runtime(twoWaves(), {}, { tiers: { critique: { model: 'opus' } } });
+  const { rt, calls } = runtime(twoWaves(), {}, { tiers: { critique: { model: 'sonnet' } } });
   await run(rt);
   const critique = calls.find((c) => c.label.startsWith('critique-code'));
   const impl = calls.find((c) => c.label.startsWith('implement'));
-  assert.equal(critique.opts.model, 'opus');
-  assert.equal(impl.opts.model, 'sonnet');
+  assert.equal(critique.opts.model, 'sonnet');
+  assert.equal(impl.opts.model, 'opus');
   assert.equal(calls.find((c) => c.label.startsWith('review-gate')).opts.model, 'opus');
   assert.equal(calls.find((c) => c.label.startsWith('plan:')).opts.model, 'opus');
 });

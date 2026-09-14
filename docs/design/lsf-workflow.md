@@ -497,13 +497,13 @@ five-field form is the first thing it should measure. Not yet committed to.
 ## Model tiers
 
 Each stage call carries a role tier (`args.tiers` overrides per role):
-critique (unit plan critique, code critique, lens review) runs sonnet;
-gate (the wave gate alone) runs opus;
-planning (unit plan, re-plan, termination) runs opus at medium effort;
+critique (unit plan critique, code critique, lens review) runs opus at low
+effort; gate (the wave gate alone) runs opus at medium effort;
+planning (unit plan, re-plan, termination) runs opus at high effort;
 mechanical (plan-block copy, decision-log and ledger appends) runs haiku at
 low effort, since the script has already rendered what they write and the
 parser checks it on the next load; everything else, including termination's
-direct edits to the plan, runs sonnet.
+direct edits to the plan, runs opus at low effort.
 
 ## Open questions
 
