@@ -626,3 +626,16 @@ test('the re-planned and terminated plans are re-read from their SHAs, not retur
   assert.match(loads[1].prompt, /git show replan\d:docs\/plans\/f-breakdown\.md/);
   assert.match(calls.find((c) => c.label === 'plan:B').prompt, /@ replan\d/);
 });
+
+test('a seeded stage return stands in for the agent, matched by label', async () => {
+  const planned = ret({ branch: 'salvaged-A', sha: 's', path: 'docs/plans/A-plan.md', planText: 'salvaged plan for A', readings: [] });
+  const { rt, calls, logs } = runtime(twoWaves(), {}, { seed: { 'plan:A': planned } });
+  const out = await run(rt);
+  assert.equal(out.status, 'complete');
+  const l = calls.map((c) => c.label);
+  assert.ok(!l.includes('plan:A'), 'the seeded agent is not spawned');
+  assert.ok(l.includes('plan:B'), 'unseeded labels run');
+  assert.match(calls.find((c) => c.label === 'critique-plan:r1:A').prompt, /salvaged plan for A/);
+  assert.match(calls.find((c) => c.label === 'implement:A').prompt, /salvaged-A/);
+  assert.ok(logs.some((m) => m.startsWith('plan:A: seeded')));
+});

@@ -1019,6 +1019,12 @@ function digest(ledger) {
 //   config              overrides for scheduling DEFAULT_CONFIG
 //   maxWaves            default 20
 //   maxUnitsPerWave     cap on units started per wave, in execution order; default unbounded
+//   seed                { "<agent label>": { result, commits } }: a stage return
+//                       to use in place of spawning that agent — e.g. a unit
+//                       plan salvaged from a run whose journal is gone (label
+//                       plan:<unit>). Matched by label alone; the caller
+//                       vouches that the seed was produced against the same
+//                       plan SHA and inputs
 //   tiers               per-role { model, effort } overrides; roles:
 //                       critique (unit plan critique, code critique, lens
 //                       review), gate (wave gate), planning
@@ -1632,9 +1638,21 @@ function requireArg(args, key) {
   return args[key];
 }
 
-async function run(rt) {
+async function run(runtime) {
+  const args = runtime.args ?? {};
+  // Seeded stage returns stand in for the agent; matched by label.
+  const seed = args.seed ?? {};
+  const rt = {
+    ...runtime,
+    agent: async (prompt, opts) => {
+      if (Object.hasOwn(seed, opts.label)) {
+        runtime.log(`${opts.label}: seeded from args.seed; agent not spawned`);
+        return seed[opts.label];
+      }
+      return runtime.agent(prompt, opts);
+    },
+  };
   const { agent, parallel, log } = rt;
-  const args = rt.args ?? {};
   const name = requireArg(args, 'name');
   const ctx = {
     name,

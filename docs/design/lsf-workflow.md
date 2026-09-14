@@ -450,6 +450,11 @@ commits it. This supersedes, for workflow agents only, the file-writes policy
 in [subagent-protocol](${CLAUDE_PLUGIN_ROOT}/docs/subagent-protocol.md); worktree
 commits are known to survive (Constraints above).
 
+When a run's journal is gone, `lsf-implement` takes `args.seed`: stage
+returns keyed by agent label, used in place of spawning that agent. The
+caller recovers a return from the subagent transcript and vouches it was
+produced against the same plan SHA.
+
 ## Testing
 
 The Workflow tool itself is not tested. What is tested is the script's own
