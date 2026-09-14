@@ -911,6 +911,9 @@ function distressSignals(distress, { unit, wave }, config = DEFAULT_CONFIG) {
 
 // Kinds the re-plan is handed with ids and must return a verdict on.
 const REPLAN_ITEM_KINDS = Object.freeze(['deferral', 'discovery', 'claimed-disjoint-conflict', 'architecture-note', 'execution-distress']);
+// Stop kinds whose relaunch target is lsf-architecture: the plan is
+// superseded there, so a wave stopping on one skips the re-plan.
+const PLAN_SUPERSEDING_STOP_KINDS = Object.freeze(['architecture-invalidated', 'done-condition-unevaluable']);
 
 // Classify a wave's signals by kind. Returns { stop, stops, records, all },
 // each signal stamped with its disposition.
@@ -1356,7 +1359,7 @@ Do not re-evaluate the units' done conditions or review findings: the unit stage
 ${RETURN_FIELDS}`;
 }
 
-function replanPrompt(ctx, plan, wave, merged, conflicts, items, records) {
+function replanPrompt(ctx, plan, wave, merged, conflicts, items, records, stops) {
   return `${header(ctx, plan)}
 
 You are in the main checkout on ${ctx.integrationBranch}. Run the phronithm:breakdown skill in re-plan mode over ${plan.path} with the completion reports of wave ${wave}: ${merged.map((m) => m.completionPath).join(', ')}. Diff their deviations, deferrals, and discoveries against every remaining unit's scope, dependencies, and done condition; amend the plan; re-run the quality check over the remaining units, examining the size budget first where a completed unit showed distress; record every amendment in Plan Maintenance. Treat each merge conflict below between units the plan claimed disjoint as a plan defect: record it and add the missing edge or scope correction. A file a unit wrote outside its Scope line is a Scope correction where a later unit shares the file.
@@ -1368,7 +1371,10 @@ ${items.length ? JSON.stringify(items, null, 2) : 'none'}
 
 Merge conflicts: ${conflicts.length ? JSON.stringify(conflicts, null, 2) : 'none'}
 Other records this wave (readings, deviations, unfixed findings): ${records.length ? JSON.stringify(records, null, 2) : 'none'}
-
+${stops.length ? `
+The run stops after this re-plan on the signals below; they go to the requester. Do not amend the plan for them — no edge, scope, or order change on their account — and leave every unit they name as it is: its branch is unmerged and it stays incomplete. Absorb the merged units' reports as above.
+${JSON.stringify(stops.map(({ kind, unit, stage, statement, referent }) => ({ kind, unit, stage, statement, referent })), null, 2)}
+` : ''}
 Every amendment to a unit's type, dependencies, scope, publishes, gates, or completion, and to the execution order, is made in both the unit's entry and the plan's \`\`\`yaml lsf-plan block, which must agree; the script reads the block. Commit the amended plan on ${ctx.integrationBranch}. Return the new plan SHA; each amendment with its kind (${AMENDMENT_KINDS.join(', ')}), unit, and statement; a verdict per item id; and every remaining unit over its size budget with its disposition: \`extracted\` (a preceding design unit now carries the excess), \`flagged\` (the excess is wall-clock, not context, and the unit carries the rationale — breakdown's size budget discharges it), or \`unrepaired\`. A flag already on the unit from an earlier pass stands unless the unit's scope has grown since; report it as \`flagged\`. Do not answer whether the architecture document still stands — the gate did. Do not select or execute any unit.
 ${RETURN_FIELDS}`;
 }
@@ -1669,7 +1675,7 @@ async function run(rt) {
   const stopped = async (stage, stops, records = [], extra = {}) => {
     for (const s of stops) s.disposition = 'stopped';
     ledger.push(...stops.filter((s) => !ledger.includes(s)));
-    await scribeLedger([...records, ...stops]);
+    await scribeLedger([...new Set([...records, ...stops])]);
     log(`STOP at ${stage}: ${stops.map((s) => s.kind).join(', ')}`);
     return outcome('stopped', {
       escalation: escalation({ workflow: WORKFLOW, planSha: plan.sha, wave: wave || undefined, stage, signals: stops, decisionNeeded: decisionsFor(stops), ...extra }),
@@ -1797,7 +1803,7 @@ async function run(rt) {
         waveSignals.push(...signalsFromMerge(m.result, { wave }));
         for (const x of m.result.merges) {
           if (x.status === 'clean' || x.status === 'resolved') { completed.add(x.unit); merged.push(byUnit.get(x.unit)); }
-          if (x.status !== 'clean') conflicts.push(x);
+          if (x.status === 'resolved') conflicts.push(x);
         }
         plan = { ...plan, sha: m.result.planSha, units: plan.units.map((u) => (completed.has(u.id) ? { ...u, complete: true } : u)) };
       }
@@ -1813,7 +1819,12 @@ async function run(rt) {
     const evalA = evaluateWave(waveSignals);
     ledger.push(...evalA.all);
     log(`wave ${wave}: merged ${merged.map((r) => r.unit).join(', ') || 'nothing'}; ${conflicts.length} conflict(s); ${evalA.records.length} recorded, ${evalA.stops.length} stop signal(s)`);
-    if (evalA.stop) return stopped('wave', evalA.stops, evalA.records);
+    // A wave stop still re-plans over whatever merged, unless nothing did
+    // or the stop supersedes the plan (its relaunch is lsf-architecture).
+    // A relaunch re-plans over decisions alone, so this is the only pass
+    // that absorbs the merged reports.
+    const superseded = evalA.stops.some((s) => PLAN_SUPERSEDING_STOP_KINDS.includes(s.kind));
+    if (evalA.stop && (!merged.length || superseded)) return stopped('wave', evalA.stops, evalA.records);
 
     // Re-plan from the wave's completion reports. Items go in with ids; one
     // the re-plan cannot absorb, or does not answer, is a stop.
@@ -1821,7 +1832,7 @@ async function run(rt) {
     const itemSignals = evalA.records.filter((s) => REPLAN_ITEM_KINDS.includes(s.kind));
     const items = itemSignals.map((s, i) => ({ id: `rp-${i + 1}`, ...flat(s) }));
     const records = evalA.records.filter((s) => !REPLAN_ITEM_KINDS.includes(s.kind)).map(flat);
-    const rp = await agent(replanPrompt(ctx, plan, wave, merged, conflicts, items, records), { label: `replan:w${wave}`, ...tier(ctx, 'planning'), schema: REPLAN_SCHEMA, phase: 'Re-plan' });
+    const rp = await agent(replanPrompt(ctx, plan, wave, merged, conflicts, items, records, evalA.stops), { label: `replan:w${wave}`, ...tier(ctx, 'planning'), schema: REPLAN_SCHEMA, phase: 'Re-plan' });
     const replanSigs = [];
     let nextPlan = plan;
     if (!rp) {
@@ -1837,7 +1848,9 @@ async function run(rt) {
     const waveRecords = [...evalA.all, ...evalB.records];
     // The re-plan committed its absorbed amendments before the stop; the
     // record carries that SHA as the plan to relaunch from.
-    if (evalB.stop) return stopped('replan', evalB.stops, waveRecords, rp ? { planSha: rp.result.planSha, preReplanSha: plan.sha } : {});
+    if (evalA.stop || evalB.stop) {
+      return stopped(evalA.stop ? 'wave' : 'replan', [...evalA.stops, ...evalB.stops], waveRecords, rp ? { planSha: rp.result.planSha, preReplanSha: plan.sha } : {});
+    }
     await scribeLedger(waveRecords);
     plan = nextPlan;
     for (const u of plan.units) if (u.complete) completed.add(u.id);

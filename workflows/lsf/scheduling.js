@@ -326,6 +326,9 @@ function distressSignals(distress, { unit, wave }, config = DEFAULT_CONFIG) {
 
 // Kinds the re-plan is handed with ids and must return a verdict on.
 const REPLAN_ITEM_KINDS = Object.freeze(['deferral', 'discovery', 'claimed-disjoint-conflict', 'architecture-note', 'execution-distress']);
+// Stop kinds whose relaunch target is lsf-architecture: the plan is
+// superseded there, so a wave stopping on one skips the re-plan.
+const PLAN_SUPERSEDING_STOP_KINDS = Object.freeze(['architecture-invalidated', 'done-condition-unevaluable']);
 
 // Classify a wave's signals by kind. Returns { stop, stops, records, all },
 // each signal stamped with its disposition.
@@ -393,7 +396,7 @@ function digest(ledger) {
 }
 
 export {
-  DEFAULT_CONFIG, BLOCKING_GATE_KINDS, REPLAN_ITEM_KINDS,
+  DEFAULT_CONFIG, BLOCKING_GATE_KINDS, REPLAN_ITEM_KINDS, PLAN_SUPERSEDING_STOP_KINDS,
   findCycle, ancestors, pathsOverlap, scopesOverlap, overlappingPairs, validatePlan,
   readySet, blockedUnits, mergeOrder, wavePlan,
   nullReturnSignal, signalsFromReadings, signalsFromImplement, signalsFromFindings, signalsFromGate, invalidationComplete,

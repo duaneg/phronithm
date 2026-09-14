@@ -182,7 +182,7 @@ test('a complete architecture invalidation from the gate stops the wave with the
   assert.match(out.escalation.decision_needed[0].question, /amendment: nested art is authored as siblings/);
   const l = labels();
   assert.ok(l.includes('ledger:w1'), 'ledger scribed before returning');
-  assert.ok(!l.includes('replan:w1'), 'no re-plan after a stop');
+  assert.ok(!l.includes('replan:w1'), 'no re-plan after a stop that supersedes the plan');
   assert.ok(!l.includes('plan:B'));
 });
 
@@ -345,13 +345,56 @@ test('an unevaluable done condition stops the unit before review', async () => {
   assert.ok(!labels().some((x) => x.startsWith('critique-code')));
 });
 
-test('an unresolvable merge conflict stops; the unit is not completed', async () => {
-  const { rt } = runtime(twoWaves(), {
+test('an unresolvable merge conflict stops; the unit is not completed; nothing merged, so no re-plan', async () => {
+  const { rt, labels } = runtime(twoWaves(), {
     merge: () => ret({ integrationBranch: 'integration', merges: [{ unit: 'A', status: 'unresolvable', files: ['src/x.js'] }], planSha: 'm1' }),
   });
   const out = await run(rt);
   assert.equal(out.status, 'stopped');
   assert.deepEqual(out.escalation.signals.map((s) => s.kind), ['merge-conflict-unresolvable']);
+  assert.equal(out.escalation.plan_sha, 'm1');
+  assert.ok(!labels().includes('replan:w1'));
+});
+
+const twoParallel = () => graph('plan0', [unit('A'), unit('B'), unit('C', { dependencies: [{ unit: 'A' }, { unit: 'B' }] })]);
+
+test('a wave stop with a unit merged still re-plans over the merged report, then stops from the re-plan SHA', async () => {
+  const { rt, calls, labels } = runtime(twoParallel(), {
+    merge: () => ret({ integrationBranch: 'integration', merges: [
+      { unit: 'A', status: 'unresolvable', files: ['src/x.js'] },
+      { unit: 'B', status: 'clean', files: [], sha: 'mb' },
+    ], planSha: 'm1' }),
+  });
+  const out = await run(rt);
+  assert.equal(out.status, 'stopped');
+  assert.equal(out.escalation.stage, 'wave');
+  assert.deepEqual(out.escalation.signals.map((s) => s.kind), ['merge-conflict-unresolvable']);
+  assert.equal(out.escalation.plan_sha, 'replan1', 'the re-plan commit is the plan to relaunch from');
+  assert.equal(out.escalation.pre_replan_sha, 'm1');
+  const l = labels();
+  assert.ok(l.indexOf('review-gate:w1') < l.indexOf('replan:w1'));
+  assert.ok(!l.some((x) => x.startsWith('plan:C')), 'no unit starts after the stop');
+  const rp = calls.find((c) => c.label === 'replan:w1').prompt;
+  assert.match(rp, /docs\/plans\/B-completion\.md/);
+  assert.match(rp, /Merge conflicts: none/, 'the unresolvable conflict is not an item to absorb');
+  assert.match(rp, /The run stops after this re-plan[\s\S]*"kind": "merge-conflict-unresolvable"/);
+  const ledgerEntries = calls.find((c) => c.label === 'ledger:w1').prompt;
+  assert.equal((ledgerEntries.match(/merge-conflict-unresolvable/g) ?? []).length, 1, 'the stop is scribed once');
+});
+
+test('a re-plan cannot verdict during a wave stop joins the same escalation', async () => {
+  const { rt } = runtime(twoParallel(), {
+    implement: (p, o, u) => ret(implemented(u, u === 'B' ? { deferrals: [{ statement: 'later', to: 'C' }] } : {})),
+    merge: () => ret({ integrationBranch: 'integration', merges: [
+      { unit: 'A', status: 'regressed', files: ['test/a.test.js'], sha: 'ma' },
+      { unit: 'B', status: 'clean', files: [], sha: 'mb' },
+    ], planSha: 'm1' }),
+    replan: (p) => ret({ planSha: 'replan1', amendments: [], overBudget: [], verdicts: verdictsFor(p, 'cannot'), summary: 'no' }),
+  });
+  const out = await run(rt);
+  assert.equal(out.status, 'stopped');
+  assert.equal(out.escalation.stage, 'wave');
+  assert.deepEqual(out.escalation.signals.map((s) => s.kind), ['merge-regression', 'plan-defect-unabsorbed']);
 });
 
 test('a mechanically resolved conflict between claimed-disjoint units is a re-plan item, not a stop', async () => {

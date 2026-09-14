@@ -161,9 +161,9 @@ loop:
   merged  = merge(results, in plan execution order)               // agent, sequential
   gate    = invalidations and notes from the wave gate             // agent, one question
   signals = structural(results, merged) ∪ gate
-  if any signal is STOP: return escalation(signals, plan.sha)
-  plan    = replan(plan, results.reports, merged.conflicts, items)  // agent, commits; a verdict per item
-  if replan yields STOP signal, or leaves an item unabsorbed: return escalation(...)
+  if any signal is STOP and (nothing merged or the stop supersedes the plan): return escalation(signals, plan.sha)
+  plan    = replan(plan, results.reports, merged.conflicts, items, stops)  // agent, commits; a verdict per item
+  if any signal is STOP, replan yields STOP, or an item is unabsorbed: return escalation(..., plan.sha)
 ```
 
 **The script reads only the dependency graph, and reads it from a block.**
@@ -210,6 +210,14 @@ STOP signal, as is a clean merge after which the project's gates fail (the
 stage undoes it and reports the unit regressed). Merge order is a function of
 the plan, so a re-plan can change the order of later waves; the merge stage
 never chooses.
+
+**A wave stop still re-plans over whatever merged.** A relaunch re-plans
+over the requester's decisions alone, so the wave's re-plan is the only pass
+that absorbs the merged units' reports. The stop signals go to the re-plan as
+context it must not amend for; the unit each names stays incomplete. The
+re-plan is skipped when nothing merged, and when a stop supersedes the plan
+(architecture invalidated, done condition unevaluable — the relaunch target
+is `lsf-architecture`).
 
 **The wave gate asks one question**: does anything this wave invalidate the
 architecture document — does any decision it makes rest on a premise the
@@ -395,9 +403,10 @@ Returned by the workflow; presented verbatim by the session.
 
 `plan_sha`, `wave`, and `unit` are set by `lsf-implement` only; `stage` names
 the research, synthesis, critique, or breakdown stage in the other two.
-`plan_sha` is the plan to relaunch from: after a stop at a re-plan it is the
-re-plan's own commit, which carries the amendments it did absorb, and
-`pre_replan_sha` is the plan the wave ran against. An
+`plan_sha` is the plan to relaunch from: after a stop at a re-plan, or a wave
+stop with units merged, it is the re-plan's own commit, which carries the
+amendments it did absorb, and `pre_replan_sha` is the plan the wave ran
+against. An
 architecture invalidation's statement carries the gate's five fields, so the
 question the requester sees includes the proposed amendment.
 
