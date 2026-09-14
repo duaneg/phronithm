@@ -65,7 +65,7 @@ const DEFAULT_MAX_WAVES = 20;
 const DEFAULT_TIERS = Object.freeze({
   critique: { model: 'sonnet' },
   gate: { model: 'opus' },
-  planning: { model: 'fable', effort: 'medium' },
+  planning: { model: 'opus', effort: 'medium' },
   default: { model: 'sonnet' },
   // Copy and append stages: the script has rendered the content or pinned
   // it to a SHA; the agent only moves it into the repo, and the parser

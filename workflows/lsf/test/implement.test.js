@@ -547,7 +547,7 @@ test('fixed Critical findings reach the ledger on a passing gate', async () => {
   assert.match(ledger1.prompt, /critical-fixed/);
 });
 
-test('role tiers reach every call: critique sonnet, gate opus, planning fable/medium, mechanical haiku/low, default sonnet', async () => {
+test('role tiers reach every call: critique sonnet, gate opus, planning opus/medium, mechanical haiku/low, default sonnet', async () => {
   const { rt, calls } = runtime(twoWaves());
   await run(rt);
   const seen = new Set();
@@ -556,7 +556,7 @@ test('role tiers reach every call: critique sonnet, gate opus, planning fable/me
     seen.add(role);
     if (/^(critique-plan|critique-code|lens-review|critique-design)$/.test(role)) assert.equal(c.opts.model, 'sonnet', c.label);
     else if (role === 'review-gate') assert.equal(c.opts.model, 'opus', c.label);
-    else if (/^(plan|replan|termination)$/.test(role)) assert.deepEqual([c.opts.model, c.opts.effort], ['fable', 'medium'], c.label);
+    else if (/^(plan|replan|termination)$/.test(role)) assert.deepEqual([c.opts.model, c.opts.effort], ['opus', 'medium'], c.label);
     else if (/^(load|ledger|decision-log)$/.test(role)) assert.deepEqual([c.opts.model, c.opts.effort], ['haiku', 'low'], c.label);
     else assert.equal(c.opts.model, 'sonnet', c.label);
   }
@@ -586,7 +586,7 @@ test('args.tiers overrides a role without disturbing the others', async () => {
   assert.equal(critique.opts.model, 'opus');
   assert.equal(impl.opts.model, 'sonnet');
   assert.equal(calls.find((c) => c.label.startsWith('review-gate')).opts.model, 'opus');
-  assert.equal(calls.find((c) => c.label.startsWith('plan:')).opts.model, 'fable');
+  assert.equal(calls.find((c) => c.label.startsWith('plan:')).opts.model, 'opus');
 });
 
 test('load: a bad block stops before any unit; the copy stage returns only the blocks', async () => {
