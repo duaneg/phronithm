@@ -265,7 +265,11 @@ wall-clock, not context, and the unit carries the rationale, which
 breakdown's size budget accepts as discharging the check), or `unrepaired`.
 A flag stands across re-plans, including the decision re-plan before load;
 a stop kind derived from standing plan state rather than from the wave's
-events could not be cleared by any decision.
+events could not be cleared by any decision. The re-plan reports every
+standing flag on every pass; the script records one only when the unit's
+disposition differs from the last recorded in the run (an unrepaired unit is
+always recorded, since it stops). A relaunch starts with an empty in-memory
+ledger, so each standing flag lands once more per launch.
 
 **Prompts embed the plan's commit SHA** (and the unit entry verbatim), never a
 path alone. A re-plan produces a new SHA, every downstream prompt changes, and

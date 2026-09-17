@@ -1614,8 +1614,11 @@ function decisionsFor(stops) {
 // stop; document-text also records the architecture amendment), each
 // amendment, and each over-budget unit by disposition (unrepaired is a
 // stop). `describe` renders the item for the statement; `referentOf` gives
-// the ledger referent.
-function replanSignals(result, items, { stage, wave }, describe, referentOf = (it) => it.unit ?? it.id) {
+// the ledger referent. A standing flag is reported on every pass but
+// recorded once: `ledger` supplies the last over-budget kind per unit, and a
+// repaired or flagged unit whose kind is unchanged adds no row. An
+// unrepaired unit always does; it stops.
+function replanSignals(result, items, { stage, wave, ledger = [] }, describe, referentOf = (it) => it.unit ?? it.id) {
   const out = [];
   const verdicts = new Map((result.verdicts ?? []).map((v) => [v.id, v]));
   items.forEach((it, i) => {
@@ -1639,11 +1642,12 @@ function replanSignals(result, items, { stage, wave }, describe, referentOf = (i
     out.push(signal({ kind: 'amendment', source: 'reported', stage, unit: a.unit, wave, statement: `${a.kind}: ${a.statement}`, referent: a.unit }));
   }
   const budgetKind = { extracted: 'over-budget-repaired', flagged: 'over-budget-flagged', unrepaired: 'unit-over-budget' };
+  const budgetKinds = Object.values(budgetKind);
+  const standing = new Map(ledger.filter((s) => budgetKinds.includes(s.kind)).map((s) => [s.unit, s.kind]));
   for (const b of result.overBudget ?? []) {
-    out.push(signal({
-      kind: budgetKind[b.disposition] ?? 'unit-over-budget', source: 'reported', stage, unit: b.unit, wave,
-      statement: b.statement, referent: b.unit,
-    }));
+    const kind = budgetKind[b.disposition] ?? 'unit-over-budget';
+    if (kind !== 'unit-over-budget' && standing.get(b.unit) === kind) continue;
+    out.push(signal({ kind, source: 'reported', stage, unit: b.unit, wave, statement: b.statement, referent: b.unit }));
   }
   return out;
 }
@@ -1729,7 +1733,7 @@ async function run(runtime) {
     const items = args.decisions.map(({ id, question, decision }) => ({ id, question, decision }));
     const rp = await agent(decisionReplanPrompt(ctx, plan, items), { label: 'decision-replan', ...tier(ctx, 'planning'), phase: 'Load', schema: REPLAN_SCHEMA });
     if (!rp) return stopOn('decision-replan', [nullReturnSignal({ stage: 'decision-replan' })]);
-    const sigs = replanSignals(rp.result, items, { stage: 'decision-replan', wave: 0 }, (it) => it.question);
+    const sigs = replanSignals(rp.result, items, { stage: 'decision-replan', wave: 0, ledger }, (it) => it.question);
     const ev = evaluateWave(sigs);
     ledger.push(...ev.all);
     if (ev.stop) return stopped('decision-replan', ev.stops, ev.records, { planSha: rp.result.planSha, preReplanSha: plan.sha });
@@ -1877,7 +1881,7 @@ async function run(runtime) {
     if (!rp) {
       replanSigs.push(nullReturnSignal({ stage: 'replan', wave }));
     } else {
-      replanSigs.push(...replanSignals(rp.result, items, { stage: 'replan', wave }, (it) => `[${it.stage}] ${it.kind}: ${it.statement}`, (it, i) => itemSignals[i].referent));
+      replanSigs.push(...replanSignals(rp.result, items, { stage: 'replan', wave, ledger }, (it) => `[${it.stage}] ${it.kind}: ${it.statement}`, (it, i) => itemSignals[i].referent));
       const re = await loadPlan(rp.result.planSha, `load:w${wave}`, wave);
       replanSigs.push(...re.stops);
       if (re.plan) nextPlan = re.plan;

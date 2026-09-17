@@ -269,14 +269,29 @@ test('a flagged over-budget unit is recorded and the run continues; an unrepaire
     if (disposition === 'flagged') {
       assert.equal(out.status, 'complete', 'flag discharges the budget check');
       const flags = out.ledger.filter((s) => s.kind === 'over-budget-flagged');
-      assert.equal(flags.length, 2, 'reported each re-plan');
+      assert.equal(flags.length, 1, 'reported each re-plan, recorded once while it stands');
       assert.equal(flags[0].disposition, 'recorded');
       assert.equal(flags[0].unit, 'B');
+      assert.equal(flags[0].wave, 1);
     } else {
       assert.equal(out.status, 'stopped');
       assert.deepEqual(out.escalation.signals.map((s) => s.kind), ['unit-over-budget']);
     }
   }
+});
+
+test('an over-budget unit is recorded again when its disposition changes, and an unrepaired one is never deduplicated', async () => {
+  let pass = 0;
+  const { rt } = runtime(twoWaves(), {
+    replan: (p, o, u, state) => {
+      state.plan = { ...state.plan, sha: 'replanned', units: state.plan.units.map((x) => ({ ...x, complete: state.completed.has(x.id) })) };
+      const disposition = ++pass === 1 ? 'flagged' : 'extracted';
+      return ret({ planSha: 'replanned', amendments: [], overBudget: [{ unit: 'B', disposition, statement: 's' }], verdicts: [], summary: 's' });
+    },
+  });
+  const out = await run(rt);
+  assert.equal(out.status, 'complete');
+  assert.deepEqual(out.ledger.filter((s) => /over-budget/.test(s.kind)).map((s) => [s.wave, s.kind]), [[1, 'over-budget-flagged'], [2, 'over-budget-repaired']]);
 });
 
 test('a document-text verdict records the architecture amendment and does not stop', async () => {
