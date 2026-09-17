@@ -364,8 +364,15 @@ function ledgerCell(v) {
 function ledgerHeading(name) {
   return `# Signal ledger: ${name}\n\nAppend-only. Never edit earlier entries — add a later wave's row instead.\n`;
 }
+// The heading follows the rows: a schedule stop reports the wave it could not
+// start, one past the loop's counter.
+function ledgerWave(entries, wave) {
+  const waves = new Set(entries.map((e) => e.wave ?? wave));
+  return waves.size === 1 ? [...waves][0] : wave;
+}
+
 function renderLedger(entries, wave) {
-  const head = [`## Wave ${wave}`, '', `| ${LEDGER_COLUMNS.join(' | ')} |`, `| ${LEDGER_COLUMNS.map(() => '---').join(' | ')} |`];
+  const head = [`## Wave ${ledgerWave(entries, wave)}`, '', `| ${LEDGER_COLUMNS.join(' | ')} |`, `| ${LEDGER_COLUMNS.map(() => '---').join(' | ')} |`];
   const rows = entries.map((e) => `| ${[e.wave ?? wave, e.unit, e.stage, e.source, e.kind, e.statement, e.referent, e.disposition].map(ledgerCell).join(' | ')} |`);
   return [...head, ...rows].join('\n') + '\n';
 }
@@ -400,5 +407,5 @@ export {
   findCycle, ancestors, pathsOverlap, scopesOverlap, overlappingPairs, validatePlan,
   readySet, blockedUnits, mergeOrder, wavePlan,
   nullReturnSignal, signalsFromReadings, signalsFromImplement, signalsFromFindings, signalsFromGate, invalidationComplete,
-  signalsFromMerge, distressSignals, evaluateWave, digest, renderLedger, ledgerHeading,
+  signalsFromMerge, distressSignals, evaluateWave, digest, renderLedger, ledgerWave, ledgerHeading,
 };

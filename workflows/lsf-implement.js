@@ -949,8 +949,15 @@ function ledgerCell(v) {
 function ledgerHeading(name) {
   return `# Signal ledger: ${name}\n\nAppend-only. Never edit earlier entries — add a later wave's row instead.\n`;
 }
+// The heading follows the rows: a schedule stop reports the wave it could not
+// start, one past the loop's counter.
+function ledgerWave(entries, wave) {
+  const waves = new Set(entries.map((e) => e.wave ?? wave));
+  return waves.size === 1 ? [...waves][0] : wave;
+}
+
 function renderLedger(entries, wave) {
-  const head = [`## Wave ${wave}`, '', `| ${LEDGER_COLUMNS.join(' | ')} |`, `| ${LEDGER_COLUMNS.map(() => '---').join(' | ')} |`];
+  const head = [`## Wave ${ledgerWave(entries, wave)}`, '', `| ${LEDGER_COLUMNS.join(' | ')} |`, `| ${LEDGER_COLUMNS.map(() => '---').join(' | ')} |`];
   const rows = entries.map((e) => `| ${[e.wave ?? wave, e.unit, e.stage, e.source, e.kind, e.statement, e.referent, e.disposition].map(ledgerCell).join(' | ')} |`);
   return [...head, ...rows].join('\n') + '\n';
 }
@@ -1341,7 +1348,7 @@ ${RETURN_FIELDS}`;
 function mergePrompt(ctx, plan, wave, merges) {
   return `${header(ctx, plan)}
 
-You are in the main checkout on ${ctx.integrationBranch}. Merge each unit branch below into ${ctx.integrationBranch}, in exactly this order, with a merge commit each (\`git merge --no-ff\`). For each unit report clean, resolved, unresolvable, or regressed, with the files involved and the merge SHA. Resolve a conflict only when the resolution is mechanical — both sides' changes apply without judgement about intent; otherwise abort that merge (\`git merge --abort\`), report it unresolvable, and continue with the next unit. Run the project's gates after each merge — the test suite and whatever else the project's own instructions name as a gate (linters, type checks). If a gate fails after a clean or resolved merge, undo that merge (\`git reset --hard\` to the pre-merge tip of ${ctx.integrationBranch}), report the unit as regressed with the failing test files, and continue with the next unit.
+You are in the main checkout on ${ctx.integrationBranch}. Merge each unit branch below into ${ctx.integrationBranch}, in exactly this order, with a merge commit each (\`git merge --no-ff -m "merge(${ctx.name}): <unit id>"\`). For each unit report clean, resolved, unresolvable, or regressed, with the files involved and the merge SHA. Resolve a conflict only when the resolution is mechanical — both sides' changes apply without judgement about intent; otherwise abort that merge (\`git merge --abort\`), report it unresolvable, and continue with the next unit. Run the project's gates after each merge — the test suite and whatever else the project's own instructions name as a gate (linters, type checks). If a gate fails after a clean or resolved merge, undo that merge (\`git reset --hard\` to the pre-merge tip of ${ctx.integrationBranch}), report the unit as regressed with the failing test files, and continue with the next unit.
 
 Then, for every unit merged clean or resolved, record a Plan Maintenance completion entry in ${plan.path} naming its completion report and set \`complete: true\` on that unit in the plan's \`\`\`yaml lsf-plan block; one commit on ${ctx.integrationBranch}; return the new plan SHA. Do not amend anything else in the plan; the re-plan stage does that.
 
@@ -1424,7 +1431,7 @@ function ledgerPrompt(ctx, plan, wave, entries) {
 Append stage. You are in the main checkout on ${ctx.integrationBranch}. Append the Markdown between the markers below to the end of ${ctx.ledgerPath}, every character unchanged, preceded by one blank line. If the file does not exist, create it with this heading first:
 
 ${ledgerHeading(ctx.name)}
-Do not reword, reorder, merge, or drop rows, and never edit earlier content. Commit on ${ctx.integrationBranch} with the message "docs(${ctx.name}): append wave ${wave} signal ledger entries" and return the path and SHA.
+Do not reword, reorder, merge, or drop rows, and never edit earlier content. Commit on ${ctx.integrationBranch} with the message "docs(${ctx.name}): append wave ${ledgerWave(entries, wave)} signal ledger entries" and return the path and SHA.
 
 <<<LEDGER
 ${renderLedger(entries, wave)}LEDGER>>>

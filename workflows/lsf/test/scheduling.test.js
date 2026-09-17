@@ -4,7 +4,7 @@ import {
   findCycle, pathsOverlap, overlappingPairs, validatePlan,
   readySet, blockedUnits, mergeOrder, wavePlan,
   nullReturnSignal, signalsFromReadings, signalsFromImplement, signalsFromFindings, signalsFromGate, invalidationComplete,
-  signalsFromMerge, distressSignals, evaluateWave, digest, renderLedger, ledgerHeading, REPLAN_ITEM_KINDS,
+  signalsFromMerge, distressSignals, evaluateWave, digest, renderLedger, ledgerWave, ledgerHeading, REPLAN_ITEM_KINDS,
 } from '../scheduling.js';
 import { STOP_KINDS, RECORD_KINDS } from '../schema.js';
 import { signal } from '../schema.js';
@@ -260,6 +260,15 @@ test('renderLedger is one table under a wave heading, one line per row, pipes an
   assert.equal(lines[5], '| 2 | — | merge | structural | merge-regression | s | B | stopped |');
   assert.equal(lines.length, 7); // trailing newline
   assert.match(ledgerHeading('f'), /^# Signal ledger: f\n/);
+});
+
+test('renderLedger heads a schedule stop with the wave its rows name, and a mixed append with the loop wave', () => {
+  const stop = { wave: 3, unit: 'C', stage: 'schedule', source: 'structural', kind: 'no-ready-unit', statement: 's', referent: 'C', disposition: 'stopped' };
+  assert.equal(renderLedger([stop], 2).split('\n')[0], '## Wave 3');
+  assert.equal(ledgerWave([stop], 2), 3);
+  const rec = { wave: 2, unit: 'B', stage: 'plan', source: 'reported', kind: 'reading', statement: 'r', referent: 'x', disposition: 'recorded' };
+  assert.equal(renderLedger([rec, stop], 2).split('\n')[0], '## Wave 2');
+  assert.equal(renderLedger([], 2).split('\n')[0], '## Wave 2');
 });
 
 test('digest counts by kind, source and disposition, and lists what needs attention', () => {
