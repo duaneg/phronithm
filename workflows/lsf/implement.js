@@ -98,6 +98,7 @@ const arr = (items) => ({ type: 'array', items });
 const COMMIT_FIELDS = { branch: str, sha: str };
 
 const DECISION_LOG_SCHEMA = stageSchema(obj({ path: str, sha: str }));
+const CLEANUP_SCHEMA = stageSchema(obj({ removed: { type: 'integer' }, kept: strings }));
 
 const COPY_SCHEMA = stageSchema(obj({
   planBlock: { ...str, description: 'The plan document\'s ```yaml lsf-plan fenced block, verbatim, fences included' },
@@ -441,6 +442,13 @@ function obligationsPrompt(ctx, plan) {
   return `${header(ctx, plan)}
 
 Every work unit and meta-task in ${plan.path} is complete. For each standing obligation in the plan's Standing Obligations section, determine from the completion reports and ${ctx.integrationBranch} whether it is discharged, and cite the evidence. Do not modify anything.
+${RETURN_FIELDS}`;
+}
+
+function cleanupPrompt(ctx, plan, wave) {
+  return `${header(ctx, plan)}
+
+Cleanup stage, wave ${wave}. You are in the main checkout on ${ctx.integrationBranch}. Remove the worktrees this workflow's finished agents left behind. For each entry of \`git worktree list --porcelain\` whose path is under \`.claude/worktrees/\` and whose branch is named \`worktree-wf_*\` and is fully merged into ${ctx.integrationBranch} (it appears in \`git branch --merged ${ctx.integrationBranch}\`): run \`git worktree remove --force <path>\`, then \`git branch -d <branch>\`. Never touch the main checkout, a worktree on any other branch, or a branch not fully merged — those hold work still in flight. Finish with \`git worktree prune\`. Commit nothing. Return \`removed\` (the count of worktrees removed) and \`kept\` (the \`worktree-wf_*\` branches left in place).
 ${RETURN_FIELDS}`;
 }
 
@@ -854,10 +862,16 @@ async function run(runtime) {
     }
 
     // The wave gate: one question, does the wave invalidate the architecture.
+    // Merged worktrees are removed alongside it; the gate reads the main
+    // checkout only. Cleanup never signals: a failure leaves residue, not risk.
     if (merged.length) {
-      const g = await agent(gatePrompt(ctx, plan, wave, merged), { label: `review-gate:w${wave}`, ...tier(ctx, 'gate'), phase: 'Gate', schema: GATE_SCHEMA });
+      const [g, c] = await parallel([
+        () => agent(gatePrompt(ctx, plan, wave, merged), { label: `review-gate:w${wave}`, ...tier(ctx, 'gate'), phase: 'Gate', schema: GATE_SCHEMA }),
+        () => agent(cleanupPrompt(ctx, plan, wave), { label: `cleanup:w${wave}`, ...tier(ctx, 'mechanical'), phase: 'Merge', schema: CLEANUP_SCHEMA }),
+      ]);
       if (!g) waveSignals.push(nullReturnSignal({ stage: 'review-gate', wave }));
       else waveSignals.push(...signalsFromGate(g.result, { wave }));
+      log(`wave ${wave}: ${c ? `removed ${c.result.removed} merged worktree(s), kept ${c.result.kept.length}` : 'worktree cleanup returned null'}`);
     }
 
     const evalA = evaluateWave(waveSignals);

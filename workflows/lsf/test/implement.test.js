@@ -54,6 +54,7 @@ function defaults(plan) {
     'lens-review': () => NO_FINDINGS,
     'fix-code': (p, o, u) => ret({ branch: `fixed-code-${u}`, sha: 'f', applied: [], notApplied: [], planText: '' }),
     'completion-report': (p, o, u) => ret({ branch: `done-${u}`, sha: 'c', path: `docs/plans/${u}-completion.md` }),
+    cleanup: () => ret({ removed: 0, kept: [] }),
     merge: (p, o, u, state) => ret({
       integrationBranch: 'integration',
       merges: state.mergeOrder.map((id) => ({ unit: id, status: 'clean', files: [], sha: 'm' })),
@@ -557,7 +558,7 @@ test('role tiers reach every call: critique opus/low, gate opus/medium, planning
     if (/^(critique-plan|critique-code|lens-review|critique-design)$/.test(role)) assert.deepEqual([c.opts.model, c.opts.effort], ['opus', 'low'], c.label);
     else if (role === 'review-gate') assert.deepEqual([c.opts.model, c.opts.effort], ['opus', 'medium'], c.label);
     else if (/^(plan|replan|termination)$/.test(role)) assert.deepEqual([c.opts.model, c.opts.effort], ['opus', 'high'], c.label);
-    else if (/^(load|ledger|decision-log)$/.test(role)) assert.deepEqual([c.opts.model, c.opts.effort], ['haiku', 'low'], c.label);
+    else if (/^(load|ledger|decision-log|cleanup)$/.test(role)) assert.deepEqual([c.opts.model, c.opts.effort], ['haiku', 'low'], c.label);
     else assert.deepEqual([c.opts.model, c.opts.effort], ['opus', 'low'], c.label);
   }
   for (const r of ['critique-code', 'plan', 'implement', 'merge', 'review-gate', 'replan', 'load', 'obligations']) assert.ok(seen.has(r), r);

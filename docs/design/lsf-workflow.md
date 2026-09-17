@@ -32,7 +32,13 @@ Documented behaviour this design relies on:
   runs in `.claude/worktrees/<runId>-<agentIndex>` on branch
   `worktree-<runId>-<agentIndex>`, based on HEAD at spawn; its commits survive
   the run. The branch is subject to the periodic worktree sweep, so the merge
-  stage runs in the same workflow, never a later one.
+  stage runs in the same workflow, never a later one. The sweep removes only
+  worktrees with no changes; every agent that committed leaves its worktree
+  and branch behind (one run on cartomancer-v2 left 30, at 5 GB across nine
+  runs), so a mechanical cleanup stage after each merge removes the
+  `.claude/worktrees/` entries whose `worktree-wf_*` branch is fully merged
+  into the integration branch. Unmerged branches stay: they are a stopped
+  unit's work in flight.
 - **On resume, a re-run agent reuses its worktree with prior state intact**
   (same probe). An implement stage must begin by resetting its worktree to the
   integration branch, or a re-plan-triggered re-run inherits the superseded
@@ -210,6 +216,10 @@ STOP signal, as is a clean merge after which the project's gates fail (the
 stage undoes it and reports the unit regressed). Merge order is a function of
 the plan, so a re-plan can change the order of later waves; the merge stage
 never chooses.
+
+A cleanup agent on the mechanical tier runs beside the wave gate and removes
+the worktrees whose branches merged. It never signals; a failure leaves
+residue, not risk.
 
 **A wave stop still re-plans over whatever merged.** A relaunch re-plans
 over the requester's decisions alone, so the wave's re-plan is the only pass

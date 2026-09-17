@@ -19,7 +19,7 @@ const META = `export const meta = {
   phases: [
     { title: 'Load', detail: 'decision log, plan graph, validation' },
     { title: 'Units', detail: 'per unit: plan, critique, implement, review, completion report' },
-    { title: 'Merge', detail: 'unit branches into the integration branch, plan order' },
+    { title: 'Merge', detail: 'unit branches into the integration branch, plan order; merged worktrees removed' },
     { title: 'Gate', detail: 'does the wave invalidate the architecture document' },
     { title: 'Re-plan', detail: 'breakdown re-plan mode over the wave\\'s completion reports' },
     { title: 'Ledger', detail: 'signal ledger scribe' },
