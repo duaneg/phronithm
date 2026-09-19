@@ -74,7 +74,8 @@ const GATE_KINDS = Object.freeze(['environment', 'organisational', 'release', 'd
 const UNIT_TYPES = Object.freeze(['foundation', 'feature', 'integration', 'design', 'refactor', 'bug-fix', 'polish', 'meta']);
 
 // Re-plan amendment kinds, as breakdown's re-plan mode names them.
-const AMENDMENT_KINDS = Object.freeze(['deferral', 'scope-reassignment', 'new-edge', 'done-condition', 'execution-order', 'unit-added']);
+// `gate-repin` is the workflow's own: a decision re-pins an environment gate.
+const AMENDMENT_KINDS = Object.freeze(['deferral', 'scope-reassignment', 'new-edge', 'done-condition', 'execution-order', 'unit-added', 'gate-repin']);
 
 // The one field every agent() in the three workflows returns beside `result`.
 const STAGE_COMMON_PROPERTIES = Object.freeze({
@@ -1035,6 +1036,10 @@ function digest(ledger) {
 //   config              overrides for scheduling DEFAULT_CONFIG
 //   maxWaves            default 20
 //   maxUnitsPerWave     cap on units started per wave, in execution order; default unbounded
+//   unscribed           ledger rows a previous run returned under `unscribed`,
+//                       passed back unchanged; a scribe appends them before
+//                       anything else runs. They are not re-evaluated and
+//                       do not count in this run's digest
 //   seed                { "<agent label>": { result, commits } }: a stage return
 //                       to use in place of spawning that agent — e.g. a unit
 //                       plan salvaged from a run whose journal is gone (label
@@ -1057,7 +1062,8 @@ function digest(ledger) {
 //   digest              counts and attention items over the whole ledger
 //   planSha, integrationBranch, waves
 //   ledgerPath          the signal ledger, where every scribed row lives
-//   unscribed           ledger rows no scribe committed (a null scribe return)
+//   unscribed           ledger rows no scribe committed (a null scribe return),
+//                       including carried rows the scribe failed again on
 
 const WORKFLOW = 'lsf-implement';
 const GATE_MAX_ROUNDS = 4; // critique gate hard cap
@@ -1735,6 +1741,14 @@ async function run(runtime) {
   let plan = { path: ctx.planPath, sha: ctx.planSha, units: [], executionOrder: [] };
   let wave = 0;
 
+  // Rows a previous run returned unscribed. They keep their own wave and
+  // disposition, are scribed first, and stay out of this run's digest.
+  const carried = new Set((Array.isArray(args.unscribed) ? args.unscribed : []).map((row) => {
+    const s = signal(row);
+    ledger.push(s);
+    return s;
+  }));
+
   // Ledger rows a scribe has committed. A null scribe leaves its rows for
   // the next append and, at return, for `unscribed`.
   const scribed = new Set();
@@ -1742,17 +1756,21 @@ async function run(runtime) {
   // ledger stays in the signals file. `escalation` is undefined unless
   // stopped, and JSON drops it.
   const outcome = (status, { escalation: esc, ...extra } = {}) => ({
-    status, workflow: WORKFLOW, escalation: esc, digest: digest(ledger),
+    status, workflow: WORKFLOW, escalation: esc, digest: digest(ledger.filter((e) => !carried.has(e))),
     planSha: plan.sha, integrationBranch: ctx.integrationBranch, waves: wave,
     ledgerPath: ctx.ledgerPath, unscribed: ledger.filter((e) => !scribed.has(e)), ...extra,
   });
-  const scribeLedger = async () => {
+  const scribeLedger = async (label = `ledger:w${wave}`) => {
     const fresh = ledger.filter((e) => !scribed.has(e));
     if (!fresh.length) return;
-    const r = await agent(ledgerPrompt(ctx, plan, wave, fresh), { label: `ledger:w${wave}`, ...tier(ctx, 'mechanical'), phase: 'Ledger', schema: SCRIBE_SCHEMA });
-    if (!r) { log(`ledger scribe returned null for wave ${wave}; ${fresh.length} row(s) stay unscribed`); return; }
+    const r = await agent(ledgerPrompt(ctx, plan, wave, fresh), { label, ...tier(ctx, 'mechanical'), phase: 'Ledger', schema: SCRIBE_SCHEMA });
+    if (!r) { log(`ledger scribe returned null (${label}); ${fresh.length} row(s) stay unscribed`); return; }
     for (const e of fresh) scribed.add(e);
   };
+  if (carried.size) {
+    log(`${carried.size} ledger row(s) carried from a previous run`);
+    await scribeLedger('ledger:carried');
+  }
   // Every stop path: stamp, ledger, scribe, escalate. `stops` may already be
   // in the ledger (from evaluateWave); the rest are appended here. Rows
   // not yet scribed ride in the same append, so a stop costs one scribe.

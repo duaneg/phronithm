@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  AMENDMENT_KINDS,
   stageSchema, signal, escalation, STOP_KINDS, RECORD_KINDS, STAGE_COMMON_REQUIRED, INVALIDATION_SCHEMA, INVALIDATION_FIELDS,
 } from '../schema.js';
 
@@ -43,4 +44,8 @@ test('escalation omits plan_sha and wave when unset', () => {
   assert.equal(f.wave, 2);
   assert.ok(!('pre_replan_sha' in f));
   assert.equal(escalation({ workflow: 'w', stage: 'replan', signals: [], planSha: 'b', preReplanSha: 'a' }).pre_replan_sha, 'a');
+});
+
+test('gate-repin is an amendment kind', () => {
+  assert.ok(AMENDMENT_KINDS.includes('gate-repin'));
 });

@@ -798,3 +798,19 @@ test('a seeded stage return stands in for the agent, matched by label', async ()
   assert.match(calls.find((c) => c.label === 'implement:A').prompt, /salvaged-A/);
   assert.ok(logs.some((m) => m.startsWith('plan:A: seeded')));
 });
+
+test('args.unscribed rows are scribed first, keep their wave, and stay out of the digest', async () => {
+  const carried = [{ kind: 'deviation', source: 'reported', stage: 'implement', unit: 'Z', wave: 3, statement: 'dev-Z', referent: 'src/Z', raisedBy: 'implement', disposition: 'recorded' }];
+  const { rt, calls, labels } = runtime(twoWaves(), {}, { unscribed: carried });
+  const out = await run(rt);
+  assert.equal(out.status, 'complete');
+  assert.equal(labels()[0], 'ledger:carried');
+  assert.match(calls[0].prompt, /## Wave 3[^]*dev-Z/);
+  assert.deepEqual(out.unscribed, []);
+  assert.equal(out.digest.byKind.deviation, undefined);
+
+  const again = await run(runtime(twoWaves(), { ledger: () => null }, { unscribed: carried }).rt);
+  assert.deepEqual(again.unscribed.map((s) => s.statement), ['dev-Z']);
+
+  await assert.rejects(run(runtime(twoWaves(), {}, { unscribed: [{ statement: 'no kind' }] }).rt), /kind is required/);
+});
