@@ -13,7 +13,7 @@ Design: [lsf-workflow](${CLAUDE_PLUGIN_ROOT}/docs/design/lsf-workflow.md), secti
 
 ### Requires
 
-- **name**: the feature name; default paths derive from it (`docs/plans/<name>-breakdown.md`, `-decisions.md`, `-signals.md`).
+- **name**: the feature name; default paths derive from it (`docs/plans/<name>-breakdown.md`, `-decisions.md`, `-archive.md`, and `-signals/<plan SHA>.md`, one ledger file per launch).
 - **architecture-document**: path, committed on the integration branch.
 - **integration-branch**: the branch units merge into. The main checkout must be on it.
 - **request-record** (optional): the Phase 1 request record, where the project committed one; passed as `requestRecord`. Without it, the relaunch table's request-record clause does not apply.
@@ -48,6 +48,7 @@ Then confirm the workflow's preconditions from the shell, not from memory:
 2. The plan at the SHA to launch from has a `yaml lsf-plan` block with a closing fence: `git show <sha>:<plan-path> | grep -n 'lsf-plan'`, then check the fence after it. A plan drafted before the block existed needs `phronithm:breakdown` re-plan mode run once to add it, committed, before launch.
 3. The decision log, if it exists, has a `yaml lsf-decisions` block with a closing fence (`tail -n 3`), and its SHA is `git rev-list -1 <branch> -- <path>`.
 4. `git worktree list` shows no stale `.claude/worktrees/wf_*` entries with unmerged work from a run the requester has abandoned. Leave entries from a run being resumed.
+5. `wc -c CLAUDE.md` in the target project. This step never blocks a launch; it is a report. The harness injects the file into every agent the workflow spawns, so its size is part of every agent's floor before the first read: roughly 2.5k tokens per 10 KB (cartomancer-v2, 2026-09-19: the file grew from 92 KB to 141 KB and moved the floor by about 12k tokens). Report the size and the tokens it implies per agent; above 40 KB — about 10k tokens on every agent — say so plainly. Do not trim it — that is the project's call, outside this skill.
 
 Which script to launch: `name: 'phronithm:lsf-implement'` when the plugin is installed and the session started after the last change to `workflows/lsf-implement.js`; otherwise `scriptPath: ${CLAUDE_PLUGIN_ROOT}/workflows/lsf-implement.js`, absolute, since the session's cwd is the target project. The plugin's copy is cached at session start and does not pick up rebuilds mid-session.
 
@@ -86,8 +87,8 @@ On every run, in this order:
 
 1. **Status**, and on a stop the stage and wave it stopped at.
 2. **`escalation.decision_needed`**, verbatim, one item per question. Each carries a `d<n>` id, the question (the signal's kind, source, stage, unit, and statement) and what it affects. An `architecture-invalidated` question includes the gate's proposed amendment; present the five fields as the gate returned them.
-3. **The digest**: counts by kind, source, and disposition; then `attention` in full — architecture notes and amendments, unfixed Significant findings per unit, distressed units, and every direct edit with its path. Direct edits passed no gate; name each so the requester can review it.
-4. **`unscribed`**: ledger rows no scribe committed. If non-empty, say so and include the rows; until the next launch carries them, they exist nowhere else.
+3. **The digest**: counts by kind, source, and disposition; then `attention` in full — architecture notes and amendments, unfixed Significant and Minor finding counts per unit, distressed units, and every direct edit with its path. Direct edits passed no gate; name each so the requester can review it.
+4. **`unscribed`**: ledger rows no scribe committed. If non-empty, say so and include the rows; until the next launch carries them, they exist nowhere else. Name `ledgerPath` too: each launch writes its own file under `docs/plans/<name>-signals/`, so carried rows land in the next launch's file, not the one they were raised in.
 5. On `complete`, the digest's note: silence is not evidence.
 
 Do not summarise a stop as a clean close, and do not rank or filter the agenda. The requester adjudicates; the session presents.
@@ -122,7 +123,9 @@ decisionLogSha: <current SHA, when the log exists>
 unscribed: <the previous return's unscribed array, verbatim, when non-empty>
 ```
 
-`escalation.plan_sha` is the plan to relaunch from. After a stop at a re-plan, or a wave stop with units merged, it is the re-plan's own commit and already carries the amendments absorbed; `pre_replan_sha` is the plan the wave ran against and is not relaunched. The workflow commits the decisions to the log, runs a re-plan over them, and loads the SHA that re-plan returns; a decision the re-plan cannot carry out stops the run again before any unit starts, and that stop goes back to the requester.
+The relaunch starts a new ledger file, named by its `planSha`; the previous launch's file stays as it was returned.
+
+`escalation.plan_sha` is the plan to relaunch from. After a stop at a re-plan, or a wave stop with units merged and an item for the re-plan to absorb, it is the re-plan's own commit and already carries the amendments absorbed; `pre_replan_sha` is then the plan as it stood after the wave's merge — completions marked, entries archived — and before the re-plan's amendments; it is not relaunched. A wave stop with nothing to absorb skips the re-plan: `plan_sha` is the merge's commit when something merged, or the plan unchanged when nothing did, with no `pre_replan_sha`. The workflow commits the decisions to the log, runs a re-plan over them, and loads the SHA that re-plan returns; a decision the re-plan cannot carry out stops the run again before any unit starts, and that stop goes back to the requester.
 
 An `environment-gate-drift` stop is not answered by a decision: either the environment is restored to the pin the plan records, and the relaunch carries no decision, or the requester re-pins the gate, and the decision says so for the re-plan to amend the plan's gate entry (amendment kind `gate-repin`).
 

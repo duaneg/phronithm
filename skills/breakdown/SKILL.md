@@ -26,10 +26,8 @@ Serves human teams planning work and agent teams needing structured task assignm
 - **decomposition-plan**: Document at `docs/plans/<feature-name>-breakdown.md` (or project equivalent). Contains:
   - Work units with classification metadata and done conditions
   - Graph block: the units, dependencies, scope, gates, and execution order as one machine-readable YAML block (format: [plan graph](${CLAUDE_PLUGIN_ROOT}/docs/plan-graph.md)), kept in step with the entries
-  - Dependency graph (multiple dependency types, Mermaid format preferred)
   - Execution order with rationale
-  - Parallel streams for 2-worker and N-worker scenarios
-  - Critical path analysis
+  - Dependency graph (Mermaid format preferred), parallel streams for 2-worker and N-worker scenarios, and critical path analysis — omitted from a plan drafted for `phronithm:large-scale-feature`, whose Phase 3 workflow computes them from the Graph block
   - Meta-tasks (test harness, debug tooling, integration testing)
   - Standing obligations spanning units
   - Risk registry
@@ -230,7 +228,7 @@ Build the execution plan from the analysis.
    - All overlapping-scope parallel streams have a coordination protocol.
    - The `## Graph` block agrees with the entries: every unit, its type, every Depends-on unit, every Scope path, every gate with its kind and pin, and the execution order — one id per unit, flattened from the Execution Order steps in written order. Check mechanically (a short script over the block and the entry fields), not by eye.
 
-5. **Draft the decomposition plan document**. Structure:
+5. **Draft the decomposition plan document**. Structure below. A plan drafted from an architecture document for `phronithm:large-scale-feature` is driven by its Phase 3 workflow (`phronithm:lsf-implement`): omit Dependency Graph, Parallel Streams, and Critical Path from it, since the workflow computes readiness and the wave plan from the `## Graph` block and the re-plan step does not maintain the prose. The analysis in steps 2–3 still runs: the Summary and the commit message keep citing the critical path length, and the overlapping-scope check in step 4 is satisfied by the edges and `file::symbol` Scope entries the block carries rather than by a written coordination protocol. Every other plan keeps the three sections.
 
    ```
    # Breakdown: <feature name>
@@ -291,13 +289,25 @@ Build the execution plan from the analysis.
     here>
 
    ## Risk Registry
-   <residual per-unit and cross-cutting risks — gates recorded as edges do not
-    repeat here>
+   <residual per-unit and cross-cutting risks, one line each: `R<n> <unit or
+    cross-cutting> — <one clause>`; gates recorded as edges do not repeat
+    here. A risk closed by a completion or an amendment moves to the archive
+    at the next re-plan.>
 
    ## Plan Maintenance
-   <amendment record: date, completing unit, deviations, downstream edits. On
-    each unit completion, run the re-plan step before starting its dependants.>
+   <amendment record in a fixed compact form, one entry per event, no restated
+    statements — the completion reports and the signal ledger hold those:
+    `### <date> — <unit> complete` with the one line
+    `Report: <path> @ <sha>. Ledger: <file> wave <n>.`;
+    `### <date> — re-plan wave <n> (<item ids>)` or
+    `### <date> — decisions <ids>`, each followed by one line per amendment
+    `<kind> <unit> — <one clause>`. On each unit completion, run the re-plan
+    step before starting its dependants.>
    ```
+
+   Amendment kinds: `deferral`, `scope-reassignment`, `new-edge`, `done-condition`, `execution-order`, `unit-added`, `gate-repin` (a decision re-pins an environment gate). The workflow reads the same vocabulary.
+
+   A plan the workflow drives has a companion archive, `docs/plans/<name>-archive.md`, append-only: completed unit entries under `## Work Units`, closed risks under `## Closed risks`. Nothing in the plan is struck through or annotated as done.
 
 6. **Present to the requester** for review if running interactively. The plan is the primary output — work items derive from it, not the other way around.
 
@@ -312,6 +322,12 @@ When a unit completes, diff its recorded deviations, deferrals, and discoveries 
 Execution signals are a trigger in their own right. A completion report showing distress — context near exhaustion, design decisions taken mid-implementation, a heavy deviation or deferral count — triggers this step even when no deviation touches downstream scope: re-run the quality check over the remaining units, examining the [size budget](#unit-size-budget) item first for units that resemble the completed one on its load factors, and record the outcome in Plan Maintenance.
 
 Invoked with an existing plan and completion reports (re-plan mode), this step is the whole workflow: apply the diff, re-run the quality check, re-present.
+
+Under the `lsf-implement` workflow the plan's size is bounded by moving what is finished out of it:
+
+- **Completed entries are archived at merge.** The merge stage moves a completed unit's `### <id>` entry verbatim to `docs/plans/<name>-archive.md` and leaves the one-line stub `### <id> — complete at <merge SHA>; entry archived to <archive>; report <path>`. The unit's `## Graph` block entry is untouched apart from `complete: true`. A re-plan never restores or rewrites a stub.
+- **Closed risks are archived at re-plan.** A Risk Registry entry retired by this pass's completions or amendments moves to the archive under `## Closed risks`, cited by id and one clause.
+- **Plan Maintenance takes the compact form** in the template above: heading, one line per amendment, nothing restated.
 
 ## Commit discipline
 

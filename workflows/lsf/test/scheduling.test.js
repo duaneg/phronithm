@@ -140,15 +140,21 @@ test('wavePlan partitions the diamond into three waves and stops at a gate', () 
   assert.deepEqual(wavePlan(p), [['A'], ['B', 'C']]);
 });
 
-test('signalsFromReadings records each reading against its clause', () => {
-  const sigs = signalsFromReadings([{ clause: 'Scope: tests/test_core_geom_svgpath.py', reading: 'tests/test_svgpath_document.py, the file that owns _classify' }], { unit: 'B', wave: 1 });
+test('signalsFromReadings is one count row per unit pointing at the plan\'s Readings section', () => {
+  const readings = [
+    { clause: 'Scope: tests/test_core_geom_svgpath.py', reading: 'tests/test_svgpath_document.py, the file that owns _classify' },
+    { clause: 'Done: the export path rotates', reading: 'rotates about the origin' },
+  ];
+  const sigs = signalsFromReadings(readings, { unit: 'B', wave: 1, path: 'docs/plans/B-plan.md' });
   assert.equal(sigs.length, 1);
   assert.equal(sigs[0].kind, 'reading');
   assert.equal(sigs[0].source, 'reported');
   assert.equal(sigs[0].stage, 'plan');
-  assert.equal(sigs[0].referent, 'Scope: tests/test_core_geom_svgpath.py');
-  assert.match(sigs[0].statement, /read as: tests\/test_svgpath_document\.py/);
-  assert.deepEqual(signalsFromReadings(undefined, { unit: 'B', wave: 1 }), []);
+  assert.equal(sigs[0].referent, 'docs/plans/B-plan.md');
+  assert.equal(sigs[0].statement, '2 reading(s); see docs/plans/B-plan.md Readings');
+  assert.doesNotMatch(sigs[0].statement, /_classify/, 'no reading text in the row');
+  assert.deepEqual(signalsFromReadings(undefined, { unit: 'B', wave: 1, path: 'p' }), []);
+  assert.deepEqual(signalsFromReadings([], { unit: 'B', wave: 1, path: 'p' }), []);
 });
 
 test('signalsFromImplement records deviations, writes outside Scope, deferrals, and discoveries', () => {
@@ -166,14 +172,22 @@ test('signalsFromImplement records deviations, writes outside Scope, deferrals, 
   assert.deepEqual(signalsFromImplement({}, { unit: 'B', wave: 2 }), []);
 });
 
-test('signalsFromFindings records Significant and Minor findings and skips Critical', () => {
+test('signalsFromFindings: Significant one row each, Minor one count row with up to five locations, Critical skipped', () => {
+  const minor = (i) => ({ severity: 'Minor', statement: `naming ${i}`, location: `a.py:${i}`, stage: 'lens-review', round: 1 });
   const sigs = signalsFromFindings([
-    { severity: 'Critical', statement: 'wrong', location: 'a.py:1' },
-    { severity: 'Significant', statement: 'fragile', location: 'a.py:2' },
-    { severity: 'Minor', statement: 'naming', location: 'a.py:3' },
-  ], { stage: 'critique-code', unit: 'B', wave: 1, round: 2 });
-  assert.deepEqual(sigs.map((s) => [s.kind, s.source, s.referent]), [['finding', 'gate', 'a.py:2'], ['finding', 'gate', 'a.py:3']]);
-  assert.match(sigs[0].statement, /^Significant \(round 2\): fragile/);
+    { severity: 'Critical', statement: 'wrong', location: 'a.py:1', stage: 'critique-code', round: 1 },
+    { severity: 'Significant', statement: 'fragile', location: 'a.py:2', stage: 'critique-code', round: 2 },
+    ...[10, 11, 12, 13, 14, 15, 16].map(minor),
+  ], { stage: 'review', unit: 'B', wave: 1 });
+  assert.deepEqual(sigs.map((s) => [s.kind, s.source, s.stage, s.referent]), [
+    ['finding', 'gate', 'critique-code', 'a.py:2'],
+    ['finding', 'gate', 'review', 'a.py:10, a.py:11, a.py:12, a.py:13, a.py:14'],
+  ]);
+  assert.equal(sigs[0].statement, 'Significant (round 2): fragile');
+  assert.equal(sigs[1].statement, '7 Minor finding(s)');
+  assert.doesNotMatch(sigs[1].statement, /naming/, 'no Minor text survives');
+  assert.deepEqual(signalsFromFindings([{ severity: 'Significant', statement: 's', location: 'l' }], { stage: 'critique-plan', unit: 'B', wave: 1 }).map((s) => s.stage), ['critique-plan'], 'a finding without a stage takes the gate\'s');
+  assert.deepEqual(signalsFromFindings([], { stage: 'review', unit: 'B', wave: 1 }), []);
 });
 
 const inv = (over = {}) => ({ section: '§4.8', decision: 'two-tone families are two-part groups', premise: 'nested art classifies to a group', evidence: 'svgpath.py:120; brazier parses to a bare Glyph', amendment: 'nested art must be authored as siblings, or _classify keeps ids on holes', ...over });
@@ -286,7 +300,7 @@ test('digest counts by kind, source and disposition, and lists what needs attent
   const ledger = [
     rec('reading', { unit: 'A', wave: 1, stage: 'plan' }),
     signal({ kind: 'finding', source: 'gate', stage: 'critique-code', unit: 'A', wave: 1, statement: 'Significant: x', disposition: 'recorded' }),
-    signal({ kind: 'finding', source: 'gate', stage: 'lens-review', unit: 'A', wave: 1, statement: 'Minor: y', disposition: 'recorded' }),
+    signal({ kind: 'finding', source: 'gate', stage: 'review', unit: 'A', wave: 1, statement: '3 Minor finding(s)', referent: 'a.py:1, a.py:2, a.py:3', disposition: 'recorded' }),
     signal({ kind: 'finding', source: 'gate', stage: 'critique-code', unit: 'B', wave: 2, statement: 'Significant: z', disposition: 'recorded' }),
     signal({ kind: 'architecture-note', source: 'gate', stage: 'review-gate', wave: 2, statement: 'N3 has no owner', referent: '§6', disposition: 'recorded' }),
     rec('execution-distress', { unit: 'B', wave: 2 }),
@@ -302,6 +316,7 @@ test('digest counts by kind, source and disposition, and lists what needs attent
   assert.deepEqual(d.attention.architectureNotes, ['N3 has no owner']);
   assert.deepEqual(d.attention.architectureAmendments, []);
   assert.deepEqual(d.attention.unfixedSignificant, { A: 1, B: 1 });
+  assert.deepEqual(d.attention.minorFindings, { A: 3 });
   assert.deepEqual(d.attention.distressedUnits, ['B']);
   assert.deepEqual(d.attention.directEdits, ['docs/debt.md — note the figure']);
   assert.match(d.note, /not evidence/);

@@ -31,7 +31,12 @@
 //                       loading; `clears` lists `unit/gate` names. A re-plan
 //                       stage then applies the decisions to the plan, and the
 //                       run loads the SHA it returns
-//   ledgerPath          default docs/plans/<name>-signals.md
+//   ledgerPath          default docs/plans/<name>-signals/<planSha>.md: one
+//                       ledger file per launch, named by the plan SHA the
+//                       launch started from
+//   archivePath         default docs/plans/<name>-archive.md; where the merge
+//                       moves a completed unit's entry and the re-plan moves
+//                       a closed risk
 //   config              overrides for scheduling DEFAULT_CONFIG
 //   maxWaves            default 20
 //   maxUnitsPerWave     cap on units started per wave, in execution order; default unbounded
@@ -77,6 +82,10 @@ import {
 const WORKFLOW = 'lsf-implement';
 const GATE_MAX_ROUNDS = 4; // critique gate hard cap
 const DEFAULT_MAX_WAVES = 20;
+// Size budgets the prompts state for the per-unit documents every later
+// stage reads whole.
+const UNIT_PLAN_BUDGET_KB = 12;
+const COMPLETION_REPORT_BUDGET_KB = 8;
 // Model and effort per role.
 const DEFAULT_TIERS = Object.freeze({
   critique: { model: 'opus', effort: 'low' },
@@ -130,7 +139,6 @@ const COPY_SCHEMA = stageSchema(obj({
 const UNIT_PLAN_SCHEMA = stageSchema(obj({
   ...COMMIT_FIELDS,
   path: str,
-  planText: { ...str, description: 'The implementation plan verbatim' },
   readings: arr(obj({
     clause: { ...str, description: 'The clause of the unit entry or architecture document that admitted more than one reading, or named something that does not exist as named' },
     reading: { ...str, description: 'The reading the plan takes' },
@@ -153,7 +161,6 @@ const FIX_SCHEMA = stageSchema(obj({
   ...COMMIT_FIELDS,
   applied: arr(obj({ finding: str, fix: str })),
   notApplied: arr(obj({ finding: str, reason: str })),
-  planText: { ...str, description: 'The amended plan verbatim, when the subject is a plan; empty otherwise' },
 }));
 
 const IMPLEMENT_SCHEMA = stageSchema(obj({
@@ -249,9 +256,17 @@ function worktree(base) {
 // list, and a stage that treats it as one reports a defect that is not there.
 const ENTRY_SEMANTICS = `The entry's Scope line declares the files this unit writes that another unit in flight might also write; the scheduler reads it for overlap. It does not limit what the work may edit. A file the work needs to change outside the Scope line is changed, and reported as such where a stage asks for it — never treated as a question. A clause of the entry or of the architecture document that admits more than one reading, or names something that does not exist as named (a file, a test, a function), is read the plainest way consistent with the code; the unit plan records the reading and later stages hold to it.`;
 
+// The unit entry and the obligations naming the unit, by extraction command
+// rather than a read of the whole plan: the plan is large and the stage
+// needs one section of it. The prompt embeds the SHA, so the commands are
+// stable across a wave.
 function unitBlock(plan, unit) {
   return `Work unit: ${unit.id} (type: ${unit.type})
-Unit entry: the \`### ${unit.id}\` section under \`## Work Units\` in ${plan.path} @ ${plan.sha}. Read it first (\`git show ${plan.sha}:${plan.path}\`); it is requirement text, taken verbatim. ${ENTRY_SEMANTICS}`;
+Unit entry: the \`### ${unit.id}\` section under \`## Work Units\` in ${plan.path} @ ${plan.sha}. Read it first, with this command verbatim, and take it as requirement text:
+\`git show ${plan.sha}:${plan.path} | sed -n '/^### ${unit.id}$/,/^##/p'\`
+Standing obligations naming the unit, with this command:
+\`git show ${plan.sha}:${plan.path} | sed -n '/^## Standing Obligations/,/^## /p' | grep -n '${unit.id}'\`
+Do not read the rest of the plan; the entry and the obligations are what this stage needs from it. ${ENTRY_SEMANTICS}`;
 }
 
 function decisionLogPrompt(ctx, decisions) {
@@ -295,29 +310,25 @@ ${worktree(ctx.integrationBranch)}
 
 ${unitBlock(plan, unit)}
 
-Write the implementation plan for this unit. The architecture document is the primary design input; the unit's done condition, adopted verbatim, is a success criterion; each standing obligation naming the unit is a requirement. Do not re-explore what the architecture document and unit entry settle. Keep it within the unit's size budget: about six steps, at most one open design decision. Sections, in order:
+Write the implementation plan for this unit. The architecture document is the primary design input; the unit's done condition, adopted verbatim, is a success criterion; each standing obligation naming the unit is a requirement. Do not re-explore what the architecture document and unit entry settle. Keep it within the unit's size budget: about six steps, at most one open design decision. The plan is read whole by every critique round and by the implement stage; keep it at or under ${UNIT_PLAN_BUDGET_KB} KB. Sections, in order:
 
-1. **Goal** — the unit entry verbatim, and the done condition as the success criterion.
-2. **Context** — the architecture sections relied on, the decomposition plan path and SHA, standing obligations naming the unit.
-3. **Readings** — every clause of the entry or the architecture document that admitted more than one reading, or named something that does not exist as named, with the reading taken and the evidence for it. Return the same list in \`readings\`. Take the reading; do not raise a question and do not stop.
+1. **Goal** — one paragraph: what the unit delivers, and the done condition verbatim as the success criterion. Do not copy the unit entry; cite it.
+2. **Context** — the architecture sections relied on, by heading; the decomposition plan path and SHA; standing obligations naming the unit, by their text.
+3. **Readings** — only the clauses of the entry or the architecture document that admitted more than one reading, or named something that does not exist as named, each with the reading taken and the evidence for it, one entry each. A clause with one plain reading is not listed. Return the same list in \`readings\`. Take the reading; do not raise a question and do not stop.
 4. **Design** — the decisions the plan makes, with the one open design decision at most, and why.
 5. **Steps** — about six, each with what it changes and how it is verified, in an order that keeps the project's gates green after every step.
 6. **Verification** — how the done condition will be evaluated exactly as written, under the readings above.
 
-The plan must be self-contained: a fresh context can implement from it alone. It carries no "Remaining phases" section and mandates no implementation summary document; this workflow's own stages run the plan single-shot, review the result, and write the unit's completion report. Save it to docs/plans/${unit.id}-plan.md and commit. Return branch, SHA, path, the plan text verbatim, and the readings.
+The plan must be self-contained: a fresh context can implement from it alone. It carries no "Remaining phases" section and mandates no implementation summary document; this workflow's own stages run the plan single-shot, review the result, and write the unit's completion report. Save it to docs/plans/${unit.id}-plan.md and commit. Return branch, SHA, path, and the readings; not the plan text.
 ${RETURN_FIELDS}`;
 }
 
-function planCritiquePrompt(ctx, plan, unit, planText, round) {
+function planCritiquePrompt(ctx, plan, unit, branch, round) {
   return `${header(ctx, plan)}
 
 ${unitBlock(plan, unit)}
 
-Critique the implementation plan below with type critique-design. This is round ${round} of the critique gate. Pass bar: no Critical findings. Report Significant and Minor findings; they are recorded, not fixed. The plan's Readings section records how it read clauses that admitted more than one reading; a reading you judge wrong is a finding at the severity its consequence warrants, not a separate remark. Set \`systemic\` when the findings indicate a structural defect that iteration will not resolve. Continue through to completion — do not stop to wait for instruction.
-
---- implementation plan (docs/plans/${unit.id}-plan.md) ---
-${planText}
---- end ---
+Critique the implementation plan at docs/plans/${unit.id}-plan.md on branch ${branch} (\`git show ${branch}:docs/plans/${unit.id}-plan.md\`) with type critique-design. This is round ${round} of the critique gate. Pass bar: no Critical findings. Report Significant and Minor findings; they are recorded, not fixed. The plan's Readings section records how it read clauses that admitted more than one reading; a reading you judge wrong is a finding at the severity its consequence warrants, not a separate remark. Set \`systemic\` when the findings indicate a structural defect that iteration will not resolve. Continue through to completion — do not stop to wait for instruction.
 ${RETURN_FIELDS}`;
 }
 
@@ -331,7 +342,7 @@ Critique gate round ${round} found these Critical findings against the ${subject
 
 ${JSON.stringify(criticals, null, 2)}
 
-Fix each finding that is repairable within the ${subject}, then commit. A finding you decline to fix — because the repair would change the unit entry, the architecture document, or the request record, or because you cannot repair it — goes under \`notApplied\` with the reason. The run stops on a declined finding and the requester decides, so decline only when the repair is genuinely outside the ${subject}. ${subject === 'plan' ? 'Return the amended plan text verbatim in `planText`.' : 'Run the tests after fixing; a fix that breaks a test is not applied. Leave `planText` empty.'}
+Fix each finding that is repairable within the ${subject}, then commit. A finding you decline to fix — because the repair would change the unit entry, the architecture document, or the request record, or because you cannot repair it — goes under \`notApplied\` with the reason. The run stops on a declined finding and the requester decides, so decline only when the repair is genuinely outside the ${subject}. ${subject === 'plan' ? `The plan is docs/plans/${unit.id}-plan.md on this branch; keep it at or under ${UNIT_PLAN_BUDGET_KB} KB.` : 'Run the tests after fixing; a fix that breaks a test is not applied.'}
 ${RETURN_FIELDS}`;
 }
 
@@ -385,7 +396,7 @@ ${worktree(branch)}
 
 ${unitBlock(plan, unit)}
 
-Write the completion report for this unit to docs/plans/${unit.id}-completion.md and commit. Contents, per phronithm:feature's completion-report: done-condition verdict with achieved rigour; deviations from the unit entry's scope and publishes, including files written outside the Scope line; deferrals, each naming the receiving unit; discoveries affecting sibling or downstream units or the architecture document; status of each standing obligation; external-gate re-verification results (state "none" when the entry names no gates); execution signals; review findings left unfixed, with severity; and the footer "Run \`/phronithm:breakdown\` in re-plan mode with the decomposition plan and this report before starting any dependent unit." Assemble it from the implement and review stage returns below; do not re-derive or soften them.
+Write the completion report for this unit to docs/plans/${unit.id}-completion.md and commit. Contents, per phronithm:feature's completion-report: done-condition verdict with achieved rigour; deviations from the unit entry's scope and publishes, including files written outside the Scope line; deferrals, each naming the receiving unit; discoveries affecting sibling or downstream units or the architecture document; status of each standing obligation; external-gate re-verification results (state "none" when the entry names no gates); execution signals; review findings left unfixed — each Significant finding as one line with its location, and the Minor findings as a count with up to five locations, no text; and the footer "Run \`/phronithm:breakdown\` in re-plan mode with the decomposition plan and this report before starting any dependent unit." Assemble it from the implement and review stage returns below; do not re-derive or soften them. The report is read by the wave gate and the re-plan; keep it at or under ${COMPLETION_REPORT_BUDGET_KB} KB.
 
 --- implement stage return ---
 ${JSON.stringify(impl, null, 2)}
@@ -400,7 +411,12 @@ function mergePrompt(ctx, plan, wave, merges) {
 
 You are in the main checkout on ${ctx.integrationBranch}. Merge each unit branch below into ${ctx.integrationBranch}, in exactly this order, with a merge commit each (\`git merge --no-ff -m "merge(${ctx.name}): <unit id>"\`). For each unit report clean, resolved, unresolvable, or regressed, with the files involved and the merge SHA. Resolve a conflict only when the resolution is mechanical — both sides' changes apply without judgement about intent; otherwise abort that merge (\`git merge --abort\`), report it unresolvable, and continue with the next unit. Run the project's gates after each merge — the test suite and whatever else the project's own instructions name as a gate (linters, type checks). If a gate fails after a clean or resolved merge, undo that merge (\`git reset --hard\` to the pre-merge tip of ${ctx.integrationBranch}), report the unit as regressed with the failing test files, and continue with the next unit.
 
-Then, for every unit merged clean or resolved, record a Plan Maintenance completion entry in ${plan.path} naming its completion report and set \`complete: true\` on that unit in the plan's \`\`\`yaml lsf-plan block; one commit on ${ctx.integrationBranch}; return the new plan SHA. Do not amend anything else in the plan; the re-plan stage does that.
+Then, for every unit merged clean or resolved, in one commit on ${ctx.integrationBranch}:
+- Move its \`### <unit id>\` entry under \`## Work Units\` in ${plan.path} to ${ctx.archivePath}, appended verbatim as its own \`### <unit id>\` section under \`## Work Units\`. The archive is append-only; create it with the heading \`# Archive: ${ctx.name}\` and a \`## Work Units\` section if it does not exist.
+- Leave in the entry's place the one-line stub \`### <unit id> — complete at <merge SHA>; entry archived to ${ctx.archivePath}; report <completion report path>\`.
+- Append to the plan's \`## Plan Maintenance\` the entry \`### <date, date -I> — <unit id> complete\` with the single line \`Report: <completion report path> @ <merge SHA>. Ledger: ${ctx.ledgerPath} wave ${wave}.\` and nothing else: no restated report content.
+- Set \`complete: true\` on the unit in the \`\`\`yaml lsf-plan block; the block is otherwise untouched.
+Return the new plan SHA. Do not amend anything else in the plan; the re-plan stage does that.
 
 Wave ${wave} merge order:
 ${merges.map((m) => `- ${m.unit}: branch ${m.branch} (completion report ${m.completionPath})`).join('\n')}
@@ -422,13 +438,18 @@ Do not re-evaluate the units' done conditions or review findings: the unit stage
 ${RETURN_FIELDS}`;
 }
 
+// The compact Plan Maintenance entry a re-plan writes, and the Risk Registry
+// archive rule: the plan records what changed and where, never restated
+// statements. `heading` is the text after the date.
+const maintenanceForm = (ctx, heading) => `Record the pass in \`## Plan Maintenance\` as one entry: the heading \`### <date, date -I> — ${heading}\`, then one line per amendment in the form \`<kind> <unit> — <one clause>\`, and nothing else — no restated items, reports, or decisions; the ledger holds those. A Risk Registry entry this pass closes — its risk retired by a completion or an amendment — moves to ${ctx.archivePath} under \`## Closed risks\`, cited by id and one clause; a risk that stands keeps its id and one clause. Parallel Streams, Critical Path, and Dependency Graph sections are not maintained: the script computes readiness and the wave plan from the \`\`\`yaml lsf-plan block.`;
+
 // What the re-plan writes, and where an edit anywhere else goes instead.
 const replanBoundary = (subject) => `The re-plan writes two documents: the plan, and under \`document-text\` the architecture document. ${subject} whose remedy is text elsewhere — a comment or docstring, a figure in a completion report or the debt register, a guide sentence, a register row to file — is not made by the re-plan: where a remaining unit's Scope covers the file, amend that unit's done condition (\`amended\`); where none does and the edit changes no behaviour and no test, return it under \`directEdits\` (path, what to change) with the verdict \`amended\` — a scribe stage makes and commits it after this re-plan and the ledger records each; where it changes behaviour or a test, add a unit (\`unit-added\`).`;
 
-function replanPrompt(ctx, plan, wave, merged, conflicts, items, records, stops) {
+function replanPrompt(ctx, plan, wave, merged, conflicts, items, stops) {
   return `${header(ctx, plan)}
 
-You are in the main checkout on ${ctx.integrationBranch}. Run the phronithm:breakdown skill in re-plan mode over ${plan.path} with the completion reports of wave ${wave}: ${merged.map((m) => m.completionPath).join(', ')}. Diff their deviations, deferrals, and discoveries against every remaining unit's scope, dependencies, and done condition; amend the plan; re-run the quality check over the remaining units, examining the size budget first where a completed unit showed distress; record every amendment in Plan Maintenance. Treat each merge conflict below between units the plan claimed disjoint as a plan defect: record it and add the missing edge or scope correction. A file a unit wrote outside its Scope line is a Scope correction where a later unit shares the file.
+You are in the main checkout on ${ctx.integrationBranch}. Run the phronithm:breakdown skill in re-plan mode over ${plan.path} with the completion reports of wave ${wave}: ${merged.map((m) => m.completionPath).join(', ')}. Diff their deviations, deferrals, and discoveries against every remaining unit's scope, dependencies, and done condition; amend the plan; re-run the quality check over the remaining units, examining the size budget first where a completed unit showed distress. ${maintenanceForm(ctx, `re-plan wave ${wave} (<item ids>)`)} Treat each merge conflict below between units the plan claimed disjoint as a plan defect: record it and add the missing edge or scope correction. A file a unit wrote outside its Scope line is a Scope correction where a later unit shares the file.
 
 Items this wave, each with an id — deferrals, discoveries, claimed-disjoint conflicts, the gate's notes, and distress. Each is yours to absorb: amend the plan (a Scope or Publishes line, a done condition, an edge, the execution order, a unit added), or show the plan as it stands already answers it. Return a verdict for every id: \`amended\`, \`no-change\` (with what in the plan answers it), \`document-text\`, or \`cannot\` (with why the plan cannot absorb it — the answer changes a decision in the architecture document or the request record, or needs the requester). An id you do not answer is treated as \`cannot\` and stops the run.
 
@@ -438,7 +459,6 @@ ${replanBoundary('An item')}
 ${items.length ? JSON.stringify(items, null, 2) : 'none'}
 
 Merge conflicts: ${conflicts.length ? JSON.stringify(conflicts, null, 2) : 'none'}
-Other records this wave (readings, deviations, unfixed findings): ${records.length ? JSON.stringify(records, null, 2) : 'none'}
 ${stops.length ? `
 The run stops after this re-plan on the signals below; they go to the requester. Do not amend the plan for them — no edge, scope, or order change on their account — and leave every unit they name as it is: its branch is unmerged and it stays incomplete. Absorb the merged units' reports as above.
 ${JSON.stringify(stops.map(({ kind, unit, stage, statement, referent }) => ({ kind, unit, stage, statement, referent })), null, 2)}
@@ -450,7 +470,7 @@ ${RETURN_FIELDS}`;
 function decisionReplanPrompt(ctx, plan, decisions) {
   return `${header(ctx, plan)}
 
-You are in the main checkout on ${ctx.integrationBranch}. The requester has answered the questions the last run stopped on; the answers are in the decision log at the SHA above. Run the phronithm:breakdown skill in re-plan mode over ${plan.path} with these decisions as the input: apply each to the plan (a Scope or Publishes line, a done condition, an edge, the execution order, a unit added or removed), re-run the quality check over the remaining units, and record every amendment in Plan Maintenance citing the decision id. Return a verdict for every decision id: \`amended\`, \`no-change\` (with what in the plan already reflects it), \`document-text\` (the decision only corrects wording in the architecture document; make the correction, commit it, and state the section), or \`cannot\` (with why the plan cannot carry it out — it changes a decision in the architecture document or the request record, or is not a plan matter). An id you do not answer is treated as \`cannot\` and stops the run. Report any remaining unit over its size budget with its disposition — \`extracted\`, \`flagged\` (a flag with wall-clock rationale, standing or new), or \`unrepaired\`.
+You are in the main checkout on ${ctx.integrationBranch}. The requester has answered the questions the last run stopped on; the answers are in the decision log at the SHA above. Run the phronithm:breakdown skill in re-plan mode over ${plan.path} with these decisions as the input: apply each to the plan (a Scope or Publishes line, a done condition, an edge, the execution order, a unit added or removed), and re-run the quality check over the remaining units. ${maintenanceForm(ctx, `decisions ${decisions.map((d) => d.id).join(', ')}`)} Return a verdict for every decision id: \`amended\`, \`no-change\` (with what in the plan already reflects it), \`document-text\` (the decision only corrects wording in the architecture document; make the correction, commit it, and state the section), or \`cannot\` (with why the plan cannot carry it out — it changes a decision in the architecture document or the request record, or is not a plan matter). An id you do not answer is treated as \`cannot\` and stops the run. Report any remaining unit over its size budget with its disposition — \`extracted\`, \`flagged\` (a flag with wall-clock rationale, standing or new), or \`unrepaired\`.
 
 ${replanBoundary('A decision')}
 ${JSON.stringify(decisions, null, 2)}
@@ -492,7 +512,7 @@ ${RETURN_FIELDS}`;
 function ledgerPrompt(ctx, plan, wave, entries) {
   return `${header(ctx, plan)}
 
-Append stage. You are in the main checkout on ${ctx.integrationBranch}. Append the Markdown between the markers below to the end of ${ctx.ledgerPath}, every character unchanged, preceded by one blank line. If the file does not exist, create it with this heading first:
+Append stage. You are in the main checkout on ${ctx.integrationBranch}. Append the Markdown between the markers below to the end of ${ctx.ledgerPath}, every character unchanged, preceded by one blank line. If the file does not exist, create its directory (\`mkdir -p $(dirname ${ctx.ledgerPath})\`) and the file with this heading first:
 
 ${ledgerHeading(ctx.name)}
 Do not reword, reorder, merge, or drop rows, and never edit earlier content. Commit on ${ctx.integrationBranch}. ${commitMessage(`docs(${ctx.name}): append ${ledgerLabel(entries, wave)} signal ledger entries`)} Return the path and the ${SHORT_SHA}.
@@ -508,8 +528,9 @@ ${RETURN_FIELDS}`;
 // `round(n)` returns [{ stage, ret }] for the round's reviewers; `fix(n,
 // criticals)` returns the fix stage's return. Returns { ok, reason, rounds,
 // findings } and pushes signals as it goes. Significant and Minor findings
-// are recorded; a Critical the fix stage declines, a systemic verdict, or
-// the round cap is a structural stop.
+// accumulate in `findings`, each stamped with its stage and round, for the
+// caller to record once per gate; a Critical the fix stage declines, a
+// systemic verdict, or the round cap is a structural stop.
 async function critiqueLoop({ round, fix, onFix, stageCtx, signals }) {
   const findings = [];
   for (let n = 1; n <= GATE_MAX_ROUNDS; n++) {
@@ -519,7 +540,6 @@ async function critiqueLoop({ round, fix, onFix, stageCtx, signals }) {
         signals.push(nullReturnSignal(stageCtx(stage)));
         return { ok: false, reason: 'agent-null', rounds: n, findings };
       }
-      signals.push(...signalsFromFindings(ret.result.findings, { ...stageCtx(stage), round: n }));
     }
     const criticals = rets.flatMap(({ stage, ret }) =>
       ret.result.findings.filter((f) => f.severity === 'Critical').map((f) => ({ ...f, stage })));
@@ -585,22 +605,22 @@ async function runUnit(rt, ctx, plan, unit, wave) {
   // 1. plan
   const planned = await rt.agent(unitPlanPrompt(ctx, plan, unit), opts('plan', { isolation: 'worktree', schema: UNIT_PLAN_SCHEMA, ...tier(ctx, 'planning') }));
   if (!planned) { signals.push(nullReturnSignal(stageCtx('plan'))); return abort('plan'); }
-  signals.push(...signalsFromReadings(planned.result.readings, stageCtx('plan')));
+  signals.push(...signalsFromReadings(planned.result.readings, { ...stageCtx('plan'), path: planned.result.path }));
   let branch = planned.result.branch;
-  let planText = planned.result.planText;
 
   // 2. critique gate over the plan
   const planGate = await critiqueLoop({
     stageCtx, signals,
     round: async (n) => [{
       stage: 'critique-plan',
-      ret: await rt.agent(planCritiquePrompt(ctx, plan, unit, planText, n),
+      ret: await rt.agent(planCritiquePrompt(ctx, plan, unit, branch, n),
         opts(`critique-plan:r${n}`, { agentType: 'phronithm:critic', schema: FINDINGS_SCHEMA, ...tier(ctx, 'critique') })),
     }],
     fix: (n, criticals) => rt.agent(fixPrompt(ctx, plan, unit, branch, 'plan', criticals, n),
       opts(`fix-plan:r${n}`, { isolation: 'worktree', schema: FIX_SCHEMA })),
-    onFix: (fixed) => { branch = fixed.result.branch; planText = fixed.result.planText; },
+    onFix: (fixed) => { branch = fixed.result.branch; },
   });
+  signals.push(...signalsFromFindings(planGate.findings, stageCtx('critique-plan')));
   if (!planGate.ok) return abort('critique-plan');
 
   // 3. implement
@@ -645,6 +665,7 @@ async function runUnit(rt, ctx, plan, unit, wave) {
       opts(`fix-code:r${n}`, { isolation: 'worktree', schema: FIX_SCHEMA })),
     onFix: (fixed) => { branch = fixed.result.branch; },
   });
+  signals.push(...signalsFromFindings(reviewGate.findings, stageCtx('review')));
   if (!reviewGate.ok) return abort('review');
 
   // 5. completion report
@@ -669,11 +690,15 @@ function decisionsFor(stops) {
 // Signals from a re-plan return: a verdict per item (cannot or missing is a
 // stop; document-text also records the architecture amendment), each
 // amendment, and each over-budget unit by disposition (unrepaired is a
-// stop). `describe` renders the item for the statement; `referentOf` gives
-// the ledger referent. A standing flag is reported on every pass but
-// recorded once: `ledger` supplies the last over-budget kind per unit, and a
-// repaired or flagged unit whose kind is unchanged adds no row. An
-// unrepaired unit always does; it stops.
+// stop). A verdict row carries the item's id, not its text: the item's own
+// row is already in the ledger. `describe`, when given, renders the item
+// into the verdict row too — the decision re-plan's items have no prior
+// row. A stop always carries the item text, since the requester adjudicates
+// it. `referentOf` gives the ledger referent. A standing flag is reported
+// on every pass but recorded once: `ledger` supplies the last over-budget
+// kind per unit, and a repaired or flagged unit whose kind is unchanged adds
+// no row. An unrepaired unit always does; it stops.
+const describeItem = (it) => `[${it.stage}] ${it.kind}: ${it.statement}`;
 function replanSignals(result, items, { stage, wave, ledger = [] }, describe, referentOf = (it) => it.unit ?? it.id) {
   const out = [];
   const verdicts = new Map((result.verdicts ?? []).map((v) => [v.id, v]));
@@ -682,7 +707,7 @@ function replanSignals(result, items, { stage, wave, ledger = [] }, describe, re
     if (v && v.verdict !== 'cannot') {
       out.push(signal({
         kind: 'verdict', source: 'reported', stage, unit: it.unit, wave,
-        statement: `${it.id} ${v.verdict}: ${v.statement} — ${describe(it)}`, referent: referentOf(it, i),
+        statement: `${it.id} ${v.verdict}: ${v.statement}${describe ? ` — ${describe(it)}` : ''}`, referent: referentOf(it, i),
       }));
       if (v.verdict === 'document-text') {
         out.push(signal({ kind: 'architecture-amendment', source: 'reported', stage, wave, statement: v.statement, referent: referentOf(it, i) }));
@@ -691,7 +716,7 @@ function replanSignals(result, items, { stage, wave, ledger = [] }, describe, re
     }
     out.push(signal({
       kind: 'plan-defect-unabsorbed', source: 'reported', stage, unit: it.unit, wave,
-      statement: `${v ? `re-plan cannot absorb: ${v.statement}` : 're-plan gave no verdict'} — ${describe(it)}`, referent: referentOf(it, i),
+      statement: `${v ? `re-plan cannot absorb: ${v.statement}` : 're-plan gave no verdict'} — ${(describe ?? describeItem)(it)}`, referent: referentOf(it, i),
     }));
   });
   for (const a of result.amendments ?? []) {
@@ -739,7 +764,10 @@ async function run(runtime) {
     integrationBranch: requireArg(args, 'integrationBranch'),
     decisionLogPath: args.decisionLogPath ?? `docs/plans/${name}-decisions.md`,
     decisionLogSha: args.decisionLogSha,
-    ledgerPath: args.ledgerPath ?? `docs/plans/${name}-signals.md`,
+    // One ledger file per launch, named by the plan SHA the launch starts
+    // from; a decision re-plan moves plan.sha on, the ledger stays put.
+    ledgerPath: args.ledgerPath ?? `docs/plans/${name}-signals/${args.planSha}.md`,
+    archivePath: args.archivePath ?? `docs/plans/${name}-archive.md`,
     config: { ...DEFAULT_CONFIG, ...(args.config ?? {}) },
     maxWaves: args.maxWaves ?? DEFAULT_MAX_WAVES,
     maxUnitsPerWave: args.maxUnitsPerWave ?? Infinity,
@@ -958,14 +986,23 @@ async function run(runtime) {
     const flat = ({ unit, stage, kind, statement, referent }) => ({ unit, stage, kind, statement, referent });
     const itemSignals = evalA.records.filter((s) => REPLAN_ITEM_KINDS.includes(s.kind));
     const items = itemSignals.map((s, i) => ({ id: `rp-${i + 1}`, ...flat(s) }));
-    const records = evalA.records.filter((s) => !REPLAN_ITEM_KINDS.includes(s.kind)).map(flat);
-    const rp = await agent(replanPrompt(ctx, plan, wave, merged, conflicts, items, records, evalA.stops), { label: `replan:w${wave}`, ...tier(ctx, 'planning'), schema: REPLAN_SCHEMA, phase: 'Re-plan' });
+    // Nothing to absorb — no item and no claimed-disjoint conflict — and the
+    // re-plan has no work: the plan already carries the merge's SHA and
+    // completion flags, so the next wave schedules from it as it stands.
+    if (!items.length && !conflicts.length) {
+      log(`wave ${wave}: nothing to absorb; re-plan skipped, plan @ ${plan.sha}`);
+      if (evalA.stop) return stopped('wave', evalA.stops);
+      await scribeLedger();
+      for (const u of plan.units) if (u.complete) completed.add(u.id);
+      continue;
+    }
+    const rp = await agent(replanPrompt(ctx, plan, wave, merged, conflicts, items, evalA.stops), { label: `replan:w${wave}`, ...tier(ctx, 'planning'), schema: REPLAN_SCHEMA, phase: 'Re-plan' });
     const replanSigs = [];
     let nextPlan = plan;
     if (!rp) {
       replanSigs.push(nullReturnSignal({ stage: 'replan', wave }));
     } else {
-      replanSigs.push(...replanSignals(rp.result, items, { stage: 'replan', wave, ledger }, (it) => `[${it.stage}] ${it.kind}: ${it.statement}`, (it, i) => itemSignals[i].referent));
+      replanSigs.push(...replanSignals(rp.result, items, { stage: 'replan', wave, ledger }, undefined, (it, i) => itemSignals[i].referent));
       // Before the load, and on a stopping wave too, so the edits are not
       // lost with the stop.
       replanSigs.push(...await applyDirectEdits({ ...plan, sha: rp.result.planSha }, rp.result.directEdits, `wave ${wave} re-plan`, { stage: 'replan', wave, phase: 'Re-plan' }));

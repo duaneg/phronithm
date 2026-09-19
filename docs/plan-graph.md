@@ -60,6 +60,18 @@ the same commit: breakdown when drafting, the re-plan step after each wave,
 the merge stage for `complete`, the termination stage for appended `meta`
 units.
 
+## Archive
+
+A plan the `lsf-implement` workflow drives has a companion
+`docs/plans/<name>-archive.md`, append-only. At merge, a completed unit's
+`### <id>` entry under `## Work Units` moves there verbatim, under a
+`## Work Units` section of its own, and a one-line stub stays in the plan: `### <id> — complete
+at <merge SHA>; entry archived to <archive>; report <path>`. At re-plan, a
+Risk Registry entry the pass closes moves there under `## Closed risks`. The
+plan block is unaffected by either move: the unit keeps its entry in `units`
+with `complete: true`, so the graph, the ready set, and scope overlap are
+computed over the whole plan as before.
+
 ## Decision log block
 
 `docs/plans/<name>-decisions.md`:

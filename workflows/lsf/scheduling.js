@@ -216,13 +216,16 @@ function nullReturnSignal({ stage, unit, wave }) {
   });
 }
 
-// Unit plan stage: each clause that admitted more than one reading, and the
-// reading the plan took.
-function signalsFromReadings(readings, { unit, wave }) {
-  return (readings ?? []).map((r) => signal({
+// Unit plan stage: one row per unit counting the clauses that admitted more
+// than one reading; the readings themselves live in the unit plan's
+// Readings section at `path`.
+function signalsFromReadings(readings, { unit, wave, path }) {
+  const n = (readings ?? []).length;
+  if (!n) return [];
+  return [signal({
     kind: 'reading', source: 'reported', stage: 'plan', unit, wave,
-    statement: `${r.clause} — read as: ${r.reading}`, referent: r.clause,
-  }));
+    statement: `${n} reading(s); see ${path} Readings`, referent: path,
+  })];
 }
 
 // Implement stage: deviations (including writes outside the Scope line),
@@ -240,12 +243,29 @@ function signalsFromImplement(result, { unit, wave }) {
   return out;
 }
 
-// Review stages: Significant and Minor findings are recorded as they stand.
-function signalsFromFindings(findings, { stage, unit, wave, round }) {
-  return (findings ?? []).filter((f) => f.severity !== 'Critical').map((f) => signal({
-    kind: 'finding', source: 'gate', stage, unit, wave,
-    statement: `${f.severity}${round ? ` (round ${round})` : ''}: ${f.statement}`, referent: f.location,
-  }));
+// Review gates, once per gate over the findings of every round: a
+// Significant finding is one row, against the stage and round that raised
+// it; Minor findings are one count row per gate, the referent naming up to
+// five locations, no text. Critical findings are fixed, not recorded here.
+const MINOR_LOCATIONS = 5;
+function signalsFromFindings(findings, { stage, unit, wave }) {
+  const out = [];
+  const minors = [];
+  for (const f of findings ?? []) {
+    if (f.severity === 'Significant') {
+      out.push(signal({
+        kind: 'finding', source: 'gate', stage: f.stage ?? stage, unit, wave,
+        statement: `Significant${f.round ? ` (round ${f.round})` : ''}: ${f.statement}`, referent: f.location,
+      }));
+    } else if (f.severity === 'Minor') minors.push(f);
+  }
+  if (minors.length) {
+    out.push(signal({
+      kind: 'finding', source: 'gate', stage, unit, wave,
+      statement: `${minors.length} Minor finding(s)`, referent: minors.slice(0, MINOR_LOCATIONS).map((f) => f.location).join(', '),
+    }));
+  }
+  return out;
 }
 
 // Wave gate: an invalidation with every field present is a STOP; one with a
@@ -384,14 +404,18 @@ function renderLedger(entries, wave) {
 
 // Counts by kind, source, and disposition, plus what deserves the
 // requester's attention on a run that did not stop: architecture notes,
-// unfixed Significant findings per unit, units that showed distress, and
-// the edits made without a gate.
+// unfixed Significant and Minor findings per unit, units that showed
+// distress, and the edits made without a gate.
 function digest(ledger) {
   // Wave 0 is the decision re-plan before load, not a wave of units.
   const waves = [...new Set(ledger.map((s) => s.wave).filter((w) => w !== undefined && w > 0))].sort((a, b) => a - b);
   const unfixedSignificant = {};
+  const minorFindings = {};
   for (const s of ledger) {
-    if (s.kind === 'finding' && /^Significant/.test(s.statement)) unfixedSignificant[s.unit] = (unfixedSignificant[s.unit] ?? 0) + 1;
+    if (s.kind !== 'finding') continue;
+    if (/^Significant/.test(s.statement)) unfixedSignificant[s.unit] = (unfixedSignificant[s.unit] ?? 0) + 1;
+    const minor = /^(\d+) Minor finding/.exec(s.statement);
+    if (minor) minorFindings[s.unit] = (minorFindings[s.unit] ?? 0) + Number(minor[1]);
   }
   return {
     waves: waves.length,
@@ -402,6 +426,7 @@ function digest(ledger) {
       architectureNotes: ledger.filter((s) => s.kind === 'architecture-note').map((s) => s.statement),
       architectureAmendments: ledger.filter((s) => s.kind === 'architecture-amendment').map((s) => s.statement),
       unfixedSignificant,
+      minorFindings,
       distressedUnits: [...new Set(ledger.filter((s) => s.kind === 'execution-distress').map((s) => s.unit))],
       directEdits: ledger.filter((s) => s.kind === 'direct-edit').map((s) => `${s.referent} — ${s.statement}`),
     },

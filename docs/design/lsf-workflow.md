@@ -49,6 +49,15 @@ Documented behaviour this design relies on:
   this — not merely in `args`.
 - **Plugins ship workflows** from a `workflows/` directory, namespaced
   `phronithm:<meta.name>`.
+- **Every agent pays a floor before its first read**: the harness prompt
+  plus the target project's CLAUDE.md, which the harness injects into every
+  agent. Measured on cartomancer-v2 (2026-09-19): about 61k tokens on haiku
+  and 83k on opus, of which the workflow prompt is 0.4–47 KB; the CLAUDE.md
+  grew from 92 KB to 141 KB over the stream and moved the floor by about 12k
+  tokens. The plan is not in the floor. Every extra agent per wave costs at
+  least the floor, so the design adds none for convenience; `lsf-drive`
+  reports the CLAUDE.md size at startup against a 40 KB threshold and
+  leaves trimming to the project.
 
 ## Architecture
 
@@ -145,8 +154,11 @@ carries its own unit plan template and stages instead:
 declaration: the files this unit writes that another unit in flight might
 also write. The scheduler reads it for overlap. It does not limit what the
 work may edit; a file the work needs outside the Scope line is changed and
-reported, and the re-plan corrects the line where a later unit shares the
-file. Every unit-stage prompt states this.
+reported as a deviation, and the next re-plan that runs corrects the line
+where a later unit shares the file. A deviation does not itself trigger a
+re-plan (Wave loop below), so the correction waits for a wave that has an
+item to absorb; until then the merge stage's conflict detection is the
+backstop. Every unit-stage prompt states this.
 
 Organisational and release gates cannot be probed by an agent; a unit carrying
 one is never ready until the decision log records the gate as cleared, and a
@@ -169,6 +181,7 @@ loop:
   gate    = invalidations and notes from the wave gate             // agent, one question
   signals = structural(results, merged) ∪ gate
   if any signal is STOP and (nothing merged or the stop supersedes the plan): return escalation(signals, plan.sha)
+  if no item and no claimed-disjoint conflict: if STOP return escalation(signals, plan.sha); continue   // re-plan skipped
   plan    = replan(plan, results.reports, merged.conflicts, items, stops)  // agent, commits; a verdict per item
   if any signal is STOP, replan yields STOP, or an item is unabsorbed: return escalation(..., plan.sha)
 ```
@@ -226,13 +239,32 @@ A cleanup agent on the mechanical tier runs beside the wave gate and removes
 the worktrees whose branches merged. It never signals; a failure leaves
 residue, not risk.
 
+**The merge archives what it completes.** In the commit that marks a unit
+`complete: true`, the merge stage moves the unit's `### <id>` entry to
+`docs/plans/<name>-archive.md` and leaves a one-line stub naming the merge
+SHA, the archive, and the completion report; its Plan Maintenance entry is
+the fixed two-line form (heading; report path and SHA, ledger file and
+wave), never restated report content. The plan block is untouched apart from
+the flag ([plan graph](${CLAUDE_PLUGIN_ROOT}/docs/plan-graph.md), Archive).
+The plan therefore stops growing with completions; on cartomancer-v2 it had
+reached 531 KB, 240 KB of it Plan Maintenance prose and 173 KB completed
+entries, before this rule (measured 2026-09-19).
+
+**A wave with nothing to absorb skips the re-plan.** The re-plan's inputs are
+the items — deferrals, discoveries, gate notes, distress — and claimed-disjoint
+merge conflicts. When a wave produces none, the re-plan has no work and is
+not spawned: no reload either, since the plan already carries the merge's SHA
+and completion flags. Readings, deviations, and findings are ledger rows
+only and do not trigger it. A stop on such a wave escalates with the merge's
+SHA and no `pre_replan_sha`. The merge stage is never skipped by this rule.
+
 **A wave stop still re-plans over whatever merged.** A relaunch re-plans
 over the requester's decisions alone, so the wave's re-plan is the only pass
 that absorbs the merged units' reports. The stop signals go to the re-plan as
 context it must not amend for; the unit each names stays incomplete. The
-re-plan is skipped when nothing merged, and when a stop supersedes the plan
-(architecture invalidated, done condition unevaluable — the relaunch target
-is `lsf-architecture`).
+re-plan is skipped when nothing merged, when the wave has nothing to absorb
+(below), and when a stop supersedes the plan (architecture invalidated, done
+condition unevaluable — the relaunch target is `lsf-architecture`).
 
 **The wave gate asks one question**: does anything this wave invalidate the
 architecture document — does any decision it makes rest on a premise the
@@ -360,13 +392,25 @@ verbosity, not trouble in the work.
 Every signal, RECORD or STOP, is surfaced — the requester's ability to notice
 drift is a control the design relies on alongside the stop rule.
 
-- **Signal ledger.** Append-only file in the repo,
-  `docs/plans/<name>-signals.md`: wave, unit, stage, source, kind, statement,
-  referent, disposition. The script renders each wave's rows as a Markdown
-  table; a haiku scribe agent appends that text verbatim and commits, once
-  per wave (a stop rides in the same append; a wave with no signals appends
-  nothing). The plan's Plan Maintenance section records amendments; the
-  ledger records why.
+- **Signal ledger.** Append-only files in the repo, one per launch:
+  `docs/plans/<name>-signals/<plan SHA the launch started from>.md`, named
+  in the return's `ledgerPath`. Columns: wave, unit, stage, source, kind,
+  statement, referent, disposition. The script renders each wave's rows as a
+  Markdown table; a haiku scribe agent appends that text verbatim and
+  commits, once per wave (a stop rides in the same append; a wave with no
+  signals appends nothing). Row shapes keep the file an index, not a copy of
+  the artefacts it points at: readings are one count row per unit whose
+  referent is the unit plan, where the Readings section holds the text;
+  Minor findings are one count row per gate per unit with up to five
+  locations as the referent and no text; a Significant finding is one row;
+  a verdict row carries the item's id and verdict, not the item's text,
+  which is already in the row it answers (a decision re-plan's verdicts keep
+  the question, having no prior row). No stage reads the ledger; it is the
+  requester's audit trail and the scribe's input. Measured on cartomancer-v2
+  (2026-09-19): 1.3 MB over 1864 rows, 394 KB of it finding rows (268 Minor),
+  reading rows duplicating the unit plans' Readings sections, and verdict
+  rows repeating the item text they answered. The plan's Plan
+  Maintenance section records amendments; the ledger records why.
 - **Live narration.** The script calls `log()` at every wave boundary with the
   counts by kind and source, the units merged, conflicts, and the re-plan's
   amendment summary, so the run is readable in `/workflows` while in flight.
@@ -438,9 +482,11 @@ Returned by the workflow; presented verbatim by the session.
 `plan_sha`, `wave`, and `unit` are set by `lsf-implement` only; `stage` names
 the research, synthesis, critique, or breakdown stage in the other two.
 `plan_sha` is the plan to relaunch from: after a stop at a re-plan, or a wave
-stop with units merged, it is the re-plan's own commit, which carries the
-amendments it did absorb, and `pre_replan_sha` is the plan the wave ran
-against. An
+stop with units merged and an item for the re-plan to absorb, it is the
+re-plan's own commit, which carries the amendments it did absorb, and
+`pre_replan_sha` is the plan the wave ran against. A wave stop with nothing
+to absorb, or one that supersedes the plan, runs no re-plan: `plan_sha` is
+the merge's commit and there is no `pre_replan_sha`. An
 architecture invalidation's statement carries the gate's five fields, so the
 question the requester sees includes the proposed amendment.
 
@@ -457,10 +503,16 @@ Every `agent()` in the three workflows returns:
   commits: [ { branch, sha } ] }
 ```
 
-Nothing else. The stages that report beyond their result do so in
-stage-specific `result` fields with defined shapes:
+Nothing else. No stage returns a document inline: the unit plan and the
+completion report are committed and read by path from the branch, so a
+critique round's prompt names the plan, never carries it. The stages that
+report beyond their result do so in stage-specific `result` fields with
+defined shapes:
 
-- **plan**: `readings: [{ clause, reading }]`.
+- **plan**: `readings: [{ clause, reading }]`. The plan itself stays on the
+  branch; the prompt states a size budget (12 KB) and admits to Readings
+  only clauses that admitted two readings. The completion report's budget is
+  8 KB, with Minor findings as a count and up to five locations.
 - **implement**: `deviations`, `writesOutsideScope`, `deferrals: [{ statement,
   belongsTo }]`, `discoveries: [{ statement, affects }]`, `distress`,
   `doneCondition: { evaluable, met, evidence }`.
@@ -476,8 +528,10 @@ stage-specific `result` fields with defined shapes:
 ## Persistence
 
 The script cannot write. Every artefact the skills name — research notes,
-brief, architecture document, decomposition plan, implementation plans,
-completion reports, decision log — is committed by the agent that produces it,
+brief, architecture document, decomposition plan and its archive
+(`docs/plans/<name>-archive.md`: completed entries and closed risks),
+implementation plans, completion reports, decision log, signal ledgers — is
+committed by the agent that produces it,
 on a branch the agent reports back. Where an agent's output is inline data
 rather than a file (critique findings, review-gate answers), a scribe agent
 commits it. This supersedes, for workflow agents only, the file-writes policy
