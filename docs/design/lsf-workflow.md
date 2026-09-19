@@ -198,8 +198,12 @@ substantial meta-tasks as unit entries with done conditions, and small ones
 (documentation updates and the like) as direct edits. The unit entries are
 appended to the plan and the loop runs again over them through the full five
 stages; the direct edits are made by one scribe agent without the pipeline.
-The stage then confirms every standing obligation is discharged; one that is
-not is a STOP.
+The stage then gives every standing obligation a disposition. One carried by
+its own terms — its text places its discharge outside this plan — is a
+record when the stage names where it is now recorded outside the plan (a
+debt-register row, another plan's Standing Obligations); otherwise, and for
+one that is undischarged, a STOP. Without the carrier the obligation can
+only ever stop the run, since no decision clears it.
 
 **Wave, not per-completion.** Units in a wave execute against a pinned plan
 version; the plan is amended once per wave from all the wave's completion

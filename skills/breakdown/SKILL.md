@@ -286,7 +286,9 @@ Build the execution plan from the analysis.
    ## Standing Obligations
    <obligations spanning units — data kept while work happens, content
     contributions, deferred completeness criteria — each naming the units that
-    carry it>
+    carry it; an obligation no unit in this plan can discharge is a
+    debt-register row or another plan's obligation, not a standing obligation
+    here>
 
    ## Risk Registry
    <residual per-unit and cross-cutting risks — gates recorded as edges do not

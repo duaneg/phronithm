@@ -41,6 +41,7 @@ const RECORD_KINDS = Object.freeze([
   'architecture-amendment', // re-plan: a wording-only correction to the architecture document, no decision moved
   'over-budget-repaired', // re-plan: a preceding design unit extracted
   'over-budget-flagged', // re-plan: excess is wall-clock, not context; flagged with rationale
+  'standing-obligation-carried', // obligations: discharge lies outside this plan by the obligation's own terms, and the referent names where it is now recorded
 ]);
 
 const SOURCES = Object.freeze(['structural', 'reported', 'gate']);

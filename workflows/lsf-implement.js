@@ -61,6 +61,7 @@ const RECORD_KINDS = Object.freeze([
   'architecture-amendment', // re-plan: a wording-only correction to the architecture document, no decision moved
   'over-budget-repaired', // re-plan: a preceding design unit extracted
   'over-budget-flagged', // re-plan: excess is wall-clock, not context; flagged with rationale
+  'standing-obligation-carried', // obligations: discharge lies outside this plan by the obligation's own terms, and the referent names where it is now recorded
 ]);
 
 const SOURCES = Object.freeze(['structural', 'reported', 'gate']);
@@ -950,14 +951,19 @@ function ledgerHeading(name) {
   return `# Signal ledger: ${name}\n\nAppend-only. Never edit earlier entries — add a later wave's row instead.\n`;
 }
 // The heading follows the rows: a schedule stop reports the wave it could not
-// start, one past the loop's counter.
+// start, one past the loop's counter; rows from the termination stages
+// carry no wave.
 function ledgerWave(entries, wave) {
   const waves = new Set(entries.map((e) => e.wave ?? wave));
   return waves.size === 1 ? [...waves][0] : wave;
 }
+function ledgerLabel(entries, wave) {
+  return entries.length && entries.every((e) => e.wave === undefined) ? 'termination' : `wave ${ledgerWave(entries, wave)}`;
+}
 
 function renderLedger(entries, wave) {
-  const head = [`## Wave ${ledgerWave(entries, wave)}`, '', `| ${LEDGER_COLUMNS.join(' | ')} |`, `| ${LEDGER_COLUMNS.map(() => '---').join(' | ')} |`];
+  const label = ledgerLabel(entries, wave);
+  const head = [`## ${label[0].toUpperCase()}${label.slice(1)}`, '', `| ${LEDGER_COLUMNS.join(' | ')} |`, `| ${LEDGER_COLUMNS.map(() => '---').join(' | ')} |`];
   const rows = entries.map((e) => `| ${[e.wave ?? wave, e.unit, e.stage, e.source, e.kind, e.statement, e.referent, e.disposition].map(ledgerCell).join(' | ')} |`);
   return [...head, ...rows].join('\n') + '\n';
 }
@@ -1179,7 +1185,12 @@ const TERMINATION_SCHEMA = stageSchema(obj({
 }));
 
 const OBLIGATIONS_SCHEMA = stageSchema(obj({
-  obligations: arr(obj({ statement: str, discharged: bool, evidence: str })),
+  obligations: arr(obj({
+    statement: str,
+    disposition: { type: 'string', enum: ['discharged', 'carried', 'undischarged'] },
+    carrier: { ...str, description: 'Where the obligation is now recorded outside this plan: file and row or section; empty unless carried' },
+    evidence: str,
+  })),
 }));
 
 const SCRIBE_SCHEMA = stageSchema(obj({ path: str, sha: str }));
@@ -1433,7 +1444,7 @@ ${RETURN_FIELDS}`;
 function obligationsPrompt(ctx, plan) {
   return `${header(ctx, plan)}
 
-Every work unit and meta-task in ${plan.path} is complete. For each standing obligation in the plan's Standing Obligations section, determine from the completion reports and ${ctx.integrationBranch} whether it is discharged, and cite the evidence. Do not modify anything.
+Every work unit and meta-task in ${plan.path} is complete. For each standing obligation in the plan's Standing Obligations section, return its disposition with the evidence, from the completion reports and ${ctx.integrationBranch}: \`discharged\` — every carrying unit did what the obligation asks, cited; \`carried\` — the obligation's own text places its discharge outside this plan, and \`carrier\` names the file and row or section where it is now recorded outside this plan (a debt-register row, another plan's Standing Obligations); \`undischarged\` — neither. An obligation recorded nowhere outside this plan is \`undischarged\` whatever its text says. Do not modify anything.
 ${RETURN_FIELDS}`;
 }
 
@@ -1450,7 +1461,7 @@ function ledgerPrompt(ctx, plan, wave, entries) {
 Append stage. You are in the main checkout on ${ctx.integrationBranch}. Append the Markdown between the markers below to the end of ${ctx.ledgerPath}, every character unchanged, preceded by one blank line. If the file does not exist, create it with this heading first:
 
 ${ledgerHeading(ctx.name)}
-Do not reword, reorder, merge, or drop rows, and never edit earlier content. Commit on ${ctx.integrationBranch} with the message "docs(${ctx.name}): append wave ${ledgerWave(entries, wave)} signal ledger entries" and return the path and SHA.
+Do not reword, reorder, merge, or drop rows, and never edit earlier content. Commit on ${ctx.integrationBranch} with the message "docs(${ctx.name}): append ${ledgerLabel(entries, wave)} signal ledger entries" and return the path and SHA.
 
 <<<LEDGER
 ${renderLedger(entries, wave)}LEDGER>>>
@@ -1916,19 +1927,27 @@ async function run(runtime) {
     log(`wave ${wave}: re-plan ${rp.result.amendments.length} amendment(s) → plan @ ${plan.sha}; ${rp.result.summary}`);
   }
 
-  // Standing obligations.
+  // Standing obligations. One carried by its own terms is a record when the
+  // stage names where it is recorded outside the plan; otherwise a stop.
   const ob = await agent(obligationsPrompt(ctx, plan), { label: 'obligations', ...tier(ctx, 'default'), phase: 'Termination', schema: OBLIGATIONS_SCHEMA });
   if (!ob) return stopOn('obligations', [nullReturnSignal({ stage: 'obligations' })]);
   const obSignals = [];
-  for (const o of ob.result.obligations.filter((o) => !o.discharged)) {
+  for (const o of ob.result.obligations) {
+    if (o.disposition === 'discharged') continue;
+    const carrier = (o.carrier ?? '').trim();
+    if (o.disposition === 'carried' && carrier) {
+      obSignals.push(signal({ kind: 'standing-obligation-carried', source: 'reported', stage: 'obligations', statement: o.statement, referent: carrier }));
+      continue;
+    }
     obSignals.push(signal({
       kind: 'standing-obligation-undischarged', source: 'structural', stage: 'obligations',
-      statement: o.statement, referent: o.statement,
+      statement: `${o.disposition === 'carried' ? 'carried without a carrier: ' : ''}${o.statement}`, referent: o.statement,
     }));
   }
   const obEval = evaluateWave(obSignals);
   ledger.push(...obEval.all);
   if (obEval.stop) return stopped('obligations', obEval.stops);
+  await scribeLedger();
 
   log(`complete: ${completed.size} unit(s) over ${wave} wave(s); silence is not evidence`);
   return outcome('complete');

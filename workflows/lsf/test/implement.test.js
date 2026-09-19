@@ -508,12 +508,30 @@ test('termination appends meta units, which run as a further wave; direct edits 
 
 test('an undischarged standing obligation at termination stops', async () => {
   const { rt } = runtime(graph('plan0', [unit('A')]), {
-    obligations: () => ret({ obligations: [{ statement: 'perf numbers collected', discharged: false, evidence: 'none' }] }),
+    obligations: () => ret({ obligations: [{ statement: 'perf numbers collected', disposition: 'undischarged', carrier: '', evidence: 'none' }] }),
   });
   const out = await run(rt);
   assert.equal(out.status, 'stopped');
   assert.equal(out.escalation.stage, 'obligations');
   assert.deepEqual(out.escalation.signals.map((s) => s.kind), ['standing-obligation-undischarged']);
+});
+
+test('an obligation carried by its own terms is a record with its carrier, and a stop without one', async () => {
+  const obligation = (carrier) => ({ statement: 'perf numbers carried until a later stream reads them', disposition: 'carried', carrier, evidence: 'D12 says a later stream reads them' });
+  const carried = runtime(graph('plan0', [unit('A')]), { obligations: () => ret({ obligations: [obligation('docs/debt.md row 7')] }) });
+  const out = await run(carried.rt);
+  assert.equal(out.status, 'complete', JSON.stringify(out.escalation?.signals));
+  assert.equal(out.digest.byKind['standing-obligation-carried'], 1);
+  const scribe = carried.calls.find((c) => c.label === 'ledger:w1').prompt;
+  assert.match(scribe, /append termination signal ledger entries/);
+  assert.match(scribe, /<<<LEDGER\n## Termination\n/);
+  assert.match(scribe, /\| obligations \| reported \| standing-obligation-carried \| perf numbers carried until a later stream reads them \| docs\/debt\.md row 7 \| recorded \|/);
+  assert.match(carried.calls.find((c) => c.label === 'obligations').prompt, /recorded nowhere outside this plan is `undischarged`/);
+
+  const uncarried = await run(runtime(graph('plan0', [unit('A')]), { obligations: () => ret({ obligations: [obligation('')] }) }).rt);
+  assert.equal(uncarried.status, 'stopped');
+  assert.deepEqual(uncarried.escalation.signals.map((s) => s.kind), ['standing-obligation-undischarged']);
+  assert.match(uncarried.escalation.signals[0].statement, /^carried without a carrier: perf numbers/);
 });
 
 test('decisions are committed first, applied by a re-plan, and both SHAs reach every later prompt', async () => {

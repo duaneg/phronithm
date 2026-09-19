@@ -4,7 +4,7 @@ import {
   findCycle, pathsOverlap, overlappingPairs, validatePlan,
   readySet, blockedUnits, mergeOrder, wavePlan,
   nullReturnSignal, signalsFromReadings, signalsFromImplement, signalsFromFindings, signalsFromGate, invalidationComplete,
-  signalsFromMerge, distressSignals, evaluateWave, digest, renderLedger, ledgerWave, ledgerHeading, REPLAN_ITEM_KINDS,
+  signalsFromMerge, distressSignals, evaluateWave, digest, renderLedger, ledgerWave, ledgerLabel, ledgerHeading, REPLAN_ITEM_KINDS,
 } from '../scheduling.js';
 import { STOP_KINDS, RECORD_KINDS } from '../schema.js';
 import { signal } from '../schema.js';
@@ -269,6 +269,16 @@ test('renderLedger heads a schedule stop with the wave its rows name, and a mixe
   const rec = { wave: 2, unit: 'B', stage: 'plan', source: 'reported', kind: 'reading', statement: 'r', referent: 'x', disposition: 'recorded' };
   assert.equal(renderLedger([rec, stop], 2).split('\n')[0], '## Wave 2');
   assert.equal(renderLedger([], 2).split('\n')[0], '## Wave 2');
+});
+
+test('ledgerLabel is termination when no row carries a wave, and the wave otherwise', () => {
+  const term = { unit: null, stage: 'obligations', source: 'reported', kind: 'standing-obligation-carried', statement: 's', referent: 'debt.md', disposition: 'recorded' };
+  const rec = { wave: 2, unit: 'B', stage: 'plan', source: 'reported', kind: 'reading', statement: 'r', referent: 'x', disposition: 'recorded' };
+  assert.equal(ledgerLabel([term], 2), 'termination');
+  assert.equal(renderLedger([term], 2).split('\n')[0], '## Termination');
+  assert.equal(ledgerLabel([rec, term], 2), 'wave 2');
+  assert.equal(ledgerLabel([rec], 2), 'wave 2');
+  assert.equal(ledgerLabel([], 2), 'wave 2');
 });
 
 test('digest counts by kind, source and disposition, and lists what needs attention', () => {
