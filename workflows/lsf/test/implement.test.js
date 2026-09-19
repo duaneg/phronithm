@@ -769,6 +769,23 @@ test('the re-planned and terminated plans are re-read from their SHAs, not retur
   assert.match(calls.find((c) => c.label === 'plan:B').prompt, /@ replan\d/);
 });
 
+test('the append stages are told the commit form and the fence placement; every stage copies the short SHA from git', async () => {
+  const decisionsBlock = ['```yaml lsf-decisions', 'decisions:', '  - id: d1', '    date: 2026-09-19', '    question: q', '    decision: yes', '```'].join('\n');
+  const { rt, calls } = runtime(twoWaves(), {
+    load: (p, o, u, st) => copied(st.plan, { decisionsBlock }),
+    implement: (p, o, u) => ret(implemented(u, { deviations: ['d'] })),
+  }, { decisions: [{ id: 'd1', question: 'q', decision: 'yes' }] });
+  await run(rt);
+  const ledger = calls.find((c) => c.label === 'ledger:w1').prompt;
+  assert.match(ledger, /subject line "docs\(f\): append wave 1 signal ledger entries", then a blank line, then any trailer lines/);
+  const log = calls.find((c) => c.label === 'decision-log').prompt;
+  assert.match(log, /before the closing ``` line/);
+  assert.match(log, /tail -n 3 docs\/plans\/f-decisions\.md/);
+  assert.match(log, /subject line "docs\(f\): append decision\(s\) d1"/);
+  assert.match(calls.find((c) => c.label === 'load').prompt, /no closing fence is returned as it stands[^.]*without adding one/);
+  for (const c of calls) assert.match(c.prompt, /git rev-parse --short HEAD/, c.label);
+});
+
 test('a seeded stage return stands in for the agent, matched by label', async () => {
   const planned = ret({ branch: 'salvaged-A', sha: 's', path: 'docs/plans/A-plan.md', planText: 'salvaged plan for A', readings: [] });
   const { rt, calls, logs } = runtime(twoWaves(), {}, { seed: { 'plan:A': planned } });

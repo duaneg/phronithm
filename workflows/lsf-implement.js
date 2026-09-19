@@ -1096,9 +1096,13 @@ const strings = { type: 'array', items: str };
 const obj = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required });
 const arr = (items) => ({ type: 'array', items });
 
-const COMMIT_FIELDS = { branch: str, sha: str };
+// Agents have composed SHAs from memory; the field says where the value
+// comes from.
+const SHORT_SHA = 'commit SHA as `git rev-parse --short HEAD` prints it after the commit, copied from that output';
+const SHA_FIELD = { ...str, description: `The ${SHORT_SHA}` };
+const COMMIT_FIELDS = { branch: str, sha: SHA_FIELD };
 
-const DECISION_LOG_SCHEMA = stageSchema(obj({ path: str, sha: str }));
+const DECISION_LOG_SCHEMA = stageSchema(obj({ path: str, sha: SHA_FIELD }));
 const CLEANUP_SCHEMA = stageSchema(obj({ removed: { type: 'integer' }, kept: strings }));
 
 const COPY_SCHEMA = stageSchema(obj({
@@ -1197,12 +1201,16 @@ const OBLIGATIONS_SCHEMA = stageSchema(obj({
   })),
 }));
 
-const SCRIBE_SCHEMA = stageSchema(obj({ path: str, sha: str }));
+const SCRIBE_SCHEMA = stageSchema(obj({ path: str, sha: SHA_FIELD }));
 
 // ---------------------------------------------------------------- prompts
 
 const RETURN_FIELDS = `
-Besides \`result\`, return \`commits\`: every commit you made, branch and SHA; an empty array when none. Nothing else: no questions or remarks outside the fields named. The return is one flat object.`;
+Besides \`result\`, return \`commits\`: every commit you made, branch and SHA; an empty array when none. A SHA is what \`git rev-parse --short HEAD\` prints after the commit, copied from that output. Nothing else: no questions or remarks outside the fields named. The return is one flat object.`;
+
+// Commit message form for the append stages: the subject alone on the
+// first line, a blank line, then any trailers.
+const commitMessage = (subject) => `The commit message is the subject line "${subject}", then a blank line, then any trailer lines; nothing on the subject line but the subject.`;
 
 function header(ctx, plan) {
   const lines = [
@@ -1234,7 +1242,7 @@ Unit entry: the \`### ${unit.id}\` section under \`## Work Units\` in ${plan.pat
 function decisionLogPrompt(ctx, decisions) {
   return `${header(ctx, { path: ctx.planPath, sha: ctx.planSha })}
 
-Append the following requester decisions to ${ctx.decisionLogPath} and commit on ${ctx.integrationBranch}. The file holds one \`\`\`yaml lsf-decisions fenced block; each decision is one entry in its \`decisions\` sequence with \`id\`, \`date\` (today, \`date -I\`), \`question\`, \`decision\`, and \`clears\` (a flow sequence of \`unit/gate\` names; omit the key when empty). Quote any scalar containing \`: \`, \` #\`, or leading punctuation with double quotes. Nothing else in the block: no comments, anchors, or multi-line scalars. If the file does not exist, create it as:
+Append the following requester decisions to ${ctx.decisionLogPath} and commit on ${ctx.integrationBranch}. The file holds one \`\`\`yaml lsf-decisions fenced block; each decision is one entry in its \`decisions\` sequence with \`id\`, \`date\` (today, \`date -I\`), \`question\`, \`decision\`, and \`clears\` (a flow sequence of \`unit/gate\` names; omit the key when empty). The entries go inside the fenced block as the last items of the \`decisions\` sequence, before the closing \`\`\` line, which stays the file's last fenced line; after writing, confirm with \`tail -n 3 ${ctx.decisionLogPath}\` that the closing fence is present. Quote any scalar containing \`: \`, \` #\`, or leading punctuation with double quotes. Nothing else in the block: no comments, anchors, or multi-line scalars. If the file does not exist, create it as:
 
 # Decisions: ${ctx.name}
 
@@ -1250,7 +1258,7 @@ decisions:
 Decisions to append:
 ${JSON.stringify(decisions, null, 2)}
 
-Return the file path and the commit SHA.
+${commitMessage(`docs(${ctx.name}): append decision(s) ${decisions.map((d) => d.id).join(', ')}`)} Return the file path and the ${SHORT_SHA}.
 ${RETURN_FIELDS}`;
 }
 
@@ -1260,7 +1268,7 @@ function copyPrompt(ctx, sha) {
     : 'There is no decision log; return an empty string in `decisionsBlock`.';
   return `${header(ctx, { path: ctx.planPath, sha })}
 
-Copy stage. Run \`git show ${sha}:${ctx.planPath}\` and return, in \`planBlock\`, its \`\`\`yaml lsf-plan fenced block verbatim: from the opening fence line to the closing fence line inclusive, every character unchanged. ${decisions} Also return the branch the main checkout is on (\`git rev-parse --abbrev-ref HEAD\`) and the commit SHA of ${ctx.architectureDoc} on ${ctx.integrationBranch} (\`git rev-list -1 ${ctx.integrationBranch} -- ${ctx.architectureDoc}\`).
+Copy stage. Run \`git show ${sha}:${ctx.planPath}\` and return, in \`planBlock\`, its \`\`\`yaml lsf-plan fenced block verbatim: from the opening fence line to the closing fence line inclusive, every character unchanged. A block with no closing fence is returned as it stands, to the end of the file, without adding one; the script's parser reports it. ${decisions} Also return the branch the main checkout is on (\`git rev-parse --abbrev-ref HEAD\`) and the commit SHA of ${ctx.architectureDoc} on ${ctx.integrationBranch} (\`git rev-list -1 ${ctx.integrationBranch} -- ${ctx.architectureDoc}\`).
 
 Do not read, assess, or summarise the prose. Do not correct, reformat, or complete anything in the blocks; do not add units, edges, or gates. This stage copies; the script parses and checks the blocks itself.
 ${RETURN_FIELDS}`;
@@ -1472,7 +1480,7 @@ function ledgerPrompt(ctx, plan, wave, entries) {
 Append stage. You are in the main checkout on ${ctx.integrationBranch}. Append the Markdown between the markers below to the end of ${ctx.ledgerPath}, every character unchanged, preceded by one blank line. If the file does not exist, create it with this heading first:
 
 ${ledgerHeading(ctx.name)}
-Do not reword, reorder, merge, or drop rows, and never edit earlier content. Commit on ${ctx.integrationBranch} with the message "docs(${ctx.name}): append ${ledgerLabel(entries, wave)} signal ledger entries" and return the path and SHA.
+Do not reword, reorder, merge, or drop rows, and never edit earlier content. Commit on ${ctx.integrationBranch}. ${commitMessage(`docs(${ctx.name}): append ${ledgerLabel(entries, wave)} signal ledger entries`)} Return the path and the ${SHORT_SHA}.
 
 <<<LEDGER
 ${renderLedger(entries, wave)}LEDGER>>>
