@@ -5,7 +5,7 @@ allowed-tools: Read, Grep, Glob, Bash, Edit, Write, Task, Agent, Skill, AskUserQ
 
 # Large-Scale Feature
 
-Deliver a large, complex, multi-session feature from initial idea to architecture document and implementation plan. Distinct from `/phronithm:feature` in three ways: parallel research before design (subagents for domain investigation), an architecture document phase (standalone design doc iterated until critique findings diminish to marginal), and an explicit multi-session structure (deliberate context handoffs between phases prevent accumulated brainstorming context from contaminating design thinking; Phase 3 loops per work unit through committed-document handoffs).
+Deliver a large, complex, multi-session feature from initial idea to architecture document and implementation plan. Distinct from `/phronithm:feature` in three ways: parallel research before design (subagents for domain investigation), an architecture document phase (standalone design doc iterated until critique findings diminish to marginal), and an explicit multi-session structure (deliberate context handoffs between phases prevent accumulated brainstorming context from contaminating design thinking; Phase 3 runs as a workflow whose state is committed documents).
 
 Use this skill when: the feature requires architectural decisions that span multiple existing systems, the design space is genuinely open (not just applying an established pattern), or the scope is large enough that a single `/phronithm:feature` invocation would be impractical.
 
@@ -21,15 +21,12 @@ Use this skill when: the feature requires architectural decisions that span mult
 - **research-notes** (Phase 1): Findings from parallel research subagents, addressing specific unknowns identified during brainstorming. Committed to the project repo under `docs/research/` or project equivalent.
 - **architecture-document** (Phase 2): High-level architecture overview, iterated until critique findings diminish to marginal. Committed to version control under `docs/architecture/` or project equivalent.
 - **decomposition-plan** (Phase 2): Work decomposition produced by `/phronithm:breakdown`: work units with done conditions, external gates with plan-time pins, dependency graph, execution order, parallel streams, critical path, meta-tasks, standing obligations, risk registry, and a plan-maintenance record. Committed to the repo. A living document through Phase 3 — amended by breakdown's re-plan mode as units complete.
-- **implementation-plan** (Phase 3): Via `/phronithm:feature` Phases 1–3, one per work unit, each carrying the unit's work-unit context in its handoff footer.
-- **completion-report** (Phase 3): One per completed work unit, produced by `/phronithm:feature` Phase 5 in work-unit mode. Input to breakdown's re-plan mode at the next Phase 3 pass.
+- **implementation-plan**, **completion-report**, **signal-ledger**, **decision-log** (Phase 3): committed by `lsf-implement`'s agents, one plan and one report per unit; the ledger and the decision log per feature. See the design's *Surfacing* section.
 
 ### Consumes
 
 - **architecture-brief** (Phase 2 input): Primary design input for the architecture document.
-- **architecture-document** (Phase 3 input): Design input for `/phronithm:feature`.
-- **decomposition-plan** (Phase 3 input): Source of work units, execution order, and completion state (via its plan-maintenance record).
-- **completion-report** (Phase 3 re-entry input, from `/phronithm:feature` Phase 5): Consumed by `/phronithm:breakdown` re-plan mode before the next unit is selected.
+- **architecture-document** and **decomposition-plan** (Phase 3 input): read by `lsf-implement` at a commit SHA; the plan's `yaml lsf-plan` block is the graph the workflow schedules from.
 - **impact-map** (from phronithm:impact-analysis): Consumed in Phase 1 when the change involves renaming, type-changing, or removing exported or serialised fields — run before identifying candidate approaches.
 
 ### Complexity drivers
@@ -127,56 +124,21 @@ Substitute the actual feature name and path. Wait for user confirmation before c
 
 ### Phase 3: Implement work units
 
-**Begin this phase in a fresh session, and re-enter it in a fresh session after each unit completes and again after each re-plan.** Each pass through this phase plans one work unit; the phase repeats until the decomposition plan's execution order is exhausted. The loop's state lives entirely in committed documents — the decomposition plan's plan-maintenance record, each unit's completion-report, and each implementation-plan's work-unit context — because no session context survives the boundaries between passes.
+**Begin this phase in a fresh session.** Phase 3 runs as the `lsf-implement` workflow, driven by `phronithm:lsf-drive`: wave loop over the decomposition plan — plan, critique, implement, review, merge, wave gate, re-plan — stopping only on structural signals and adjudicated architecture invalidation. The session launches the workflow, presents its return, collects the requester's decisions, and relaunches; it does no unit work itself. Design: [lsf-workflow](${CLAUDE_PLUGIN_ROOT}/docs/design/lsf-workflow.md).
 
-"Invoke" in this phase means loading the skill into the current session via the Skill tool — never a Task/Agent dispatch: subagents cannot reliably write files (see [file writes](${CLAUDE_PLUGIN_ROOT}/docs/subagent-protocol.md#file-writes)), and every artefact this loop depends on is a file write.
+Invoke `phronithm:lsf-drive` with the feature name, the architecture document, the decomposition plan's commit SHA, and the integration branch. It runs until the workflow returns `complete`, or hands back here when a stop needs Phase 2: an architecture invalidation, a done condition unevaluable as written, or a re-plan item whose answer changes a decision in the architecture document or the request record.
 
-This loop is serial — one unit per pass. The plan's parallel-stream analysis serves multi-worker execution outside this skill's loop; when units are executed concurrently by other workers, gather all their completion-reports into a single re-plan invocation (breakdown accepts one or more) before selecting any dependent unit.
+**Re-entering Phase 2 after such a stop**, in a fresh session: amend the architecture document from the stop's signals and the requester's decision, critique it (step 3), then before step 6 record for each merged unit whether it stands under the amended architecture or is superseded — the reconciliation the design's *Relaunch target* section describes — and run `phronithm:breakdown` fresh against the amended document with the integration branch as the codebase, that record as input. A unit breakdown marks satisfied by standing work is a claim until its done condition is evaluated against the integration branch. Commit, then return to Phase 3 with the new plan SHA.
 
-1. **Load** the architecture document and decomposition plan. Establish completion state: a unit is complete iff a plan-maintenance completion entry names it. The just-completed unit will not yet appear there — its identity and completion-report path come from the continuation prompt that opened this session; absent that, glob `docs/plans/*-completion.md` and diff against the record. If every unit is complete **and** every completion's re-plan is recorded, go to Phase termination below; if a completion's re-plan is outstanding — including the last unit's — run step 2 for it first.
-2. **Re-plan** (on re-entry with a completed unit): invoke `/phronithm:breakdown` in re-plan mode with the decomposition plan and the unit's completion-report, review the amended plan, and confirm it is committed before proceeding — an uncommitted amendment is invisible to the next pass. Do this before selecting further work — a deferral or discovery in the report may change scope, dependencies, or ordering of the remaining units. Skip if the plan-maintenance record already shows this completion re-planned — the normal case on re-entry after the pause below, and also the recovery state after a pass crashed or compacted between re-plan and unit selection; either way, reload the committed documents and continue from the first unsatisfied step.
-
-   **When step 2 actually ran** (not skipped), stop once the amended plan is committed — do not select or execute the next unit in the same pass. Re-plan consumes context that the implementation work following selection needs; running both in one pass is the failure this boundary prevents. Present the following prompt to the requester in a fenced code block and wait for confirmation before continuing:
-
-   ```
-   Load the phronithm:large-scale-feature skill and continue Phase 3.
-   Architecture document: docs/architecture/<name>.md
-   Decomposition plan: docs/plans/<name>-breakdown.md
-   ```
-
-   Substitute the actual paths.
-3. **Select** the next work unit from the (possibly amended) execution order — on the first pass, typically the most foundational unit or the one that reduces the most risk early. The plan's ordering rationale guides the choice.
-4. **Invoke `/phronithm:feature`** with the architecture document as the primary design input and the unit's plan entry as its **work-unit-entry**: the entry verbatim (scope, publishes, depends-on, external gates with pins, done condition), the decomposition-plan path, any standing obligations naming the unit, and the continuation prompt below. `/phronithm:feature` Phase 1 runs in work-unit mode — scope confirmation only; requirements are settled by the architecture document and the unit entry.
-5. Complete `/phronithm:feature` through Phase 3 (implementation plan approved, saved, and carrying the work-unit context in its handoff footer). `/phronithm:feature`'s session model then governs implementation and review: its Phase 4 re-verifies the unit's external gates, and its Phase 5 produces the completion-report and presents the continuation prompt that re-enters this phase.
-
-Exit criteria (per pass): implementation plan approved, saved, self-contained, and carrying the work-unit context — a fresh session can implement from it without referencing the transcript.
-
-**Recommend starting a new session for implementation.** The transition itself is `/phronithm:feature`'s standard ExitPlanMode flow — this skill adds no bespoke step — but feature presents no startup prompt for the cleared session, so after plan approval present this one to the requester in a fenced code block:
-
-```
-Load the phronithm:feature skill and begin Phase 4. Implementation plan: docs/plans/<name>-plan.md
-```
-
-Substitute the actual plan path. Wait for user confirmation before continuing.
-
-The continuation prompt supplied in step 4 — what `/phronithm:feature` Phase 5 presents when the unit completes (substitute actual names and paths):
-
-```
-Load the phronithm:large-scale-feature skill and continue Phase 3.
-Architecture document: docs/architecture/<name>.md
-Decomposition plan: docs/plans/<name>-breakdown.md
-Completed unit: <unit-name> (completion report: docs/plans/<unit-name>-completion.md)
-```
-
-**Phase termination**: when step 1 finds every unit complete and re-planned, run the plan's remaining meta-tasks — substantial ones (integration testing, tuning infrastructure) as work units through `/phronithm:feature` in work-unit mode, deriving a plan entry with a done condition from the Meta-Tasks section; small ones (documentation updates) directly in this session. Then confirm every standing obligation is discharged. The feature is complete.
+**Phase termination** is the workflow's: meta-tasks become units or direct edits, and every standing obligation is discharged or carried with a named carrier before it returns `complete`. The feature is complete when the requester accepts the final digest.
 
 ## Review gates
 
-After each phase — and after every Phase 3 pass, not once for the phase:
+After each phase — and in Phase 3 after every workflow return, not once for the phase:
 
 - Does the output meet the phase's exit criteria?
 - Is the handoff document self-contained — could a fresh session proceed from it alone? Rate `sufficient` / `partial` / `insufficient`.
-- Have assumptions made in earlier phases been invalidated? In Phase 3, specifically: do the completed unit's discoveries invalidate the architecture document? Re-plan amends only the decomposition plan and cannot catch that — return to Phase 2 if so.
+- Have assumptions made in earlier phases been invalidated? In Phase 3 the wave gate asks this once per wave and stops on a complete invalidation; the digest's architecture notes are what it saw short of one — read them, and return to Phase 2 if they amount to an invalidation the gate did not call.
 - Are there new ambiguities? Resolve before proceeding.
 
 If a gate reveals a problem, return to the earliest affected phase. Do not patch forward.
@@ -203,7 +165,7 @@ If Phase 2 architecture work reveals new questions that require targeted researc
 
 ## Termination
 
-The workflow terminates when Phase 3's termination condition is met. It can also terminate early: the requester withdraws the feature, investigation reveals it infeasible, or scope grows beyond what was agreed. On early exit, commit whatever exists and record the stop — with the state of any in-flight unit — in the plan-maintenance record; a later re-entry starts from the committed documents, exactly as a normal Phase 3 pass does.
+The workflow terminates when Phase 3's termination condition is met. It can also terminate early: the requester withdraws the feature, investigation reveals it infeasible, or scope grows beyond what was agreed. On early exit in Phase 3, the last workflow return and the signal ledger already record the state; unmerged `worktree-wf_*` branches hold in-flight work. A later re-entry relaunches from the last plan SHA.
 
 ## Commit discipline
 

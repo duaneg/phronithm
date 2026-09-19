@@ -59,10 +59,11 @@ Holds the wave loop, the ready-set computation, the stop rule, and nothing
 else. All state is agent return values (structured via schema) plus the
 commits agents make. Restart = relaunch with `resumeFromRunId`.
 
-**Session** — a presenter and relauncher, any model tier. Launches the
-workflow, shows an escalation record when the script returns one, collects the
-requester's decision, and relaunches with the decision as an argument. It
-holds no loop state and makes no orchestration decisions.
+**Session** — a presenter and relauncher, any model tier, running the
+`phronithm:lsf-drive` skill. Launches the workflow, shows an escalation record
+when the script returns one, collects the requester's decision, and relaunches
+with the decision as an argument. It holds no loop state, makes no
+orchestration decisions, and does no unit work.
 
 The judgement the lifecycle needs lives in agents, each a fresh context with a
 schema-typed return. Every gate the skills describe (critique, review-gate
@@ -371,8 +372,10 @@ drift is a control the design relies on alongside the stop rule.
   amendment summary, so the run is readable in `/workflows` while in flight.
 - **Return value.** Every workflow returns, in this order, its status, the
   escalation record when it stopped, the digest, and the ledger rows no
-  scribe committed; the ledger itself lives in the signals file. The session
-  presents the escalation's `decision_needed` first on a stop, and the digest
+  scribe committed; the ledger itself lives in the signals file. Rows
+  returned unscribed go back to the next launch as `args.unscribed`; a scribe
+  appends them before the run does anything else, and they stay out of that
+  run's digest. The session presents the escalation's `decision_needed` first on a stop, and the digest
   after every run, not only on escalation: counts by kind, source and
   disposition, and what deserves attention on a run that did not stop — the
   gate's architecture notes, unfixed Significant findings per unit, units

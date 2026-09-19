@@ -14,6 +14,8 @@ Structured workflows for LLM agents, focussed on programming.
 - **phronithm:diagnose** — systematic fault isolation: triage, investigate, reproduce, diagnose, fix
 - **phronithm:feature** — end-to-end feature delivery: brainstorm, design, plan, implement, review
 - **phronithm:impact-analysis** — maps direct, transitive, and implicit effects of a change
+- **phronithm:large-scale-feature** — multi-session architecture-first feature delivery; Phase 3 runs as the `lsf-implement` workflow
+- **phronithm:lsf-drive** — drives the `lsf-implement` workflow: launch, present the stop or digest, collect decisions, relaunch
 - **phronithm:refactor** — iterative deduplication and structural decomposition
 - **phronithm:review** — focused code review through composable lenses (error-handling, style, IO, numerical, data structures, complexity, general)
 
