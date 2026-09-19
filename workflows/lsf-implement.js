@@ -1038,6 +1038,17 @@ function digest(ledger) {
 //                       (unit plan, re-plan, termination), mechanical
 //                       (plan-block copy, ledger and decision-log appends),
 //                       default (everything else)
+//
+// returns, in this order:
+//   status              complete | stopped | wave-cap
+//   workflow            lsf-implement
+//   escalation          stopped only: { workflow, stage, signals,
+//                       decision_needed, plan_sha, pre_replan_sha?, wave? };
+//                       decision_needed is what the session presents
+//   digest              counts and attention items over the whole ledger
+//   planSha, integrationBranch, waves
+//   ledgerPath          the signal ledger, where every scribed row lives
+//   unscribed           ledger rows no scribe committed (a null scribe return)
 
 const WORKFLOW = 'lsf-implement';
 const GATE_MAX_ROUNDS = 4; // critique gate hard cap
@@ -1694,25 +1705,31 @@ async function run(runtime) {
   let plan = { path: ctx.planPath, sha: ctx.planSha, units: [], executionOrder: [] };
   let wave = 0;
 
-  const outcome = (status, extra = {}) => ({
-    status, workflow: WORKFLOW, planSha: plan.sha, integrationBranch: ctx.integrationBranch, waves: wave,
-    ledger, digest: digest(ledger), ...extra,
-  });
+  // Ledger rows a scribe has committed. A null scribe leaves its rows for
+  // the next append and, at return, for `unscribed`.
   const scribed = new Set();
-  const scribeLedger = async (entries) => {
-    const fresh = entries.filter((e) => !scribed.has(e));
+  // Key order is the presentation order: status and escalation first, the
+  // ledger stays in the signals file. `escalation` is undefined unless
+  // stopped, and JSON drops it.
+  const outcome = (status, { escalation: esc, ...extra } = {}) => ({
+    status, workflow: WORKFLOW, escalation: esc, digest: digest(ledger),
+    planSha: plan.sha, integrationBranch: ctx.integrationBranch, waves: wave,
+    ledgerPath: ctx.ledgerPath, unscribed: ledger.filter((e) => !scribed.has(e)), ...extra,
+  });
+  const scribeLedger = async () => {
+    const fresh = ledger.filter((e) => !scribed.has(e));
     if (!fresh.length) return;
-    for (const e of fresh) scribed.add(e);
     const r = await agent(ledgerPrompt(ctx, plan, wave, fresh), { label: `ledger:w${wave}`, ...tier(ctx, 'mechanical'), phase: 'Ledger', schema: SCRIBE_SCHEMA });
-    if (!r) log(`ledger scribe returned null for wave ${wave}; entries are in the return value only`);
+    if (!r) { log(`ledger scribe returned null for wave ${wave}; ${fresh.length} row(s) stay unscribed`); return; }
+    for (const e of fresh) scribed.add(e);
   };
   // Every stop path: stamp, ledger, scribe, escalate. `stops` may already be
-  // in the ledger (from evaluateWave); the rest are appended here. Records
+  // in the ledger (from evaluateWave); the rest are appended here. Rows
   // not yet scribed ride in the same append, so a stop costs one scribe.
-  const stopped = async (stage, stops, records = [], extra = {}) => {
+  const stopped = async (stage, stops, extra = {}) => {
     for (const s of stops) s.disposition = 'stopped';
     ledger.push(...stops.filter((s) => !ledger.includes(s)));
-    await scribeLedger([...new Set([...records, ...stops])]);
+    await scribeLedger();
     log(`STOP at ${stage}: ${stops.map((s) => s.kind).join(', ')}`);
     return outcome('stopped', {
       escalation: escalation({ workflow: WORKFLOW, planSha: plan.sha, wave: wave || undefined, stage, signals: stops, decisionNeeded: decisionsFor(stops), ...extra }),
@@ -1736,8 +1753,8 @@ async function run(runtime) {
     const sigs = replanSignals(rp.result, items, { stage: 'decision-replan', wave: 0, ledger }, (it) => it.question);
     const ev = evaluateWave(sigs);
     ledger.push(...ev.all);
-    if (ev.stop) return stopped('decision-replan', ev.stops, ev.records, { planSha: rp.result.planSha, preReplanSha: plan.sha });
-    await scribeLedger(ev.records);
+    if (ev.stop) return stopped('decision-replan', ev.stops, { planSha: rp.result.planSha, preReplanSha: plan.sha });
+    await scribeLedger();
     plan = { ...plan, sha: rp.result.planSha };
     ctx.planSha = plan.sha;
     log(`decisions applied: ${rp.result.amendments.length} amendment(s) → plan @ ${plan.sha}`);
@@ -1773,7 +1790,7 @@ async function run(runtime) {
   }
   const loadEval = evaluateWave(loadSignals);
   ledger.push(...loadEval.all);
-  if (loadEval.stop || !first.plan) return stopped('load', loadEval.stops, loadEval.records);
+  if (loadEval.stop || !first.plan) return stopped('load', loadEval.stops);
   plan = first.plan;
   log(`loaded ${plan.units.length} units @ ${plan.sha}; ${ctx.decisionLogSha ? 'decision log applied' : 'no decision log'}; projected waves: ${wavePlan(plan).map((w) => w.join('+')).join(' | ') || 'none'}`);
 
@@ -1802,7 +1819,7 @@ async function run(runtime) {
       const re = await loadPlan(term.result.planSha, 'load:termination', wave);
       const termEval = evaluateWave(re.stops);
       ledger.push(...termEval.all);
-      if (termEval.stop) return stopped('termination', termEval.stops, termEval.records);
+      if (termEval.stop) return stopped('termination', termEval.stops);
       plan = re.plan;
       if (term.result.directEdits.length) {
         const edits = await agent(directEditsPrompt(ctx, plan, term.result.directEdits), { label: 'direct-edits', ...tier(ctx, 'default'), phase: 'Termination', schema: SCRIBE_SCHEMA });
@@ -1867,7 +1884,7 @@ async function run(runtime) {
     // A relaunch re-plans over decisions alone, so this is the only pass
     // that absorbs the merged reports.
     const superseded = evalA.stops.some((s) => PLAN_SUPERSEDING_STOP_KINDS.includes(s.kind));
-    if (evalA.stop && (!merged.length || superseded)) return stopped('wave', evalA.stops, evalA.records);
+    if (evalA.stop && (!merged.length || superseded)) return stopped('wave', evalA.stops);
 
     // Re-plan from the wave's completion reports. Items go in with ids; one
     // the re-plan cannot absorb, or does not answer, is a stop.
@@ -1888,13 +1905,12 @@ async function run(runtime) {
     }
     const evalB = evaluateWave(replanSigs);
     ledger.push(...evalB.all);
-    const waveRecords = [...evalA.all, ...evalB.records];
     // The re-plan committed its absorbed amendments before the stop; the
     // record carries that SHA as the plan to relaunch from.
     if (evalA.stop || evalB.stop) {
-      return stopped(evalA.stop ? 'wave' : 'replan', [...evalA.stops, ...evalB.stops], waveRecords, rp ? { planSha: rp.result.planSha, preReplanSha: plan.sha } : {});
+      return stopped(evalA.stop ? 'wave' : 'replan', [...evalA.stops, ...evalB.stops], rp ? { planSha: rp.result.planSha, preReplanSha: plan.sha } : {});
     }
-    await scribeLedger(waveRecords);
+    await scribeLedger();
     plan = nextPlan;
     for (const u of plan.units) if (u.complete) completed.add(u.id);
     log(`wave ${wave}: re-plan ${rp.result.amendments.length} amendment(s) → plan @ ${plan.sha}; ${rp.result.summary}`);
@@ -1912,7 +1928,7 @@ async function run(runtime) {
   }
   const obEval = evaluateWave(obSignals);
   ledger.push(...obEval.all);
-  if (obEval.stop) return stopped('obligations', obEval.stops, obEval.records);
+  if (obEval.stop) return stopped('obligations', obEval.stops);
 
   log(`complete: ${completed.size} unit(s) over ${wave} wave(s); silence is not evidence`);
   return outcome('complete');

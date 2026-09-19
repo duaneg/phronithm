@@ -130,9 +130,40 @@ test('clean run: two waves, termination, obligations, complete; silence stops no
   assert.ok(l.includes('termination') && l.includes('obligations'));
   assert.ok(!l.includes('direct-edits'));
   assert.ok(!l.includes('ledger:w1'), 'nothing to scribe on a wave with no signals');
-  assert.equal(out.ledger.length, 0);
+  assert.deepEqual(out.unscribed, []);
   assert.equal(out.escalation, undefined);
   assert.match(out.digest.note, /not evidence/);
+});
+
+test('the return leads with status and escalation; scribed rows live in the signals file, unscribed ones in the return', async () => {
+  const conflict = { merge: () => ret({ integrationBranch: 'integration', merges: [{ unit: 'A', status: 'unresolvable', files: ['src/x.js'] }], planSha: 'm1' }) };
+  const scribedRun = await run(runtime(twoWaves(), conflict).rt);
+  assert.deepEqual(Object.keys(scribedRun).slice(0, 4), ['status', 'workflow', 'escalation', 'digest']);
+  assert.equal(scribedRun.ledgerPath, 'docs/plans/f-signals.md');
+  assert.ok(!('ledger' in scribedRun));
+  assert.deepEqual(scribedRun.unscribed, []);
+  assert.equal(JSON.stringify(scribedRun).indexOf('"escalation"'), JSON.stringify(scribedRun).indexOf('"status"') + '"status":"stopped","workflow":"lsf-implement",'.length);
+
+  const nullScribe = runtime(twoWaves(), { ...conflict, ledger: () => null });
+  const unscribedRun = await run(nullScribe.rt);
+  assert.ok(nullScribe.labels().includes('ledger:w1'));
+  assert.deepEqual(unscribedRun.unscribed.map((s) => s.kind), ['merge-conflict-unresolvable']);
+});
+
+test('a null scribe does not stop; its rows ride in the next append, or stay in unscribed when none follows', async () => {
+  let scribes = 0;
+  const { rt, calls } = runtime(twoWaves(), {
+    implement: (p, o, u) => ret(implemented(u, { deviations: [`dev-${u}`] })),
+    ledger: () => (++scribes === 1 ? null : ret({ path: 'docs/plans/f-signals.md', sha: 'l' })),
+  });
+  const out = await run(rt);
+  assert.equal(out.status, 'complete');
+  assert.deepEqual(out.unscribed, []);
+  assert.match(calls.find((c) => c.label === 'ledger:w2').prompt, /dev-A[^]*dev-B/, 'wave 1 rows the null scribe left ride in the wave 2 append');
+
+  const never = await run(runtime(twoWaves(), { implement: (p, o, u) => ret(implemented(u, { deviations: [`dev-${u}`] })), ledger: () => null }).rt);
+  assert.equal(never.status, 'complete');
+  assert.deepEqual(never.unscribed.filter((s) => s.kind === 'deviation').map((s) => s.statement), ['dev-A', 'dev-B']);
 });
 
 test('the re-planned SHA appears in the next wave\'s prompts', async () => {
@@ -219,6 +250,7 @@ test('deferrals, discoveries, and distress reach the re-plan with ids; readings,
       distress: { ...NO_DISTRESS, midImplementationDesignDecisions: 3 },
     })),
     'critique-code': () => ret({ findings: [{ severity: 'Significant', statement: 'fragile', location: 'a.py:2' }], systemic: false, summary: 's' }),
+    ledger: () => null,
   });
   const out = await run(rt);
   assert.equal(out.status, 'complete', JSON.stringify(out.escalation?.signals));
@@ -229,9 +261,9 @@ test('deferrals, discoveries, and distress reach the re-plan with ids; readings,
   const records = w1.split('Other records this wave')[1];
   for (const k of ['"kind": "reading"', '"kind": "deviation"', '"kind": "finding"']) assert.match(records, new RegExp(k));
   assert.match(records, /writes outside the Scope line: CLAUDE\.md/);
-  const kinds = out.ledger.filter((s) => s.wave === 1 && s.unit === 'A').map((s) => s.kind);
+  const kinds = out.unscribed.filter((s) => s.wave === 1 && s.unit === 'A').map((s) => s.kind);
   assert.deepEqual([...new Set(kinds)].sort(), ['deferral', 'deviation', 'discovery', 'execution-distress', 'finding', 'reading', 'verdict']);
-  assert.ok(out.ledger.every((s) => s.disposition === 'recorded'));
+  assert.ok(out.unscribed.every((s) => s.disposition === 'recorded'));
   assert.deepEqual(out.digest.attention.unfixedSignificant, { A: 1, B: 1 });
   assert.deepEqual(out.digest.attention.distressedUnits, ['A', 'B']);
 });
@@ -242,18 +274,19 @@ test('an item the re-plan cannot absorb, or does not answer, stops after the re-
       implement: (p, o, u) => ret(implemented(u, { discoveries: [{ statement: 'B needs C first', affects: 'B' }, { statement: 'C is redundant', affects: 'C' }] })),
       replan: (p, o, u, state) => ret({ planSha: 'replanned-stop', amendments: [], overBudget: [],
         verdicts: mode === 'cannot' ? [{ id: 'rp-1', verdict: 'cannot', statement: 'needs the requester' }, { id: 'rp-2', verdict: 'amended', statement: 'dropped' }] : [], summary: 's' }),
+      ledger: () => null,
     });
     const out = await run(rt);
     assert.equal(out.status, 'stopped', mode);
     assert.equal(out.escalation.stage, 'replan');
-    const stops = out.ledger.filter((s) => s.disposition === 'stopped');
+    const stops = out.unscribed.filter((s) => s.disposition === 'stopped');
     assert.deepEqual(stops.map((s) => s.kind), mode === 'cannot' ? ['plan-defect-unabsorbed'] : ['plan-defect-unabsorbed', 'plan-defect-unabsorbed'], mode);
     assert.equal(stops[0].referent, 'B');
     assert.match(stops[0].statement, mode === 'cannot' ? /cannot absorb: needs the requester — \[implement\] discovery: B needs C first/ : /no verdict — \[implement\] discovery: B needs C first/);
     assert.ok(labels().includes('replan:w1') && !labels().includes('plan:B'));
     assert.equal(out.escalation.plan_sha, 'replanned-stop', 'relaunch from the re-plan commit');
     assert.equal(out.escalation.pre_replan_sha, 'merged1');
-    if (mode === 'cannot') assert.equal(out.ledger.filter((s) => s.kind === 'verdict').length, 1);
+    if (mode === 'cannot') assert.equal(out.unscribed.filter((s) => s.kind === 'verdict').length, 1);
   }
 });
 
@@ -264,11 +297,12 @@ test('a flagged over-budget unit is recorded and the run continues; an unrepaire
         state.plan = { ...state.plan, sha: 'replanned', units: state.plan.units.map((x) => ({ ...x, complete: state.completed.has(x.id) })) };
         return ret({ planSha: 'replanned', amendments: [], overBudget: [{ unit: 'B', disposition, statement: 'three written paths' }], verdicts: [], summary: 's' });
       },
+      ledger: () => null,
     });
     const out = await run(rt);
     if (disposition === 'flagged') {
       assert.equal(out.status, 'complete', 'flag discharges the budget check');
-      const flags = out.ledger.filter((s) => s.kind === 'over-budget-flagged');
+      const flags = out.unscribed.filter((s) => s.kind === 'over-budget-flagged');
       assert.equal(flags.length, 1, 'reported each re-plan, recorded once while it stands');
       assert.equal(flags[0].disposition, 'recorded');
       assert.equal(flags[0].unit, 'B');
@@ -288,10 +322,11 @@ test('an over-budget unit is recorded again when its disposition changes, and an
       const disposition = ++pass === 1 ? 'flagged' : 'extracted';
       return ret({ planSha: 'replanned', amendments: [], overBudget: [{ unit: 'B', disposition, statement: 's' }], verdicts: [], summary: 's' });
     },
+    ledger: () => null,
   });
   const out = await run(rt);
   assert.equal(out.status, 'complete');
-  assert.deepEqual(out.ledger.filter((s) => /over-budget/.test(s.kind)).map((s) => [s.wave, s.kind]), [[1, 'over-budget-flagged'], [2, 'over-budget-repaired']]);
+  assert.deepEqual(out.unscribed.filter((s) => /over-budget/.test(s.kind)).map((s) => [s.wave, s.kind]), [[1, 'over-budget-flagged'], [2, 'over-budget-repaired']]);
 });
 
 test('a document-text verdict records the architecture amendment and does not stop', async () => {
@@ -302,15 +337,16 @@ test('a document-text verdict records the architecture amendment and does not st
       return ret({ planSha: state.plan.sha, amendments: [], overBudget: [],
         verdicts: [...p.matchAll(/"id": "(rp-\d+)"/g)].map((m) => ({ id: m[1], verdict: 'document-text', statement: '§6 row U5 now reads resolved' })), summary: 's' });
     },
+    ledger: () => null,
   });
   const out = await run(rt);
   assert.equal(out.status, 'complete');
-  const amendments = out.ledger.filter((s) => s.kind === 'architecture-amendment');
+  const amendments = out.unscribed.filter((s) => s.kind === 'architecture-amendment');
   assert.equal(amendments.length, 2, 'one per wave');
   assert.equal(amendments[0].referent, '§6 U5');
   assert.equal(amendments[0].disposition, 'recorded');
   assert.deepEqual(out.digest.attention.architectureAmendments, ['§6 row U5 now reads resolved', '§6 row U5 now reads resolved']);
-  assert.match(out.ledger.find((s) => s.kind === 'verdict').statement, /rp-1 document-text: §6 row U5 now reads resolved/);
+  assert.match(out.unscribed.find((s) => s.kind === 'verdict').statement, /rp-1 document-text: §6 row U5 now reads resolved/);
 });
 
 test('critique gate hits the hard cap: fixes on rounds 1-3, stop on round 4, no implement', async () => {
@@ -425,13 +461,13 @@ test('a mechanically resolved conflict between claimed-disjoint units is a re-pl
 });
 
 test('load: wrong branch is a precondition stop; invalid plan stops before any unit', async () => {
-  const a = runtime(twoWaves(), { load: (p, o, u, s) => copied(s.plan, { headBranch: 'main' }) });
+  const a = runtime(twoWaves(), { load: (p, o, u, s) => copied(s.plan, { headBranch: 'main' }), ledger: () => null });
   const outA = await run(a.rt);
   assert.equal(outA.status, 'stopped');
   assert.equal(outA.escalation.stage, 'load');
   assert.deepEqual(outA.escalation.signals.map((s) => s.kind), ['precondition']);
   assert.ok(a.labels().includes('ledger:w0'), 'stop at load is scribed');
-  assert.ok(outA.ledger.every((s) => s.disposition === 'stopped'));
+  assert.ok(outA.unscribed.every((s) => s.disposition === 'stopped'));
 
   const overlap = graph('plan0', [unit('A', { scope: ['src'] }), unit('B', { scope: ['src/b'] })]);
   const b = runtime(overlap);
@@ -482,7 +518,7 @@ test('an undischarged standing obligation at termination stops', async () => {
 
 test('decisions are committed first, applied by a re-plan, and both SHAs reach every later prompt', async () => {
   const decisionsBlock = ['```yaml lsf-decisions', 'decisions:', '  - id: d1', '    date: 2026-09-12', '    question: q', '    decision: yes', '```'].join('\n');
-  const { rt, calls, labels } = runtime(twoWaves(), { load: (p, o, u, st) => copied(st.plan, { decisionsBlock }) }, { decisions: [{ id: 'd1', question: 'q', decision: 'yes' }] });
+  const { rt, calls, labels } = runtime(twoWaves(), { load: (p, o, u, st) => copied(st.plan, { decisionsBlock }), ledger: () => null }, { decisions: [{ id: 'd1', question: 'q', decision: 'yes' }] });
   const out = await run(rt);
   assert.equal(out.status, 'complete', JSON.stringify(out.escalation?.signals));
   assert.deepEqual(labels().slice(0, 3), ['decision-log', 'decision-replan', 'ledger:w0']);
@@ -494,7 +530,7 @@ test('decisions are committed first, applied by a re-plan, and both SHAs reach e
   const load = calls.find((c) => c.label === 'load');
   assert.match(load.prompt, /git show decided1:docs\/plans\/f-breakdown\.md/, 'loads the re-planned SHA');
   assert.match(calls.find((c) => c.label === 'plan:A').prompt, /@ decided1/);
-  const w0 = out.ledger.filter((s) => s.wave === 0).map((s) => [s.stage, s.kind]);
+  const w0 = out.unscribed.filter((s) => s.wave === 0).map((s) => [s.stage, s.kind]);
   assert.deepEqual(w0, [['decision-replan', 'verdict'], ['decision-replan', 'amendment']]);
   assert.match(calls[2].prompt, /## Wave 0[^]*decision-replan \| reported \| verdict \| d1 amended: edge added — q/);
 });
@@ -519,11 +555,12 @@ test('a standing over-budget flag reported at decision-replan does not stop the 
     load: (p, o, u, st) => copied(st.plan, { decisionsBlock }),
     'decision-replan': () => ret({ planSha: 'decided1', amendments: [], overBudget: [{ unit: 'B', disposition: 'flagged', statement: 'D7 stands' }],
       verdicts: [{ id: 'd1', verdict: 'no-change', statement: 'D7 reaffirmed' }], summary: 's' }),
+    ledger: () => null,
   }, { decisions: [{ id: 'd1', question: 'q', decision: 'proceed, no split' }] });
   const out = await run(rt);
   assert.equal(out.status, 'complete', JSON.stringify(out.escalation?.signals));
   assert.ok(labels().includes('plan:A'));
-  assert.deepEqual(out.ledger.filter((s) => s.wave === 0).map((s) => s.kind), ['verdict', 'over-budget-flagged']);
+  assert.deepEqual(out.unscribed.filter((s) => s.wave === 0).map((s) => s.kind), ['verdict', 'over-budget-flagged']);
   assert.equal(out.waves, 2);
   assert.equal(out.digest.waves, 0, 'silent waves leave no ledger entries; wave 0 is not counted');
 });

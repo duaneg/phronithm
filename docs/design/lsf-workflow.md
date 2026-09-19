@@ -355,13 +355,15 @@ drift is a control the design relies on alongside the stop rule.
 - **Live narration.** The script calls `log()` at every wave boundary with the
   counts by kind and source, the units merged, conflicts, and the re-plan's
   amendment summary, so the run is readable in `/workflows` while in flight.
-- **Return value.** Every workflow returns the full ledger and a digest,
-  whether it completed or stopped. The session presents the digest after every
-  run, not only on escalation: counts by kind, source and disposition, and
-  what deserves attention on a run that did not stop — the gate's
-  architecture notes, unfixed Significant findings per unit, and units that
-  showed distress. A clean completion is presented with the same digest and
-  the explicit note that silence is not evidence.
+- **Return value.** Every workflow returns, in this order, its status, the
+  escalation record when it stopped, the digest, and the ledger rows no
+  scribe committed; the ledger itself lives in the signals file. The session
+  presents the escalation's `decision_needed` first on a stop, and the digest
+  after every run, not only on escalation: counts by kind, source and
+  disposition, and what deserves attention on a run that did not stop — the
+  gate's architecture notes, unfixed Significant findings per unit, and
+  units that showed distress. A clean completion is presented with the same
+  digest and the explicit note that silence is not evidence.
 - **Decision log.** Requester decisions live in the repo
   (`docs/plans/<name>-decisions.md`) as a `\`\`\`yaml lsf-decisions` block,
   each linked from the ledger entry it resolved and referenced by SHA in the
