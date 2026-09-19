@@ -63,7 +63,7 @@ function defaults(plan) {
     'review-gate': () => ret({ invalidations: [], notes: [] }),
     replan: (p, o, u, state) => {
       state.plan = { ...state.plan, sha: `replan${++sha}`, units: state.plan.units.map((x) => ({ ...x, complete: state.completed.has(x.id) })) };
-      return ret({ planSha: state.plan.sha, amendments: [], overBudget: [], verdicts: verdictsFor(p, 'amended'), summary: 'no change' });
+      return ret({ planSha: state.plan.sha, amendments: [], overBudget: [], verdicts: verdictsFor(p, 'amended'), directEdits: [], summary: 'no change' });
     },
     ledger: () => ret({ path: 'docs/plans/f-signals.md', sha: 'l' }),
     termination: (p, o, u, state) => ret({ planSha: state.plan.sha, appendedUnits: [], directEdits: [] }),
@@ -71,7 +71,7 @@ function defaults(plan) {
     obligations: () => ret({ obligations: [] }),
     'decision-log': () => ret({ path: 'docs/plans/f-decisions.md', sha: 'dec1' }),
     'decision-replan': (p, o, u, state) => ret({ planSha: 'decided1', amendments: [{ kind: 'new-edge', unit: 'B', statement: 'B after A' }], overBudget: [],
-      verdicts: [...p.matchAll(/"id": "(d\d+)"/g)].map((m) => ({ id: m[1], verdict: 'amended', statement: 'edge added' })), summary: 'applied' }),
+      verdicts: [...p.matchAll(/"id": "(d\d+)"/g)].map((m) => ({ id: m[1], verdict: 'amended', statement: 'edge added' })), directEdits: [], summary: 'applied' }),
   };
 }
 
@@ -488,7 +488,7 @@ test('no ready unit because of an uncleared organisational gate stops', async ()
 
 test('termination appends meta units, which run as a further wave; direct edits are scribed', async () => {
   let terminated = false;
-  const { rt, labels } = runtime(graph('plan0', [unit('A')]), {
+  const { rt, calls, labels } = runtime(graph('plan0', [unit('A')]), {
     termination: (p, o, u, s) => {
       if (terminated) return ret({ planSha: s.plan.sha, appendedUnits: [], directEdits: [] });
       terminated = true;
@@ -504,6 +504,77 @@ test('termination appends meta units, which run as a further wave; direct edits 
   assert.ok(l.includes('implement:M'));
   assert.ok(l.includes('direct-edits'));
   assert.ok(l.indexOf('direct-edits') < l.indexOf('plan:M'));
+  assert.match(calls.find((c) => c.label === 'direct-edits').prompt, /termination stage[^]*README\.md[^]*mention M/);
+  assert.match(calls.find((c) => c.label === 'ledger:w2').prompt, /\| termination \| reported \| direct-edit \| mention M \| README\.md \| recorded \|/);
+  assert.deepEqual(out.digest.attention.directEdits, ['README.md — mention M']);
+});
+
+test('a re-plan\'s direct edits are made by a scribe before the load, recorded, and listed in the digest', async () => {
+  const edit = { path: 'src/A/README.md', description: 'note the widened signature' };
+  const { rt, calls, labels } = runtime(twoWaves(), {
+    replan: (p, o, u, state) => {
+      state.plan = { ...state.plan, sha: `replan-${state.completed.size}`, units: state.plan.units.map((x) => ({ ...x, complete: state.completed.has(x.id) })) };
+      return ret({ planSha: state.plan.sha, amendments: [], overBudget: [], verdicts: verdictsFor(p, 'amended'), directEdits: state.completed.size === 1 ? [edit] : [], summary: 's' });
+    },
+  });
+  const out = await run(rt);
+  assert.equal(out.status, 'complete', JSON.stringify(out.escalation?.signals));
+  const l = labels();
+  assert.ok(l.indexOf('replan:w1') < l.indexOf('direct-edits:w1'));
+  assert.ok(l.indexOf('direct-edits:w1') < l.indexOf('load:w1'));
+  assert.ok(l.indexOf('load:w1') < l.indexOf('plan:B'));
+  assert.ok(!l.includes('direct-edits:w2'));
+  const de = calls.find((c) => c.label === 'direct-edits:w1');
+  assert.match(de.prompt, /wave 1 re-plan/);
+  assert.match(de.prompt, /src\/A\/README\.md[^]*note the widened signature/);
+  assert.match(de.prompt, /@ replan-1/, 'the header names the re-planned SHA');
+  assert.equal(de.opts.phase, 'Re-plan');
+  assert.match(calls.find((c) => c.label === 'ledger:w1').prompt, /\| 1 \| — \| replan \| reported \| direct-edit \| note the widened signature \| src\/A\/README\.md \| recorded \|/);
+  assert.deepEqual(out.digest.attention.directEdits, ['src/A/README.md — note the widened signature']);
+  assert.match(calls.find((c) => c.label === 'replan:w1').prompt, /`directEdits`[^]*not made by the re-plan|not made by the re-plan[^]*`directEdits`/);
+});
+
+test('a null direct-edits return after a re-plan is a stop; a stopping wave still makes its edits', async () => {
+  const withEdit = (p) => ret({ planSha: 'replan-x', amendments: [], overBudget: [], verdicts: verdictsFor(p, 'amended'), directEdits: [{ path: 'docs/guide.md', description: 'g' }], summary: 's' });
+  const out = await run(runtime(twoWaves(), { replan: withEdit, 'direct-edits': () => null }).rt);
+  assert.equal(out.status, 'stopped');
+  assert.equal(out.escalation.stage, 'replan');
+  assert.deepEqual(out.escalation.signals.map((s) => [s.kind, s.stage, s.wave]), [['agent-null', 'direct-edits', 1]]);
+
+  const stopping = runtime(twoParallel(), {
+    replan: withEdit,
+    merge: () => ret({ integrationBranch: 'integration', merges: [
+      { unit: 'A', status: 'unresolvable', files: ['src/x.js'] },
+      { unit: 'B', status: 'clean', files: [], sha: 'mb' },
+    ], planSha: 'm1' }),
+  });
+  const outS = await run(stopping.rt);
+  assert.equal(outS.status, 'stopped');
+  assert.deepEqual(outS.escalation.signals.map((s) => s.kind), ['merge-conflict-unresolvable']);
+  assert.ok(stopping.labels().includes('direct-edits:w1'), 'the edits are made before the stop');
+  assert.match(stopping.calls.find((c) => c.label === 'ledger:w1').prompt, /direct-edit \| g \| docs\/guide\.md \| recorded/);
+});
+
+test('a decision re-plan\'s direct edits run before load at wave 0, and a null return stops there', async () => {
+  const decisionsBlock = ['```yaml lsf-decisions', 'decisions:', '  - id: d1', '    date: 2026-09-19', '    question: q', '    decision: file it', '```'].join('\n');
+  const decided = (directEdits) => () => ret({ planSha: 'decided1', amendments: [], overBudget: [], verdicts: [{ id: 'd1', verdict: 'amended', statement: 'row filed' }], directEdits, summary: 's' });
+  const decisions = [{ id: 'd1', question: 'q', decision: 'file it' }];
+  const { rt, calls, labels } = runtime(twoWaves(), {
+    load: (p, o, u, st) => copied(st.plan, { decisionsBlock }),
+    'decision-replan': decided([{ path: 'docs/debt.md', description: 'file the D7 row' }]),
+    ledger: () => null,
+  }, { decisions });
+  const out = await run(rt);
+  assert.equal(out.status, 'complete', JSON.stringify(out.escalation?.signals));
+  assert.deepEqual(labels().slice(0, 4), ['decision-log', 'decision-replan', 'direct-edits:w0', 'ledger:w0']);
+  assert.match(calls[1].prompt, /`directEdits`[^]*not made by the re-plan|not made by the re-plan[^]*`directEdits`/);
+  assert.match(calls[2].prompt, /decision re-plan[^]*docs\/debt\.md[^]*file the D7 row/);
+  assert.deepEqual(out.unscribed.filter((s) => s.wave === 0).map((s) => [s.stage, s.kind, s.referent]), [['decision-replan', 'verdict', 'd1'], ['decision-replan', 'direct-edit', 'docs/debt.md']]);
+
+  const nul = await run(runtime(twoWaves(), { 'decision-replan': decided([{ path: 'docs/debt.md', description: 'd' }]), 'direct-edits': () => null }, { decisions }).rt);
+  assert.equal(nul.status, 'stopped');
+  assert.equal(nul.escalation.stage, 'decision-replan');
+  assert.deepEqual(nul.escalation.signals.map((s) => [s.kind, s.stage, s.wave]), [['agent-null', 'direct-edits', 0]]);
 });
 
 test('an undischarged standing obligation at termination stops', async () => {

@@ -384,7 +384,8 @@ function renderLedger(entries, wave) {
 
 // Counts by kind, source, and disposition, plus what deserves the
 // requester's attention on a run that did not stop: architecture notes,
-// unfixed Significant findings per unit, and units that showed distress.
+// unfixed Significant findings per unit, units that showed distress, and
+// the edits made without a gate.
 function digest(ledger) {
   // Wave 0 is the decision re-plan before load, not a wave of units.
   const waves = [...new Set(ledger.map((s) => s.wave).filter((w) => w !== undefined && w > 0))].sort((a, b) => a - b);
@@ -402,6 +403,7 @@ function digest(ledger) {
       architectureAmendments: ledger.filter((s) => s.kind === 'architecture-amendment').map((s) => s.statement),
       unfixedSignificant,
       distressedUnits: [...new Set(ledger.filter((s) => s.kind === 'execution-distress').map((s) => s.unit))],
+      directEdits: ledger.filter((s) => s.kind === 'direct-edit').map((s) => `${s.referent} — ${s.statement}`),
     },
     note: 'Silence is not evidence: reported-signal recall on premise-level defects is near zero.',
   };

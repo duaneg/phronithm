@@ -262,6 +262,16 @@ invalidates a decision; routing such a note back to the requester as an
 unabsorbed defect asked for a decision that was not there. A correction that
 would change what a section decides is `cannot`.
 
+The re-plan writes those two documents and nothing else. An item whose
+remedy is text elsewhere — a comment, a figure in a completion report or
+the debt register, a register row to file — goes to a remaining unit's done
+condition where one's Scope covers the file; otherwise, where it changes no
+behaviour and no test, the re-plan returns it under `directEdits` and a
+scribe stage makes and commits it after the re-plan; where it does, a unit
+is added. The termination stage's small meta-tasks take the same route.
+Direct edits pass no gate, so the ledger records each with its path and
+the digest lists them.
+
 **A unit over its size budget stops only when neither repair applies.** The
 re-plan reports each over-budget unit with a disposition: `extracted` (a
 preceding design unit carries the excess), `flagged` (the excess is
@@ -365,9 +375,10 @@ drift is a control the design relies on alongside the stop rule.
   presents the escalation's `decision_needed` first on a stop, and the digest
   after every run, not only on escalation: counts by kind, source and
   disposition, and what deserves attention on a run that did not stop — the
-  gate's architecture notes, unfixed Significant findings per unit, and
-  units that showed distress. A clean completion is presented with the same
-  digest and the explicit note that silence is not evidence.
+  gate's architecture notes, unfixed Significant findings per unit, units
+  that showed distress, and every direct edit made without a gate. A clean
+  completion is presented with the same digest and the explicit note that
+  silence is not evidence.
 - **Decision log.** Requester decisions live in the repo
   (`docs/plans/<name>-decisions.md`) as a `\`\`\`yaml lsf-decisions` block,
   each linked from the ledger entry it resolved and referenced by SHA in the
@@ -522,8 +533,8 @@ effort; gate (the wave gate alone) runs opus at medium effort;
 planning (unit plan, re-plan, termination) runs opus at high effort;
 mechanical (plan-block copy, decision-log and ledger appends) runs haiku at
 low effort, since the script has already rendered what they write and the
-parser checks it on the next load; everything else, including termination's
-direct edits to the plan, runs opus at low effort.
+parser checks it on the next load; everything else, including the direct
+edits the re-plan and termination stages return, runs opus at low effort.
 
 ## Open questions
 

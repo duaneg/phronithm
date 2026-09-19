@@ -42,6 +42,7 @@ const RECORD_KINDS = Object.freeze([
   'over-budget-repaired', // re-plan: a preceding design unit extracted
   'over-budget-flagged', // re-plan: excess is wall-clock, not context; flagged with rationale
   'standing-obligation-carried', // obligations: discharge lies outside this plan by the obligation's own terms, and the referent names where it is now recorded
+  'direct-edit', // re-plan or termination: an edit outside the plan, made by a scribe stage without a gate; the referent is the path
 ]);
 
 const SOURCES = Object.freeze(['structural', 'reported', 'gate']);

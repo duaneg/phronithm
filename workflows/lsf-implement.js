@@ -62,6 +62,7 @@ const RECORD_KINDS = Object.freeze([
   'over-budget-repaired', // re-plan: a preceding design unit extracted
   'over-budget-flagged', // re-plan: excess is wall-clock, not context; flagged with rationale
   'standing-obligation-carried', // obligations: discharge lies outside this plan by the obligation's own terms, and the referent names where it is now recorded
+  'direct-edit', // re-plan or termination: an edit outside the plan, made by a scribe stage without a gate; the referent is the path
 ]);
 
 const SOURCES = Object.freeze(['structural', 'reported', 'gate']);
@@ -970,7 +971,8 @@ function renderLedger(entries, wave) {
 
 // Counts by kind, source, and disposition, plus what deserves the
 // requester's attention on a run that did not stop: architecture notes,
-// unfixed Significant findings per unit, and units that showed distress.
+// unfixed Significant findings per unit, units that showed distress, and
+// the edits made without a gate.
 function digest(ledger) {
   // Wave 0 is the decision re-plan before load, not a wave of units.
   const waves = [...new Set(ledger.map((s) => s.wave).filter((w) => w !== undefined && w > 0))].sort((a, b) => a - b);
@@ -988,6 +990,7 @@ function digest(ledger) {
       architectureAmendments: ledger.filter((s) => s.kind === 'architecture-amendment').map((s) => s.statement),
       unfixedSignificant,
       distressedUnits: [...new Set(ledger.filter((s) => s.kind === 'execution-distress').map((s) => s.unit))],
+      directEdits: ledger.filter((s) => s.kind === 'direct-edit').map((s) => `${s.referent} — ${s.statement}`),
     },
     note: 'Silence is not evidence: reported-signal recall on premise-level defects is near zero.',
   };
@@ -1175,6 +1178,7 @@ const REPLAN_SCHEMA = stageSchema(obj({
     verdict: { type: 'string', enum: ['amended', 'no-change', 'document-text', 'cannot'] },
     statement: { ...str, description: 'What was amended, why the plan already answers it, what wording in the architecture document was corrected, or why the plan cannot absorb it' },
   })),
+  directEdits: arr(obj({ path: str, description: str })),
   summary: str,
 }));
 
@@ -1395,6 +1399,9 @@ Do not re-evaluate the units' done conditions or review findings: the unit stage
 ${RETURN_FIELDS}`;
 }
 
+// What the re-plan writes, and where an edit anywhere else goes instead.
+const replanBoundary = (subject) => `The re-plan writes two documents: the plan, and under \`document-text\` the architecture document. ${subject} whose remedy is text elsewhere — a comment or docstring, a figure in a completion report or the debt register, a guide sentence, a register row to file — is not made by the re-plan: where a remaining unit's Scope covers the file, amend that unit's done condition (\`amended\`); where none does and the edit changes no behaviour and no test, return it under \`directEdits\` (path, what to change) with the verdict \`amended\` — a scribe stage makes and commits it after this re-plan and the ledger records each; where it changes behaviour or a test, add a unit (\`unit-added\`).`;
+
 function replanPrompt(ctx, plan, wave, merged, conflicts, items, records, stops) {
   return `${header(ctx, plan)}
 
@@ -1403,6 +1410,8 @@ You are in the main checkout on ${ctx.integrationBranch}. Run the phronithm:brea
 Items this wave, each with an id — deferrals, discoveries, claimed-disjoint conflicts, the gate's notes, and distress. Each is yours to absorb: amend the plan (a Scope or Publishes line, a done condition, an edge, the execution order, a unit added), or show the plan as it stands already answers it. Return a verdict for every id: \`amended\`, \`no-change\` (with what in the plan answers it), \`document-text\`, or \`cannot\` (with why the plan cannot absorb it — the answer changes a decision in the architecture document or the request record, or needs the requester). An id you do not answer is treated as \`cannot\` and stops the run.
 
 \`document-text\` is for a gate note whose only remedy is wording in the architecture document and that moves no decision — a resolved unknown still marked open, a measured figure replacing an estimate, a named accessor or signature the code settled. Make that correction in the document, commit it, and put the section and the new wording in the verdict statement. A correction that would change what a section decides is not text; that is \`cannot\`.
+
+${replanBoundary('An item')}
 ${items.length ? JSON.stringify(items, null, 2) : 'none'}
 
 Merge conflicts: ${conflicts.length ? JSON.stringify(conflicts, null, 2) : 'none'}
@@ -1411,7 +1420,7 @@ ${stops.length ? `
 The run stops after this re-plan on the signals below; they go to the requester. Do not amend the plan for them — no edge, scope, or order change on their account — and leave every unit they name as it is: its branch is unmerged and it stays incomplete. Absorb the merged units' reports as above.
 ${JSON.stringify(stops.map(({ kind, unit, stage, statement, referent }) => ({ kind, unit, stage, statement, referent })), null, 2)}
 ` : ''}
-Every amendment to a unit's type, dependencies, scope, publishes, gates, or completion, and to the execution order, is made in both the unit's entry and the plan's \`\`\`yaml lsf-plan block, which must agree; the script reads the block. Commit the amended plan on ${ctx.integrationBranch}. Return the new plan SHA; each amendment with its kind (${AMENDMENT_KINDS.join(', ')}), unit, and statement; a verdict per item id; and every remaining unit over its size budget with its disposition: \`extracted\` (a preceding design unit now carries the excess), \`flagged\` (the excess is wall-clock, not context, and the unit carries the rationale — breakdown's size budget discharges it), or \`unrepaired\`. A flag already on the unit from an earlier pass stands unless the unit's scope has grown since; report it as \`flagged\`. Do not answer whether the architecture document still stands — the gate did. Do not select or execute any unit.
+Every amendment to a unit's type, dependencies, scope, publishes, gates, or completion, and to the execution order, is made in both the unit's entry and the plan's \`\`\`yaml lsf-plan block, which must agree; the script reads the block. Commit the amended plan on ${ctx.integrationBranch}. Return the new plan SHA; each amendment with its kind (${AMENDMENT_KINDS.join(', ')}), unit, and statement; a verdict per item id; \`directEdits\` (an empty array when none); and every remaining unit over its size budget with its disposition: \`extracted\` (a preceding design unit now carries the excess), \`flagged\` (the excess is wall-clock, not context, and the unit carries the rationale — breakdown's size budget discharges it), or \`unrepaired\`. A flag already on the unit from an earlier pass stands unless the unit's scope has grown since; report it as \`flagged\`. Do not answer whether the architecture document still stands — the gate did. Do not select or execute any unit.
 ${RETURN_FIELDS}`;
 }
 
@@ -1419,9 +1428,11 @@ function decisionReplanPrompt(ctx, plan, decisions) {
   return `${header(ctx, plan)}
 
 You are in the main checkout on ${ctx.integrationBranch}. The requester has answered the questions the last run stopped on; the answers are in the decision log at the SHA above. Run the phronithm:breakdown skill in re-plan mode over ${plan.path} with these decisions as the input: apply each to the plan (a Scope or Publishes line, a done condition, an edge, the execution order, a unit added or removed), re-run the quality check over the remaining units, and record every amendment in Plan Maintenance citing the decision id. Return a verdict for every decision id: \`amended\`, \`no-change\` (with what in the plan already reflects it), \`document-text\` (the decision only corrects wording in the architecture document; make the correction, commit it, and state the section), or \`cannot\` (with why the plan cannot carry it out — it changes a decision in the architecture document or the request record, or is not a plan matter). An id you do not answer is treated as \`cannot\` and stops the run. Report any remaining unit over its size budget with its disposition — \`extracted\`, \`flagged\` (a flag with wall-clock rationale, standing or new), or \`unrepaired\`.
+
+${replanBoundary('A decision')}
 ${JSON.stringify(decisions, null, 2)}
 
-Every amendment to a unit's type, dependencies, scope, publishes, gates, or completion, and to the execution order, is made in both the unit's entry and the plan's \`\`\`yaml lsf-plan block, which must agree; the script reads the block. Commit on ${ctx.integrationBranch} and return the new plan SHA (the SHA given when nothing changed), each amendment with its kind (${AMENDMENT_KINDS.join(', ')}), unit, and statement, and a verdict per decision id. Do not select or execute any unit.
+Every amendment to a unit's type, dependencies, scope, publishes, gates, or completion, and to the execution order, is made in both the unit's entry and the plan's \`\`\`yaml lsf-plan block, which must agree; the script reads the block. Commit on ${ctx.integrationBranch} and return the new plan SHA (the SHA given when nothing changed), each amendment with its kind (${AMENDMENT_KINDS.join(', ')}), unit, and statement, a verdict per decision id, and \`directEdits\` (an empty array when none). Do not select or execute any unit.
 ${RETURN_FIELDS}`;
 }
 
@@ -1432,10 +1443,10 @@ You are in the main checkout on ${ctx.integrationBranch}. Every work unit in ${p
 ${RETURN_FIELDS}`;
 }
 
-function directEditsPrompt(ctx, plan, edits) {
+function directEditsPrompt(ctx, plan, what, edits) {
   return `${header(ctx, plan)}
 
-You are in the main checkout on ${ctx.integrationBranch}. Make these small meta-task edits from the plan's Meta-Tasks section, commit them with the project's commit discipline, and return the path of the plan and the final commit SHA:
+You are in the main checkout on ${ctx.integrationBranch}. Make these small edits, which the ${what} returned as outside the plan; commit them with the project's commit discipline, and return the path of the plan and the final commit SHA:
 
 ${JSON.stringify(edits, null, 2)}
 ${RETURN_FIELDS}`;
@@ -1747,6 +1758,16 @@ async function run(runtime) {
     });
   };
   const stopOn = stopped;
+  // Edits a planning stage returned as outside the plan: one scribe makes
+  // and commits them, and the ledger records each against the stage that
+  // asked. Returns the signals; the caller evaluates them.
+  const applyDirectEdits = async (at, edits = [], what, { stage, wave: w, phase }) => {
+    if (!edits.length) return [];
+    const label = w === undefined ? 'direct-edits' : `direct-edits:w${w}`;
+    const r = await agent(directEditsPrompt(ctx, at, what, edits), { label, ...tier(ctx, 'default'), phase, schema: SCRIBE_SCHEMA });
+    if (!r) return [nullReturnSignal({ stage: 'direct-edits', wave: w })];
+    return edits.map((e) => signal({ kind: 'direct-edit', source: 'reported', stage, wave: w, statement: e.description, referent: e.path }));
+  };
 
   // Decisions handed back by the requester go into the repo first, so the
   // SHA can appear in every prompt they affect.
@@ -1762,6 +1783,7 @@ async function run(runtime) {
     const rp = await agent(decisionReplanPrompt(ctx, plan, items), { label: 'decision-replan', ...tier(ctx, 'planning'), phase: 'Load', schema: REPLAN_SCHEMA });
     if (!rp) return stopOn('decision-replan', [nullReturnSignal({ stage: 'decision-replan' })]);
     const sigs = replanSignals(rp.result, items, { stage: 'decision-replan', wave: 0, ledger }, (it) => it.question);
+    sigs.push(...await applyDirectEdits({ ...plan, sha: rp.result.planSha }, rp.result.directEdits, 'decision re-plan', { stage: 'decision-replan', wave: 0, phase: 'Load' }));
     const ev = evaluateWave(sigs);
     ledger.push(...ev.all);
     if (ev.stop) return stopped('decision-replan', ev.stops, { planSha: rp.result.planSha, preReplanSha: plan.sha });
@@ -1832,10 +1854,9 @@ async function run(runtime) {
       ledger.push(...termEval.all);
       if (termEval.stop) return stopped('termination', termEval.stops);
       plan = re.plan;
-      if (term.result.directEdits.length) {
-        const edits = await agent(directEditsPrompt(ctx, plan, term.result.directEdits), { label: 'direct-edits', ...tier(ctx, 'default'), phase: 'Termination', schema: SCRIBE_SCHEMA });
-        if (!edits) return stopOn('direct-edits', [nullReturnSignal({ stage: 'direct-edits' })]);
-      }
+      const editEval = evaluateWave(await applyDirectEdits(plan, term.result.directEdits, 'termination stage (the plan\'s Meta-Tasks section)', { stage: 'termination', phase: 'Termination' }));
+      ledger.push(...editEval.all);
+      if (editEval.stop) return stopped('direct-edits', editEval.stops);
       log(`termination: ${term.result.appendedUnits.length} meta unit(s) appended, ${term.result.directEdits.length} direct edit(s)`);
       continue;
     }
@@ -1910,6 +1931,9 @@ async function run(runtime) {
       replanSigs.push(nullReturnSignal({ stage: 'replan', wave }));
     } else {
       replanSigs.push(...replanSignals(rp.result, items, { stage: 'replan', wave, ledger }, (it) => `[${it.stage}] ${it.kind}: ${it.statement}`, (it, i) => itemSignals[i].referent));
+      // Before the load, and on a stopping wave too, so the edits are not
+      // lost with the stop.
+      replanSigs.push(...await applyDirectEdits({ ...plan, sha: rp.result.planSha }, rp.result.directEdits, `wave ${wave} re-plan`, { stage: 'replan', wave, phase: 'Re-plan' }));
       const re = await loadPlan(rp.result.planSha, `load:w${wave}`, wave);
       replanSigs.push(...re.stops);
       if (re.plan) nextPlan = re.plan;
