@@ -48,7 +48,7 @@ Then confirm the workflow's preconditions from the shell, not from memory:
 2. The plan at the SHA to launch from has a `yaml lsf-plan` block with a closing fence: `git show <sha>:<plan-path> | grep -n 'lsf-plan'`, then check the fence after it. A plan drafted before the block existed needs `phronithm:breakdown` re-plan mode run once to add it, committed, before launch.
 3. The decision log, if it exists, has a `yaml lsf-decisions` block with a closing fence (`tail -n 3`), and its SHA is `git rev-list -1 <branch> -- <path>`.
 4. `git worktree list` shows no stale `.claude/worktrees/wf_*` entries with unmerged work from a run the requester has abandoned. Leave entries from a run being resumed.
-5. `wc -c CLAUDE.md` in the target project. This step never blocks a launch; it is a report. The harness injects the file into every agent the workflow spawns, so its size is part of every agent's floor before the first read: roughly 2.5k tokens per 10 KB (cartomancer-v2, 2026-09-19: the file grew from 92 KB to 141 KB and moved the floor by about 12k tokens). Report the size and the tokens it implies per agent; above 40 KB — about 10k tokens on every agent — say so plainly. Do not trim it — that is the project's call, outside this skill.
+5. `wc -c CLAUDE.md` in the target project. This step never blocks a launch; it is a report. The harness injects the file into every agent the workflow spawns, so its size is part of every agent's floor before the first read: roughly 2.5k tokens per 10 KB. Report the size and the tokens it implies per agent; above 40 KB — about 10k tokens on every agent — say so. Do not trim it — that is the project's call, outside this skill.
 
 Which script to launch: `name: 'phronithm:lsf-implement'` when the plugin is installed and the session started after the last change to `workflows/lsf-implement.js`; otherwise `scriptPath: ${CLAUDE_PLUGIN_ROOT}/workflows/lsf-implement.js`, absolute, since the session's cwd is the target project. The plugin's copy is cached at session start and does not pick up rebuilds mid-session.
 
@@ -143,7 +143,7 @@ Never finish a unit, a re-plan, or a termination stage by hand to recover a run.
 
 ### Return to Phase 2
 
-`lsf-architecture` does not exist. A stop in the first row of the relaunch table is handled in a fresh session by `phronithm:large-scale-feature` Phase 2, with the stop's signals and the requester's decision as the input to the document amendment. That pass also does what the design's *Relaunch target* section assigns to the reconcile stage: for each merged unit, record whether it stands under the amended architecture or is superseded, before `phronithm:breakdown` runs fresh against the amended document with the integration branch as its codebase. Present this startup prompt in a fenced code block and wait:
+A stop in the first row of the relaunch table is handled in a fresh session by `phronithm:large-scale-feature` Phase 2, with the stop's signals and the requester's decision as the input to the document amendment. That pass also does what the design's *Relaunch target* section assigns to the reconcile stage: for each merged unit, record whether it stands under the amended architecture or is superseded, before `phronithm:breakdown` runs fresh against the amended document with the integration branch as its codebase. Present this startup prompt in a fenced code block and wait:
 
 ```
 Load the phronithm:large-scale-feature skill and re-enter Phase 2 after a phronithm:lsf-implement stop.
