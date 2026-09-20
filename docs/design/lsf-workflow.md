@@ -136,16 +136,23 @@ carries its own unit plan template and stages instead:
    environment gates against their plan-time pins (drift is a STOP signal, see
    Stop rule); resets its worktree to the integration branch; executes the
    plan single-shot, with no per-step critique loop; commits on its branch;
-   returns branch, path, and the completion-report fields: deviations,
-   files written outside the Scope line, deferrals with the receiving unit,
-   discoveries with the unit or architecture section they affect, distress
-   counts, the done-condition verdict.
+   runs the project's gates once at its final HEAD; returns branch, path,
+   the gate runs (command, status, one-line summary), and the
+   completion-report fields: deviations, files written outside the Scope
+   line, deferrals with the receiving unit, discoveries with the unit or
+   architecture section they affect, distress counts, the done-condition
+   verdict.
 4. **review** stage over the branch diff: one critique-code gate at the
    Critical-only bar and lens review per unit type, in parallel. No separate
    static-analysis stage: the project's own gates (linters, type checks) run
    in the implement stage, whose done conditions require them green, and
-   again after each merge. The code critique evaluates the done condition under the plan's
-   readings; an unmet condition, or a reading the code does not bear out, is
+   again after each merge. Both reviewers are given the implement stage's
+   gate runs and take them as the test and lint result: no suite, CI job, or
+   lint pass of their own, a single targeted test only to check a finding's
+   claim (in a compiled project the two suite re-runs cost more of the
+   reviewers' wall-clock than the review). The code critique evaluates the
+   done condition under the plan's readings from the code and those gate
+   runs; an unmet condition, or a reading the code does not bear out, is
    Critical. Significant and Minor findings are recorded, not fixed.
 5. **completion-report** is rendered by the script from the implement and
    review returns — summary, done-condition verdict and evidence, deviations
@@ -524,8 +531,9 @@ defined shapes:
   `document-oversize` ledger row. A ceiling in the prompt made the plan stage
   trim by dozens of edits, at more cost than the readers it saved, so the
   script records size and never enforces it.
-- **implement**: `deviations`, `writesOutsideScope`, `deferrals: [{ statement,
-  belongsTo }]`, `discoveries: [{ statement, affects }]`, `distress`,
+- **implement**: `gates: [{ command, status, summary }]`, `deviations`,
+  `writesOutsideScope`, `deferrals: [{ statement, belongsTo }]`,
+  `discoveries: [{ statement, affects }]`, `distress`,
   `doneCondition: { evaluable, met, evidence }`.
 - **review stages**: `findings: [{ severity, statement, location }]`, `systemic`.
 - **fix**: `applied`, `notApplied: [{ finding, reason }]`.

@@ -1197,9 +1197,16 @@ const FIX_SCHEMA = stageSchema(obj({
   notApplied: arr(obj({ finding: str, reason: str })),
 }));
 
+const GATE_RUN_SCHEMA = obj({
+  command: str,
+  status: { type: 'string', enum: ['green', 'red', 'not-run'] },
+  summary: { ...str, description: 'One line: counts, or what failed' },
+});
+
 const IMPLEMENT_SCHEMA = stageSchema(obj({
   ...COMMIT_FIELDS,
   gateProbe: arr(obj({ name: str, pin: str, observed: str, drifted: bool })),
+  gates: { ...arr(GATE_RUN_SCHEMA), description: 'The project\'s gates — the test suite and whatever else its own instructions name (linters, type checks) — as last run at HEAD' },
   distress: DISTRESS_SCHEMA,
   deviations: { ...strings, description: 'Departures from the unit entry\'s scope or publishes, one statement each' },
   writesOutsideScope: { ...strings, description: 'Files changed that the unit entry\'s Scope line does not name' },
@@ -1376,7 +1383,7 @@ Critique gate round ${round} found these Critical findings against the ${subject
 
 ${JSON.stringify(criticals, null, 2)}
 
-Fix each finding that is repairable within the ${subject}, then commit. A finding you decline to fix — because the repair would change the unit entry, the architecture document, or the request record, or because you cannot repair it — goes under \`notApplied\` with the reason. The run stops on a declined finding and the requester decides, so decline only when the repair is genuinely outside the ${subject}. ${subject === 'plan' ? `The plan is docs/plans/${unit.id}-plan.md on this branch. Repair the findings; do not shorten the plan to length.` : 'Run the tests after fixing; a fix that breaks a test is not applied.'}
+Fix each finding that is repairable within the ${subject}, then commit. A finding you decline to fix — because the repair would change the unit entry, the architecture document, or the request record, or because you cannot repair it — goes under \`notApplied\` with the reason. The run stops on a declined finding and the requester decides, so decline only when the repair is genuinely outside the ${subject}. ${subject === 'plan' ? `The plan is docs/plans/${unit.id}-plan.md on this branch. Repair the findings; do not shorten the plan to length.` : 'Run the tests the fix touches as you go, then the project\'s gates once at the end; a fix that breaks a test is not applied.'}
 ${RETURN_FIELDS}`;
 }
 
@@ -1390,25 +1397,39 @@ Implementation plan: docs/plans/${unit.id}-plan.md on this branch. Hold to its R
 
 First re-probe every external gate in the unit entry against its plan-time pin: probe environment gates mechanically (binaries and versions, fonts, services, accounts, data sets); organisational and release gates are already cleared per the decision log and need no probe. Report each under \`gateProbe\`. If any gate has drifted, implement nothing — return the probe results with every other \`result\` field empty, zero, or false, and stop.
 
-Otherwise execute the plan in full, single-shot, committing as you go with the project's commit discipline. There is no per-step critique here, and no implementation summary document: the completion report a later stage writes from your return is that record, so do not write \`docs/plans/${unit.id}-implementation.md\` even if the plan text mentions one. Then evaluate the done condition exactly as written, under the plan's readings, and report whether it is evaluable in position and whether it is met, with evidence. Record as they arise: deviations from the unit entry's scope or publishes; the files you changed that the Scope line does not name, under \`writesOutsideScope\`; deferrals — work in scope deliberately not implemented, naming the unit it belongs to; discoveries — anything you learned that changes another unit's scope, dependencies, or done condition, or that the architecture document states otherwise, naming the unit or the section; the status of each standing obligation the unit carries. Report execution distress honestly: whether context is near exhaustion, how many design decisions you took mid-implementation, the deviation and deferral counts.
+Otherwise execute the plan in full, single-shot, committing as you go with the project's commit discipline. There is no per-step critique here, and no implementation summary document: the completion report a later stage writes from your return is that record, so do not write \`docs/plans/${unit.id}-implementation.md\` even if the plan text mentions one. Run the project's gates — the test suite and whatever else the project's own instructions name (linters, type checks) — once at your final HEAD and report each under \`gates\` with its command, status, and a one-line summary; the review stages take this as the test result and do not re-run the suite. Then evaluate the done condition exactly as written, under the plan's readings, and report whether it is evaluable in position and whether it is met, with evidence. Record as they arise: deviations from the unit entry's scope or publishes; the files you changed that the Scope line does not name, under \`writesOutsideScope\`; deferrals — work in scope deliberately not implemented, naming the unit it belongs to; discoveries — anything you learned that changes another unit's scope, dependencies, or done condition, or that the architecture document states otherwise, naming the unit or the section; the status of each standing obligation the unit carries. Report execution distress honestly: whether context is near exhaustion, how many design decisions you took mid-implementation, the deviation and deferral counts.
 ${RETURN_FIELDS}`;
 }
 
-function codeCritiquePrompt(ctx, plan, unit, branch, round) {
+// The implement stage ran the gates once at HEAD; the reviewers read the
+// result instead of re-running the suite, which in a compiled project cost
+// more of their wall-clock than the review itself.
+const renderGates = (gates) => (gates?.length ? gates.map((g) => `- \`${g.command}\` — ${g.status}${g.summary ? `: ${g.summary}` : ''}`).join('\n') : '- none reported');
+function gateResults(gates) {
+  return `The implement stage ran the project's gates at this branch's HEAD:
+${renderGates(gates)}
+Take that as the test and lint result. Do not run the whole suite, the project's CI job, or a lint pass; run a single targeted test only to check a specific claim of a finding, and name the test in the finding.${gates?.length ? '' : ' If no gate is listed above, run the project\'s gates once and treat the result as the implement stage\'s.'}`;
+}
+
+function codeCritiquePrompt(ctx, plan, unit, branch, round, gates) {
   return `${header(ctx, plan)}
 ${worktree(branch)}
 
 ${unitBlock(plan, unit)}
 
-Run the phronithm:critique skill with type critique-code over this branch's diff against ${ctx.integrationBranch} (\`git diff ${ctx.integrationBranch}...HEAD\`), reading surrounding code as needed. This is round ${round} of the critique gate. Pass bar: no Critical findings. Also evaluate the unit's done condition against this branch under the readings in docs/plans/${unit.id}-plan.md; a done condition that is not met, or a reading the code does not bear out, is a Critical finding. Set \`systemic\` when the findings indicate a structural defect that iteration will not resolve. Do not modify anything and do not spawn subagents. Continue through to completion — do not stop to wait for instruction.
+${gateResults(gates)}
+
+Run the phronithm:critique skill with type critique-code over this branch's diff against ${ctx.integrationBranch} (\`git diff ${ctx.integrationBranch}...HEAD\`), reading surrounding code as needed. This is round ${round} of the critique gate. Pass bar: no Critical findings. Also evaluate the unit's done condition against this branch under the readings in docs/plans/${unit.id}-plan.md, from the code and the gate results above; a done condition that is not met, or a reading the code does not bear out, is a Critical finding. Set \`systemic\` when the findings indicate a structural defect that iteration will not resolve. Do not modify anything and do not spawn subagents. Continue through to completion — do not stop to wait for instruction.
 ${RETURN_FIELDS}`;
 }
 
-function lensReviewPrompt(ctx, plan, unit, branch, lenses, round) {
+function lensReviewPrompt(ctx, plan, unit, branch, lenses, round, gates) {
   return `${header(ctx, plan)}
 ${worktree(branch)}
 
 ${unitBlock(plan, unit)}
+
+${gateResults(gates)}
 
 Run the phronithm:review skill over this branch's diff against ${ctx.integrationBranch} through these lenses: ${lenses.join(', ')}. Round ${round} of the review gate. Return each finding with a severity; a finding is Critical only when it would be wrong to merge without fixing it. Do not modify anything and do not spawn subagents.
 ${RETURN_FIELDS}`;
@@ -1447,6 +1468,7 @@ function renderCompletionReport(ctx, unit, wave, branch, impl, review) {
     '',
     `**${dc.met ? 'Met' : 'Not met'}**${dc.evaluable === false ? ' (not evaluable as written)' : ''}. ${dc.evidence ?? ''}`.trimEnd(),
     ...(probes.length ? ['', `External gates re-verified: ${probes.map((g) => `${g.name} pinned ${g.pin}, observed ${g.observed}`).join('; ')}.`] : []),
+    ...(impl.gates?.length ? ['', 'Gates at HEAD:', '', renderGates(impl.gates)] : []),
     '',
     '## Deviations and writes outside Scope',
     '',
@@ -1731,8 +1753,8 @@ async function runUnit(rt, ctx, plan, unit, wave) {
       const reviewers = unit.type === 'design'
         ? [['critique-design', designCritiquePrompt(ctx, plan, unit, branch, n)]]
         : [
-          ['critique-code', codeCritiquePrompt(ctx, plan, unit, branch, n)],
-          ...(lenses.length ? [['lens-review', lensReviewPrompt(ctx, plan, unit, branch, lenses, n)]] : []),
+          ['critique-code', codeCritiquePrompt(ctx, plan, unit, branch, n, impl.result.gates)],
+          ...(lenses.length ? [['lens-review', lensReviewPrompt(ctx, plan, unit, branch, lenses, n, impl.result.gates)]] : []),
         ];
       const rets = await rt.parallel(reviewers.map(([stage, prompt]) => () =>
         rt.agent(prompt, opts(`${stage}:r${n}`, { isolation: 'worktree', schema: FINDINGS_SCHEMA, ...tier(ctx, 'critique') }))));

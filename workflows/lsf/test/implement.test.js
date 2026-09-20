@@ -32,7 +32,8 @@ const copied = (plan, extra = {}) => ret({ planBlock: toBlock(plan), decisionsBl
 
 const NO_DISTRESS = { contextNearExhaustion: false, midImplementationDesignDecisions: 0, deviations: 0, deferrals: 0 };
 const implemented = (u, over = {}) => ({
-  branch: `impl-${u}`, sha: 'i', gateProbe: [], distress: NO_DISTRESS, deviations: [], writesOutsideScope: [], deferrals: [], discoveries: [],
+  branch: `impl-${u}`, sha: 'i', gateProbe: [], gates: [{ command: 'pytest -q', status: 'green', summary: '412 passed' }, { command: 'ruff check .', status: 'green', summary: '' }],
+  distress: NO_DISTRESS, deviations: [], writesOutsideScope: [], deferrals: [], discoveries: [],
   doneCondition: { evaluable: true, met: true, evidence: 'tests pass' }, standingObligations: [], summary: 'done', ...over,
 });
 // Ids of the re-plan items in a re-plan prompt, each given the same verdict.
@@ -291,6 +292,15 @@ test('unit stages extract their entry and obligations by command; the plan and r
   assert.match(plan, /\*\*Context\*\* — the architecture sections relied on, by heading\.\n/);
   assert.doesNotMatch(plan, /by their text|self-contained/);
   assert.match(plan, /not the plan text/);
+  const impl = calls.find((c) => c.label === 'implement:A').prompt;
+  assert.match(impl, /Run the project's gates[^]*once at your final HEAD and report each under `gates`/);
+  for (const l of ['critique-code:r1:A', 'lens-review:r1:A']) {
+    const p = calls.find((c) => c.label === l).prompt;
+    assert.match(p, /ran the project's gates at this branch's HEAD:\n- `pytest -q` — green: 412 passed\n- `ruff check \.` — green\n/, l);
+    assert.match(p, /Do not run the whole suite, the project's CI job, or a lint pass; run a single targeted test only/, l);
+    assert.doesNotMatch(p, /If no gate is listed/, l);
+  }
+  assert.match(calls.find((c) => c.label === 'critique-code:r1:A').prompt, /from the code and the gate results above/);
   const r1 = calls.find((c) => c.label === 'critique-plan:r1:A').prompt;
   const r2 = calls.find((c) => c.label === 'critique-plan:r2:A').prompt;
   assert.match(r1, /git show plan-A:docs\/plans\/A-plan\.md/);
@@ -352,6 +362,14 @@ test('an invalidation missing a field, and every note, is recorded and handed to
   assert.doesNotMatch(w1, /Other records this wave/);
 });
 
+test('reviewers with no gate run reported are told to run the gates once themselves', async () => {
+  const { rt, calls } = runtime(twoWaves(), { implement: (p, o, u) => ret(implemented(u, { gates: [] })) });
+  await run(rt);
+  const p = calls.find((c) => c.label === 'critique-code:r1:A').prompt;
+  assert.match(p, /HEAD:\n- none reported\n/);
+  assert.match(p, /If no gate is listed above, run the project's gates once and treat the result as the implement stage's\./);
+});
+
 test('renderCompletionReport renders the implement and review returns section by section, with finding counts pointing at the ledger', () => {
   const ctx = { ledgerPath: 'docs/plans/f-signals/plan0.md' };
   const unit = { id: 'A', type: 'feature' };
@@ -376,6 +394,8 @@ test('renderCompletionReport renders the implement and review returns section by
     '## Done-condition verdict', '',
     '**Met**. clause (i): test_a green; clause (ii): 3 of 3 fixtures.', '',
     'External gates re-verified: fontforge pinned 20230101, observed 20230101.', '',
+    'Gates at HEAD:', '',
+    '- `pytest -q` — green: 412 passed\n- `ruff check .` — green', '',
     '## Deviations and writes outside Scope', '',
     '- sibling predicate instead of widening', '',
     'Written outside the Scope line: `CLAUDE.md`, `src/x.py`.', '',
@@ -392,6 +412,7 @@ test('renderCompletionReport renders the implement and review returns section by
   assert.match(bare, /\*\*Not met\*\* \(not evaluable as written\)\. the clause names a file that does not exist/);
   assert.equal((bare.match(/^None\.$/gm) ?? []).length, 4, 'every empty section says so');
   assert.doesNotMatch(bare, /External gates|Written outside/);
+  assert.doesNotMatch(renderCompletionReport(ctx, unit, 2, 'impl-A', implemented('A', { gates: [] }), { rounds: 1, findings: [] }), /Gates at HEAD/);
   assert.doesNotMatch(bare, /breakdown|re-plan mode/, 'no serial-mode footer');
 });
 
