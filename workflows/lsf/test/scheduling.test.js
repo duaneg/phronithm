@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   findCycle, pathsOverlap, overlappingPairs, validatePlan,
   readySet, blockedUnits, mergeOrder, wavePlan,
-  nullReturnSignal, signalsFromReadings, signalsFromImplement, signalsFromFindings, signalsFromGate, invalidationComplete,
+  nullReturnSignal, signalsFromReadings, signalsFromDocumentSize, OVERSIZE_FACTOR, signalsFromImplement, signalsFromFindings, signalsFromGate, invalidationComplete,
   signalsFromMerge, distressSignals, evaluateWave, digest, renderLedger, ledgerWave, ledgerLabel, ledgerHeading, REPLAN_ITEM_KINDS,
 } from '../scheduling.js';
 import { STOP_KINDS, RECORD_KINDS } from '../schema.js';
@@ -155,6 +155,26 @@ test('signalsFromReadings is one count row per unit pointing at the plan\'s Read
   assert.doesNotMatch(sigs[0].statement, /_classify/, 'no reading text in the row');
   assert.deepEqual(signalsFromReadings(undefined, { unit: 'B', wave: 1, path: 'p' }), []);
   assert.deepEqual(signalsFromReadings([], { unit: 'B', wave: 1, path: 'p' }), []);
+});
+
+test('signalsFromDocumentSize records a document past twice its target and nothing else', () => {
+  const at = { unit: 'B', wave: 1, stage: 'plan', path: 'docs/plans/B-plan.md', targetKb: 12 };
+  assert.equal(OVERSIZE_FACTOR, 2);
+  assert.deepEqual(signalsFromDocumentSize(12 * 1024, at), []);
+  assert.deepEqual(signalsFromDocumentSize(24 * 1024, at), [], 'at the factor is not past it');
+  assert.deepEqual(signalsFromDocumentSize(undefined, at), []);
+  assert.deepEqual(signalsFromDocumentSize(NaN, at), []);
+  const sigs = signalsFromDocumentSize(30 * 1024 + 100, at);
+  assert.equal(sigs.length, 1);
+  assert.equal(sigs[0].kind, 'document-oversize');
+  assert.equal(sigs[0].source, 'structural');
+  assert.equal(sigs[0].stage, 'plan');
+  assert.equal(sigs[0].unit, 'B');
+  assert.equal(sigs[0].referent, 'docs/plans/B-plan.md');
+  assert.equal(sigs[0].statement, 'docs/plans/B-plan.md is 30 KB against a 12 KB target');
+  const rep = signalsFromDocumentSize(20 * 1024, { ...at, stage: 'completion-report', path: 'docs/plans/B-completion.md', targetKb: 8 });
+  assert.equal(rep[0].stage, 'completion-report');
+  assert.equal(rep[0].statement, 'docs/plans/B-completion.md is 20 KB against a 8 KB target');
 });
 
 test('signalsFromImplement records deviations, writes outside Scope, deferrals, and discoveries', () => {

@@ -228,6 +228,18 @@ function signalsFromReadings(readings, { unit, wave, path }) {
   })];
 }
 
+// Unit plan and completion report: the prompts state a size target the
+// stage writes to once and never trims towards; the script records a
+// document past OVERSIZE_FACTOR times its target. A record, not a stop.
+const OVERSIZE_FACTOR = 2;
+function signalsFromDocumentSize(bytes, { stage, unit, wave, path, targetKb }) {
+  if (!Number.isFinite(bytes) || bytes <= OVERSIZE_FACTOR * targetKb * 1024) return [];
+  return [signal({
+    kind: 'document-oversize', source: 'structural', stage, unit, wave,
+    statement: `${path} is ${Math.round(bytes / 1024)} KB against a ${targetKb} KB target`, referent: path,
+  })];
+}
+
 // Implement stage: deviations (including writes outside the Scope line),
 // deferrals, and discoveries, as breakdown's completion report defines them.
 function signalsFromImplement(result, { unit, wave }) {
@@ -438,6 +450,6 @@ export {
   DEFAULT_CONFIG, BLOCKING_GATE_KINDS, REPLAN_ITEM_KINDS, PLAN_SUPERSEDING_STOP_KINDS,
   findCycle, ancestors, pathsOverlap, scopesOverlap, overlappingPairs, validatePlan,
   readySet, blockedUnits, mergeOrder, wavePlan,
-  nullReturnSignal, signalsFromReadings, signalsFromImplement, signalsFromFindings, signalsFromGate, invalidationComplete,
+  nullReturnSignal, signalsFromReadings, signalsFromDocumentSize, OVERSIZE_FACTOR, signalsFromImplement, signalsFromFindings, signalsFromGate, invalidationComplete,
   signalsFromMerge, distressSignals, evaluateWave, digest, renderLedger, ledgerWave, ledgerLabel, ledgerHeading,
 };

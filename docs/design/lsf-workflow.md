@@ -147,8 +147,13 @@ carries its own unit plan template and stages instead:
    again after each merge. The code critique evaluates the done condition under the plan's
    readings; an unmet condition, or a reading the code does not bear out, is
    Critical. Significant and Minor findings are recorded, not fixed.
-5. **completion-report** is assembled from the implement and review returns and
-   committed by a scribe agent.
+5. **completion-report** is rendered by the script from the implement and
+   review returns — summary, done-condition verdict and evidence, deviations
+   and writes outside Scope, deferrals, discoveries, standing obligations,
+   gate re-verification, and the counts of findings left unfixed with the
+   ledger's path — and committed on the unit branch by a copy stage at the
+   mechanical tier. No agent authors it; the rows the findings became are in
+   the ledger, not the report.
 
 **What a unit entry's fields mean to a stage.** Scope is a coordination
 declaration: the files this unit writes that another unit in flight might
@@ -509,10 +514,16 @@ critique round's prompt names the plan, never carries it. The stages that
 report beyond their result do so in stage-specific `result` fields with
 defined shapes:
 
-- **plan**: `readings: [{ clause, reading }]`. The plan itself stays on the
-  branch; the prompt states a size budget (12 KB) and admits to Readings
-  only clauses that admitted two readings. The completion report's budget is
-  8 KB, with Minor findings as a count and up to five locations.
+- **plan**: `readings: [{ clause, reading }]`, `bytes`. The plan itself stays
+  on the branch; the prompt states a size target (12 KB), written in one call
+  and never trimmed to length, and admits to Readings only clauses that
+  admitted two readings. Goal and Context cite the unit entry and the
+  standing obligations rather than restating them: every stage prompt
+  carries them. The completion report's target is 8 KB, measured by the
+  script on the text it rendered. A document past twice its target is a
+  `document-oversize` ledger row. A ceiling in the prompt made the plan stage
+  trim by dozens of edits, at more cost than the readers it saved, so the
+  script records size and never enforces it.
 - **implement**: `deviations`, `writesOutsideScope`, `deferrals: [{ statement,
   belongsTo }]`, `discoveries: [{ statement, affects }]`, `distress`,
   `doneCondition: { evaluable, met, evidence }`.

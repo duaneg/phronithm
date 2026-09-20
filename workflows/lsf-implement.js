@@ -63,6 +63,7 @@ const RECORD_KINDS = Object.freeze([
   'over-budget-flagged', // re-plan: excess is wall-clock, not context; flagged with rationale
   'standing-obligation-carried', // obligations: discharge lies outside this plan by the obligation's own terms, and the referent names where it is now recorded
   'direct-edit', // re-plan or termination: an edit outside the plan, made by a scribe stage without a gate; the referent is the path
+  'document-oversize', // plan or completion-report stage: the committed document is past twice its size target; the stage never trims to length
 ]);
 
 const SOURCES = Object.freeze(['structural', 'reported', 'gate']);
@@ -816,6 +817,18 @@ function signalsFromReadings(readings, { unit, wave, path }) {
   })];
 }
 
+// Unit plan and completion report: the prompts state a size target the
+// stage writes to once and never trims towards; the script records a
+// document past OVERSIZE_FACTOR times its target. A record, not a stop.
+const OVERSIZE_FACTOR = 2;
+function signalsFromDocumentSize(bytes, { stage, unit, wave, path, targetKb }) {
+  if (!Number.isFinite(bytes) || bytes <= OVERSIZE_FACTOR * targetKb * 1024) return [];
+  return [signal({
+    kind: 'document-oversize', source: 'structural', stage, unit, wave,
+    statement: `${path} is ${Math.round(bytes / 1024)} KB against a ${targetKb} KB target`, referent: path,
+  })];
+}
+
 // Implement stage: deviations (including writes outside the Scope line),
 // deferrals, and discoveries, as breakdown's completion report defines them.
 function signalsFromImplement(result, { unit, wave }) {
@@ -1098,10 +1111,14 @@ function digest(ledger) {
 const WORKFLOW = 'lsf-implement';
 const GATE_MAX_ROUNDS = 4; // critique gate hard cap
 const DEFAULT_MAX_WAVES = 20;
-// Size budgets the prompts state for the per-unit documents every later
-// stage reads whole.
-const UNIT_PLAN_BUDGET_KB = 12;
-const COMPLETION_REPORT_BUDGET_KB = 8;
+// Size targets for the per-unit documents every later stage reads whole.
+// Targets, not ceilings: the plan stage writes its document in one call and
+// never measures or trims it (a ceiling turned each plan into an
+// eighty-edit trim loop costing more than the readers it saved); the
+// completion report is rendered by the script from the stage returns. The
+// script records a document past twice its target (scheduling.js).
+const UNIT_PLAN_TARGET_KB = 12;
+const COMPLETION_REPORT_TARGET_KB = 8;
 // Model and effort per role.
 const DEFAULT_TIERS = Object.freeze({
   critique: { model: 'opus', effort: 'low' },
@@ -1155,6 +1172,7 @@ const COPY_SCHEMA = stageSchema(obj({
 const UNIT_PLAN_SCHEMA = stageSchema(obj({
   ...COMMIT_FIELDS,
   path: str,
+  bytes: { type: 'integer', description: 'Size of the committed plan file in bytes (wc -c)' },
   readings: arr(obj({
     clause: { ...str, description: 'The clause of the unit entry or architecture document that admitted more than one reading, or named something that does not exist as named' },
     reading: { ...str, description: 'The reading the plan takes' },
@@ -1190,9 +1208,9 @@ const IMPLEMENT_SCHEMA = stageSchema(obj({
     statement: str,
     affects: { ...str, description: 'The unit whose scope, dependencies, or done condition this changes, or the architecture section it bears on' },
   })),
-  doneCondition: obj({ evaluable: bool, met: bool, evidence: str }),
+  doneCondition: obj({ evaluable: bool, met: bool, evidence: { ...str, description: 'The evaluation, clause by clause where the done condition has clauses: what was checked and what it showed, citing tests and figures; not a narrative of the implementation. Rendered verbatim into the completion report' } }),
   standingObligations: arr(obj({ statement: str, status: str })),
-  summary: str,
+  summary: { ...str, description: 'One paragraph: what the unit delivered. Rendered verbatim into the completion report' },
 }));
 
 const COMPLETION_SCHEMA = stageSchema(obj({ ...COMMIT_FIELDS, path: str }));
@@ -1326,16 +1344,16 @@ ${worktree(ctx.integrationBranch)}
 
 ${unitBlock(plan, unit)}
 
-Write the implementation plan for this unit. The architecture document is the primary design input; the unit's done condition, adopted verbatim, is a success criterion; each standing obligation naming the unit is a requirement. Do not re-explore what the architecture document and unit entry settle. Keep it within the unit's size budget: about six steps, at most one open design decision. The plan is read whole by every critique round and by the implement stage; keep it at or under ${UNIT_PLAN_BUDGET_KB} KB. Sections, in order:
+Write the implementation plan for this unit. The architecture document is the primary design input; the unit's done condition, adopted verbatim, is a success criterion; each standing obligation naming the unit is a requirement. Do not re-explore what the architecture document and unit entry settle. Keep it within the unit's size budget: about six steps, at most one open design decision. The plan is read whole by every critique round and by the implement stage; about ${UNIT_PLAN_TARGET_KB} KB is the target. Sections, in order:
 
-1. **Goal** — one paragraph: what the unit delivers, and the done condition verbatim as the success criterion. Do not copy the unit entry; cite it.
-2. **Context** — the architecture sections relied on, by heading; the decomposition plan path and SHA; standing obligations naming the unit, by their text.
-3. **Readings** — only the clauses of the entry or the architecture document that admitted more than one reading, or named something that does not exist as named, each with the reading taken and the evidence for it, one entry each. A clause with one plain reading is not listed. Return the same list in \`readings\`. Take the reading; do not raise a question and do not stop.
-4. **Design** — the decisions the plan makes, with the one open design decision at most, and why.
-5. **Steps** — about six, each with what it changes and how it is verified, in an order that keeps the project's gates green after every step.
+1. **Goal** — one sentence: what the unit delivers. The unit entry, its done condition, and the standing obligations naming the unit travel with every stage prompt; cite them, do not copy them.
+2. **Context** — the architecture sections relied on, by heading.
+3. **Readings** — only the clauses of the entry or the architecture document that admitted more than one reading, or named something that does not exist as named, each with the reading taken and the evidence for it, one or two lines each. A clause with one plain reading is not listed. Return the same list in \`readings\`. Take the reading; do not raise a question and do not stop.
+4. **Design** — the decisions the plan makes and why, citing the architecture sections they rest on rather than restating them; the one open design decision at most.
+5. **Steps** — about six, each a heading and one paragraph: what it changes and how it is verified, in an order that keeps the project's gates green after every step.
 6. **Verification** — how the done condition will be evaluated exactly as written, under the readings above.
 
-The plan must be self-contained: a fresh context can implement from it alone. It carries no "Remaining phases" section and mandates no implementation summary document; this workflow's own stages run the plan single-shot, review the result, and write the unit's completion report. Save it to docs/plans/${unit.id}-plan.md and commit. Return branch, SHA, path, and the readings; not the plan text.
+The plan and the unit entry are all the implement stage works from; the plan needs nothing else. It carries no "Remaining phases" section and mandates no implementation summary document; this workflow's own stages run the plan single-shot, review the result, and write the unit's completion report. Write the whole file to docs/plans/${unit.id}-plan.md in one call and commit it. Do not trim it to length afterwards: length past the target is at most a Minor finding for the critique round, never a defect for this stage to repair. Return branch, SHA, path, the file's size in bytes (one \`wc -c\`, for the record), and the readings; not the plan text.
 ${RETURN_FIELDS}`;
 }
 
@@ -1358,7 +1376,7 @@ Critique gate round ${round} found these Critical findings against the ${subject
 
 ${JSON.stringify(criticals, null, 2)}
 
-Fix each finding that is repairable within the ${subject}, then commit. A finding you decline to fix — because the repair would change the unit entry, the architecture document, or the request record, or because you cannot repair it — goes under \`notApplied\` with the reason. The run stops on a declined finding and the requester decides, so decline only when the repair is genuinely outside the ${subject}. ${subject === 'plan' ? `The plan is docs/plans/${unit.id}-plan.md on this branch; keep it at or under ${UNIT_PLAN_BUDGET_KB} KB.` : 'Run the tests after fixing; a fix that breaks a test is not applied.'}
+Fix each finding that is repairable within the ${subject}, then commit. A finding you decline to fix — because the repair would change the unit entry, the architecture document, or the request record, or because you cannot repair it — goes under \`notApplied\` with the reason. The run stops on a declined finding and the requester decides, so decline only when the repair is genuinely outside the ${subject}. ${subject === 'plan' ? `The plan is docs/plans/${unit.id}-plan.md on this branch. Repair the findings; do not shorten the plan to length.` : 'Run the tests after fixing; a fix that breaks a test is not applied.'}
 ${RETURN_FIELDS}`;
 }
 
@@ -1406,19 +1424,61 @@ This is a design unit: its deliverable is a decision record, not code. Run the p
 ${RETURN_FIELDS}`;
 }
 
-function completionPrompt(ctx, plan, unit, branch, impl, review) {
+// The completion report is rendered here from the implement and review
+// returns — the gate and the re-plan read it by path — and a copy stage
+// commits it on the unit branch. Findings left unfixed are ledger rows, so
+// the report carries their counts and the ledger's path, not the rows.
+const completionPath = (unit) => `docs/plans/${unit.id}-completion.md`;
+const byteLength = (text) => (typeof TextEncoder === 'function' ? new TextEncoder().encode(text).length : text.length);
+
+function renderCompletionReport(ctx, unit, wave, branch, impl, review) {
+  const items = (xs, render) => (xs?.length ? xs.map((x) => `- ${render(x)}`) : ['None.']);
+  const count = (severity) => (review.findings ?? []).filter((f) => f.severity === severity).length;
+  const dc = impl.doneCondition ?? {};
+  const outside = impl.writesOutsideScope ?? [];
+  const probes = impl.gateProbe ?? [];
+  const lines = [
+    `# ${unit.id} — completion report`,
+    '',
+    `Unit \`${unit.id}\` (${unit.type}), wave ${wave}, branch \`${branch}\`.`,
+    '',
+    ...(impl.summary ? [impl.summary, ''] : []),
+    '## Done-condition verdict',
+    '',
+    `**${dc.met ? 'Met' : 'Not met'}**${dc.evaluable === false ? ' (not evaluable as written)' : ''}. ${dc.evidence ?? ''}`.trimEnd(),
+    ...(probes.length ? ['', `External gates re-verified: ${probes.map((g) => `${g.name} pinned ${g.pin}, observed ${g.observed}`).join('; ')}.`] : []),
+    '',
+    '## Deviations and writes outside Scope',
+    '',
+    ...items(impl.deviations, (d) => d),
+    ...(outside.length ? ['', `Written outside the Scope line: ${outside.map((f) => `\`${f}\``).join(', ')}.`] : []),
+    '',
+    '## Deferrals',
+    '',
+    ...items(impl.deferrals, (d) => `${d.statement} → \`${d.belongsTo}\``),
+    '',
+    '## Discoveries',
+    '',
+    ...items(impl.discoveries, (d) => `${d.statement} — affects \`${d.affects}\``),
+    '',
+    '## Standing obligations',
+    '',
+    ...items(impl.standingObligations, (o) => `${o.statement} — ${o.status}`),
+    '',
+    `Review: ${review.rounds} round(s); ${count('Significant')} Significant and ${count('Minor')} Minor finding(s) left unfixed are recorded in ${ctx.ledgerPath}, wave ${wave}.`,
+    '',
+  ];
+  return lines.join('\n');
+}
+
+function completionScribePrompt(ctx, plan, unit, branch, text) {
   return `${header(ctx, plan)}
 ${worktree(branch)}
 
-${unitBlock(plan, unit)}
+Copy stage. Write the Markdown between the markers below to ${completionPath(unit)}, every character unchanged, replacing the file if it exists. Do not reword, reorder, or drop anything, and change nothing else. Commit on this branch. ${commitMessage(`docs(${ctx.name}): ${unit.id} completion report`)} Return the branch, the path, and the ${SHORT_SHA}.
 
-Write the completion report for this unit to docs/plans/${unit.id}-completion.md and commit. Contents, per phronithm:feature's completion-report: done-condition verdict with achieved rigour; deviations from the unit entry's scope and publishes, including files written outside the Scope line; deferrals, each naming the receiving unit; discoveries affecting sibling or downstream units or the architecture document; status of each standing obligation; external-gate re-verification results (state "none" when the entry names no gates); execution signals; review findings left unfixed — each Significant finding as one line with its location, and the Minor findings as a count with up to five locations, no text; and the footer "Run \`/phronithm:breakdown\` in re-plan mode with the decomposition plan and this report before starting any dependent unit." Assemble it from the implement and review stage returns below; do not re-derive or soften them. The report is read by the wave gate and the re-plan; keep it at or under ${COMPLETION_REPORT_BUDGET_KB} KB.
-
---- implement stage return ---
-${JSON.stringify(impl, null, 2)}
---- review stage summary ---
-${JSON.stringify(review, null, 2)}
---- end ---
+<<<REPORT
+${text}REPORT>>>
 ${RETURN_FIELDS}`;
 }
 
@@ -1622,6 +1682,7 @@ async function runUnit(rt, ctx, plan, unit, wave) {
   const planned = await rt.agent(unitPlanPrompt(ctx, plan, unit), opts('plan', { isolation: 'worktree', schema: UNIT_PLAN_SCHEMA, ...tier(ctx, 'planning') }));
   if (!planned) { signals.push(nullReturnSignal(stageCtx('plan'))); return abort('plan'); }
   signals.push(...signalsFromReadings(planned.result.readings, { ...stageCtx('plan'), path: planned.result.path }));
+  signals.push(...signalsFromDocumentSize(planned.result.bytes, { ...stageCtx('plan'), path: planned.result.path, targetKb: UNIT_PLAN_TARGET_KB }));
   let branch = planned.result.branch;
 
   // 2. critique gate over the plan
@@ -1684,12 +1745,14 @@ async function runUnit(rt, ctx, plan, unit, wave) {
   signals.push(...signalsFromFindings(reviewGate.findings, stageCtx('review')));
   if (!reviewGate.ok) return abort('review');
 
-  // 5. completion report
+  // 5. completion report: rendered here, committed by a copy stage
   const review = { rounds: reviewGate.rounds, findings: reviewGate.findings };
-  const report = await rt.agent(completionPrompt(ctx, plan, unit, branch, impl.result, review), opts('completion-report', { isolation: 'worktree', schema: COMPLETION_SCHEMA }));
+  const text = renderCompletionReport(ctx, unit, wave, branch, impl.result, review);
+  signals.push(...signalsFromDocumentSize(byteLength(text), { ...stageCtx('completion-report'), path: completionPath(unit), targetKb: COMPLETION_REPORT_TARGET_KB }));
+  const report = await rt.agent(completionScribePrompt(ctx, plan, unit, branch, text), opts('completion-report', { isolation: 'worktree', schema: COMPLETION_SCHEMA, ...tier(ctx, 'mechanical') }));
   if (!report) { signals.push(nullReturnSignal(stageCtx('completion-report'))); return abort('completion-report'); }
   result.branch = report.result.branch;
-  result.completionPath = report.result.path;
+  result.completionPath = completionPath(unit);
   return result;
 }
 

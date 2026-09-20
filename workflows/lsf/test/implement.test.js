@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { run, GATE_MAX_ROUNDS } from '../implement.js';
+import { run, renderCompletionReport, GATE_MAX_ROUNDS } from '../implement.js';
 
 // ---------------------------------------------------------------- stub runtime
 
@@ -231,7 +231,7 @@ test('every unit stage is told what the Scope line means; only commits are asked
     assert.doesNotMatch(c.prompt, /assumptions|ambiguities|contradictions/, c.label);
     assert.match(c.prompt, /return `commits`/, c.label);
   }
-  for (const l of ['plan:A', 'critique-plan:r1:A', 'implement:A', 'critique-code:r1:A', 'lens-review:r1:A', 'completion-report:A']) {
+  for (const l of ['plan:A', 'critique-plan:r1:A', 'implement:A', 'critique-code:r1:A', 'lens-review:r1:A']) {
     assert.match(calls.find((c) => c.label === l).prompt, /Scope line declares the files this unit writes[^]*does not limit what the work may edit/, l);
   }
   const plan = calls.find((c) => c.label === 'plan:A').prompt;
@@ -274,16 +274,22 @@ test('unit stages extract their entry and obligations by command; the plan and r
   // The range ends at any ##-prefixed heading, so the last entry does not run on into `## Graph`.
   const entry = "git show plan0:docs/plans/f-breakdown.md | sed -n '/^### A$/,/^##/p'";
   const obligations = "git show plan0:docs/plans/f-breakdown.md | sed -n '/^## Standing Obligations/,/^## /p' | grep -n 'A'";
-  for (const l of ['plan:A', 'critique-plan:r1:A', 'fix-plan:r1:A', 'implement:A', 'critique-code:r1:A', 'lens-review:r1:A', 'completion-report:A']) {
+  for (const l of ['plan:A', 'critique-plan:r1:A', 'fix-plan:r1:A', 'implement:A', 'critique-code:r1:A', 'lens-review:r1:A']) {
     const p = calls.find((c) => c.label === l).prompt;
     assert.ok(p.includes(entry), `${l}: entry command`);
     assert.ok(p.includes(obligations), `${l}: obligations command`);
     assert.doesNotMatch(p, /Read it first \(`git show plan0:docs\/plans\/f-breakdown\.md`\)/, `${l}: no whole-file read`);
   }
   const plan = calls.find((c) => c.label === 'plan:A').prompt;
-  assert.match(plan, /at or under 12 KB/);
+  assert.match(plan, /about 12 KB is the target/);
+  assert.match(plan, /in one call and commit it\. Do not trim it to length afterwards/);
+  assert.match(plan, /at most a Minor finding/);
+  assert.doesNotMatch(plan, /at or under/);
   assert.match(plan, /A clause with one plain reading is not listed/);
-  assert.match(plan, /Do not copy the unit entry; cite it/);
+  assert.match(plan, /\*\*Goal\*\* — one sentence/);
+  assert.match(plan, /travel with every stage prompt; cite them, do not copy them/);
+  assert.match(plan, /\*\*Context\*\* — the architecture sections relied on, by heading\.\n/);
+  assert.doesNotMatch(plan, /by their text|self-contained/);
   assert.match(plan, /not the plan text/);
   const r1 = calls.find((c) => c.label === 'critique-plan:r1:A').prompt;
   const r2 = calls.find((c) => c.label === 'critique-plan:r2:A').prompt;
@@ -291,11 +297,15 @@ test('unit stages extract their entry and obligations by command; the plan and r
   assert.match(r2, /git show fixed-A:docs\/plans\/A-plan\.md/, 'round 2 reads the fixed branch');
   assert.doesNotMatch(r1, /--- implementation plan/);
   const fix = calls.find((c) => c.label === 'fix-plan:r1:A').prompt;
-  assert.match(fix, /at or under 12 KB/);
+  assert.doesNotMatch(fix, /12 KB/);
+  assert.match(fix, /do not shorten the plan to length/);
   assert.doesNotMatch(fix, /planText/);
-  const report = calls.find((c) => c.label === 'completion-report:A').prompt;
-  assert.match(report, /Minor findings as a count with up to five locations, no text/);
-  assert.match(report, /at or under 8 KB/);
+  const report = calls.find((c) => c.label === 'completion-report:A');
+  assert.match(report.prompt, /Copy stage\. Write the Markdown between the markers below to docs\/plans\/A-completion\.md, every character unchanged/);
+  assert.match(report.prompt, /<<<REPORT\n# A — completion report\n[^]*REPORT>>>/, 'the rendered report travels in the prompt');
+  assert.match(report.prompt, /subject line "docs\(f\): A completion report"/);
+  assert.doesNotMatch(report.prompt, /Assemble it|phronithm:feature|KB/);
+  assert.deepEqual([report.opts.model, report.opts.effort], ['haiku', 'low'], 'a copy stage, at the mechanical tier');
 });
 
 const gateInvalidation = (over = {}) => ({
@@ -340,6 +350,69 @@ test('an invalidation missing a field, and every note, is recorded and handed to
   const w1 = calls.find((c) => c.label === 'replan:w1').prompt;
   assert.match(w1, /Items this wave[^]*"id": "rp-1"[^]*"kind": "architecture-note"[^]*"id": "rp-2"/);
   assert.doesNotMatch(w1, /Other records this wave/);
+});
+
+test('renderCompletionReport renders the implement and review returns section by section, with finding counts pointing at the ledger', () => {
+  const ctx = { ledgerPath: 'docs/plans/f-signals/plan0.md' };
+  const unit = { id: 'A', type: 'feature' };
+  const impl = implemented('A', {
+    gateProbe: [{ name: 'fontforge', pin: '20230101', observed: '20230101', drifted: false }],
+    deviations: ['sibling predicate instead of widening'], writesOutsideScope: ['CLAUDE.md', 'src/x.py'],
+    deferrals: [{ statement: 'export left unrotated', belongsTo: 'B' }],
+    discoveries: [{ statement: 'B needs an edge to C', affects: 'B' }],
+    doneCondition: { evaluable: true, met: true, evidence: 'clause (i): test_a green; clause (ii): 3 of 3 fixtures.' },
+    standingObligations: [{ statement: 'the diff of a regenerated artefact is read', status: 'discharged' }],
+    summary: 'Widened the predicate and pinned it.',
+  });
+  const review = { rounds: 2, findings: [
+    { severity: 'Significant', statement: 'fragile', location: 'a.py:2', stage: 'critique-code', round: 1 },
+    { severity: 'Minor', statement: 'name', location: 'a.py:9' }, { severity: 'Minor', statement: 'doc', location: 'a.py:12' },
+  ] };
+  const text = renderCompletionReport(ctx, unit, 1, 'impl-A', impl, review);
+  assert.equal(text, [
+    '# A — completion report', '',
+    'Unit `A` (feature), wave 1, branch `impl-A`.', '',
+    'Widened the predicate and pinned it.', '',
+    '## Done-condition verdict', '',
+    '**Met**. clause (i): test_a green; clause (ii): 3 of 3 fixtures.', '',
+    'External gates re-verified: fontforge pinned 20230101, observed 20230101.', '',
+    '## Deviations and writes outside Scope', '',
+    '- sibling predicate instead of widening', '',
+    'Written outside the Scope line: `CLAUDE.md`, `src/x.py`.', '',
+    '## Deferrals', '',
+    '- export left unrotated → `B`', '',
+    '## Discoveries', '',
+    '- B needs an edge to C — affects `B`', '',
+    '## Standing obligations', '',
+    '- the diff of a regenerated artefact is read — discharged', '',
+    'Review: 2 round(s); 1 Significant and 2 Minor finding(s) left unfixed are recorded in docs/plans/f-signals/plan0.md, wave 1.', '',
+  ].join('\n'));
+  assert.doesNotMatch(text, /fragile|a\.py/, 'findings are counts; the rows live in the ledger');
+  const bare = renderCompletionReport(ctx, unit, 2, 'impl-A', implemented('A', { doneCondition: { evaluable: false, met: false, evidence: 'the clause names a file that does not exist' } }), { rounds: 1, findings: [] });
+  assert.match(bare, /\*\*Not met\*\* \(not evaluable as written\)\. the clause names a file that does not exist/);
+  assert.equal((bare.match(/^None\.$/gm) ?? []).length, 4, 'every empty section says so');
+  assert.doesNotMatch(bare, /External gates|Written outside/);
+  assert.doesNotMatch(bare, /breakdown|re-plan mode/, 'no serial-mode footer');
+});
+
+test('a plan or report past twice its size target is a document-oversize ledger row, never a stop or a re-plan item', async () => {
+  const { rt, calls } = runtime(twoWaves(), {
+    plan: (p, o, u) => ret({ branch: `plan-${u}`, sha: 'p', path: `docs/plans/${u}-plan.md`, bytes: u === 'A' ? 30 * 1024 : 20 * 1024, readings: [] }),
+    implement: (p, o, u) => ret(implemented(u, u === 'B' ? { summary: 'x'.repeat(17 * 1024) } : {})),
+    ledger: () => null,
+  });
+  const out = await run(rt);
+  assert.equal(out.status, 'complete', JSON.stringify(out.escalation?.signals));
+  const rows = out.unscribed.filter((s) => s.kind === 'document-oversize');
+  assert.deepEqual(rows.map((s) => [s.unit, s.stage, s.statement]), [
+    ['A', 'plan', 'docs/plans/A-plan.md is 30 KB against a 12 KB target'],
+    ['B', 'completion-report', 'docs/plans/B-completion.md is 17 KB against a 8 KB target'],
+  ]);
+  assert.ok(rows.every((s) => s.disposition === 'recorded'));
+  for (const w of ['replan:w1', 'replan:w2']) {
+    const c = calls.find((c) => c.label === w);
+    if (c) assert.doesNotMatch(c.prompt, /document-oversize/, `${w}: not a re-plan item`);
+  }
 });
 
 test('deferrals, discoveries, and distress reach the re-plan with ids; readings, deviations, and findings go to the ledger only', async () => {
@@ -813,7 +886,7 @@ test('role tiers reach every call: critique opus/low, gate opus/medium, planning
     if (/^(critique-plan|critique-code|lens-review|critique-design)$/.test(role)) assert.deepEqual([c.opts.model, c.opts.effort], ['opus', 'low'], c.label);
     else if (role === 'review-gate') assert.deepEqual([c.opts.model, c.opts.effort], ['opus', 'medium'], c.label);
     else if (/^(plan|replan|termination)$/.test(role)) assert.deepEqual([c.opts.model, c.opts.effort], ['opus', 'high'], c.label);
-    else if (/^(load|ledger|decision-log|cleanup)$/.test(role)) assert.deepEqual([c.opts.model, c.opts.effort], ['haiku', 'low'], c.label);
+    else if (/^(load|ledger|decision-log|cleanup|completion-report)$/.test(role)) assert.deepEqual([c.opts.model, c.opts.effort], ['haiku', 'low'], c.label);
     else assert.deepEqual([c.opts.model, c.opts.effort], ['opus', 'low'], c.label);
   }
   for (const r of ['critique-code', 'plan', 'implement', 'merge', 'review-gate', 'replan', 'load', 'obligations']) assert.ok(seen.has(r), r);
