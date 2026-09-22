@@ -121,8 +121,7 @@ requester can review what the loop changed.
 Phases 1–2 are not workflows: their gates require requester sign-off on
 Critical findings, which no workflow agent can obtain (Constraints above),
 and premise-level defects — the kind a scripted critique gate has not been
-shown to catch (Escalation below) — are concentrated there. Their research
-fan-out already runs from the session via the Agent tool.
+shown to catch (Escalation below) — are concentrated there.
 
 `phronithm:feature` is not invoked inside the workflow — it needs plan-mode
 approval, and EnterPlanMode is stripped (Constraints above). The workflow
@@ -282,8 +281,8 @@ over the requester's decisions alone, so the wave's re-plan is the only pass
 that absorbs the merged units' reports. The stop signals go to the re-plan as
 context it must not amend for; the unit each names stays incomplete. The
 re-plan is skipped when nothing merged, when the wave has nothing to absorb
-(below), and when a stop supersedes the plan (architecture invalidated, done
-condition unevaluable — the relaunch is Phase 2's re-entry).
+(below), and when a stop supersedes the plan (architecture invalidated — the
+relaunch is Phase 2's re-entry).
 
 **The wave gate asks one question**: does anything this wave invalidate the
 architecture document — does any decision it makes rest on a premise the
@@ -388,7 +387,8 @@ STOP (return an escalation record):
 - an architecture invalidation from the wave gate with all five fields
   present;
 - a re-plan item the re-plan cannot absorb, or gives no verdict on;
-- a done condition that cannot be evaluated as written;
+- a done condition that cannot be evaluated as written (the relaunch carries
+  the requester's rewrite as a decision);
 - a re-plan producing a cycle, or a unit over budget that is neither
   extracted nor flagged with wall-clock rationale;
 - critique-gate non-convergence: hard cap, a systemic verdict, or a Critical
@@ -462,8 +462,7 @@ A stop does not always relaunch the workflow. Per STOP kind:
 | STOP kind | Relaunch | Inputs |
 |-----------|----------|--------|
 | Architecture invalidated; a re-plan item unabsorbed because the answer changes a decision in the architecture document or the request record | `phronithm:large-scale-feature` Phase 2, re-entry sub-procedure (fresh session; the skill's startup prompt carries the inputs) | Per `phronithm:lsf-drive`'s *Return to Phase 2* prompt: plan SHA, architecture document and request record, integration branch, ledger path, the stop with the gate's five fields, the requester's decision, unscribed ledger rows |
-| Done condition unevaluable as written | `phronithm:large-scale-feature` Phase 2, re-entry sub-procedure (fresh session; the skill's startup prompt carries the inputs) | As above, without the five fields |
-| Everything else: cycle or unrepairable budget excess; gate non-convergence; unresolvable merge conflict or regression; environment drift; gated units; null agent; load failure; undischarged obligation | Same workflow | Decision log SHA |
+| Everything else: done condition unevaluable as written (the requester's rewrite is a decision the decision re-plan applies); cycle or unrepairable budget excess; gate non-convergence; unresolvable merge conflict or regression; environment drift; gated units; null agent; load failure; undischarged obligation | Same workflow | Decision log SHA |
 
 Returning to an earlier phase is the skill's own rule ("return to the earliest
 affected phase; do not patch forward"). Phase 3 work already merged is not
@@ -479,7 +478,9 @@ disposition for each standing obligation), and runs a fresh
 `phronithm:breakdown` against the amended architecture document with the
 old plan, the reconciliation record, and the integration branch as inputs.
 Standing work is existing code the new units build on; superseded work
-yields units that adapt or revert it. The fresh breakdown retires unit ids,
+yields units that adapt or revert it. Work on a branch that never merged is
+abandoned and redone under the new plan; the record names the branch so it
+can be salvaged by hand, and nothing reads it. The fresh breakdown retires unit ids,
 so the re-entry then retires the decision log's `clears` entries naming
 them, which would otherwise fail every later load. The unscribed ledger
 rows travel through the prompt into the relaunch's `args.unscribed`.

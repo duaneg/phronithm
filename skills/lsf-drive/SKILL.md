@@ -105,15 +105,15 @@ Collect one decision per `decision_needed` item. Use AskUserQuestion only where 
 
 `D<next>` continues the decision log's numbering. `clears` is set only for a `no-ready-unit` stop on an organisational, release, or data gate the requester has cleared; it is the only way such a gate becomes cleared. Environment gates are re-probed against their pin and never appear in `clears`.
 
-Some decisions are not the plan's to carry out. Before relaunching, classify each stop by the relaunch table below; a stop whose answer changes the architecture document's decisions, the request record, or a done condition's text leaves this skill.
+Some decisions are not the plan's to carry out. Before relaunching, classify each stop by the relaunch table below; a stop whose answer changes the architecture document's decisions or the request record leaves this skill.
 
 ### Relaunch
 
 | Stop kind | Relaunch |
 |---|---|
-| `architecture-invalidated`; `done-condition-unevaluable`; `plan-defect-unabsorbed` where the answer changes a decision in the architecture document or the request record | Return to `phronithm:large-scale-feature` Phase 2 (below) |
+| `architecture-invalidated`; `plan-defect-unabsorbed` where the answer changes a decision in the architecture document or the request record | Return to `phronithm:large-scale-feature` Phase 2 (below) |
 | `wave-cap` return (no escalation) | `phronithm:lsf-implement` again, `planSha` from the return's top-level `planSha`, no decisions |
-| Everything else: `cycle`, `unit-over-budget`, `gate-non-convergence`, `merge-conflict-unresolvable`, `merge-regression`, `environment-gate-drift`, `no-ready-unit`, `standing-obligation-undischarged`, `agent-null`, `precondition`, `invalid-plan`, `unserialised-overlap`, and `plan-defect-unabsorbed` otherwise | `phronithm:lsf-implement` again, with the decisions |
+| Everything else: `cycle`, `unit-over-budget`, `gate-non-convergence`, `merge-conflict-unresolvable`, `merge-regression`, `environment-gate-drift`, `no-ready-unit`, `standing-obligation-undischarged`, `agent-null`, `precondition`, `invalid-plan`, `unserialised-overlap`, `done-condition-unevaluable` (the decision is the rewritten condition), and `plan-defect-unabsorbed` otherwise | `phronithm:lsf-implement` again, with the decisions |
 
 A mixed agenda takes the first matching row: the run returns to Phase 2, and every other decision travels in the startup prompt — one `Decision:` line per item — for the Phase 2 session to carry into the plan through `phronithm:breakdown`.
 

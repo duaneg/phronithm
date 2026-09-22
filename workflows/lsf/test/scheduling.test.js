@@ -4,7 +4,7 @@ import {
   findCycle, pathsOverlap, overlappingPairs, validatePlan,
   readySet, blockedUnits, mergeOrder, wavePlan,
   nullReturnSignal, signalsFromReadings, signalsFromDocumentSize, OVERSIZE_FACTOR, signalsFromImplement, signalsFromFindings, signalsFromGate, invalidationComplete,
-  signalsFromMerge, distressSignals, evaluateWave, digest, renderLedger, ledgerWave, ledgerLabel, ledgerHeading, REPLAN_ITEM_KINDS,
+  signalsFromMerge, distressSignals, evaluateWave, digest, renderLedger, ledgerWave, ledgerLabel, ledgerHeading, REPLAN_ITEM_KINDS, PLAN_SUPERSEDING_STOP_KINDS,
 } from '../scheduling.js';
 import { STOP_KINDS, RECORD_KINDS } from '../schema.js';
 import { signal } from '../schema.js';
@@ -340,4 +340,8 @@ test('digest counts by kind, source and disposition, and lists what needs attent
   assert.deepEqual(d.attention.distressedUnits, ['B']);
   assert.deepEqual(d.attention.directEdits, ['docs/debt.md — note the figure']);
   assert.match(d.note, /not evidence/);
+});
+
+test('only an architecture invalidation supersedes the plan; an unevaluable done condition is a decision for the decision re-plan', () => {
+  assert.deepEqual([...PLAN_SUPERSEDING_STOP_KINDS], ['architecture-invalidated']);
 });
