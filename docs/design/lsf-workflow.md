@@ -4,18 +4,22 @@ Design for running Phase 3 of `phronithm:large-scale-feature` — the unit loop
 over a committed decomposition plan — under the Claude Code Workflow tool: a
 deterministic script orchestrates a fleet of agents, holds no judgement, and
 is restartable from any point. Phases 1–2 stay interactive in the skill. Human
-attention in Phase 3 is spent only on two things: signals the script can verify
-mechanically, and one adjudicated judgement per wave — that the architecture
+attention in Phase 3 is spent on three things: signals the script can verify
+mechanically; one adjudicated judgement per wave — that the architecture
 document no longer stands — delivered in a form the script checks for
-completeness and the requester can act on. Never procedural sign-off, and
-never a free-text discrepancy an agent chose to file under a heading.
+completeness and the requester can act on; and the digest the session puts
+to the requester after every run. Never procedural sign-off, and never a
+free-text discrepancy an agent chose to file under a heading.
 
 Status: `lsf-implement` exists (`workflows/lsf/implement.js`, built into
-`workflows/lsf-implement.js`) and is tested against a stubbed runtime. The
+`workflows/lsf-implement.js`), is tested against a stubbed runtime, and has
+run on cartomancer-v2 (nine runs to 2026-09-19, a 41-unit stream closed).
+The rules added since — the archive at merge, the ledger row shapes, the
+re-plan skip on a wave with nothing to absorb, the script-rendered completion
+report, reviewers taking the implement stage's gate runs — have not run. The
 plugin loader registers it as `phronithm:lsf-implement` (confirmed 2026-09-10
 against Claude Code 2.1.267: the loader reads `workflows/` non-recursively,
-so `workflows/lsf/` is ignored). The signal model below has not yet run
-under the Workflow tool.
+so `workflows/lsf/` is ignored); the bare name below denotes the script.
 
 ## Constraints from the Workflow tool
 
@@ -86,7 +90,8 @@ that is mechanically verified, or adjudicated once per wave against a
 concrete referent with a required concrete consequence. Agents are not asked
 to classify what they notice; free-text discrepancies never reach the stop
 rule. They reach the ledger and the re-plan. Measured recall on premise-level
-defects at the gate's tier is near zero (Escalation below); per-stage
+defects is 0/14 at the sonnet pin and unmeasured at the gate's tier
+(Escalation below); per-stage
 discovery fields, measured over three runs, yield literal but immaterial
 document-versus-code discrepancies restated by every stage that reads the
 same documents, and nothing material the wave gate does not also raise.
@@ -96,7 +101,7 @@ same documents, and nothing material the wave gate does not also raise.
 | LSF phase | Where it runs | Notes |
 |-----------|---------------|-------|
 | Phase 1 (brainstorm, research, architecture brief) | Interactive session (`phronithm:large-scale-feature`) | The request record the workflow names is the architecture brief's requirements and success criteria. |
-| Phase 2 (architecture document, critique, doc updates, breakdown) | Interactive session (`phronithm:large-scale-feature`) | Ends by committing the decomposition plan. Phase 2 re-entry after a Phase 3 stop is the skill's re-entry sub-procedure. |
+| Phase 2 (architecture document, critique, doc updates, breakdown) | Interactive session (`phronithm:large-scale-feature`) | Ends by committing the decomposition plan and naming the integration branch Phase 3 merges into. Phase 2 re-entry after a Phase 3 stop is the skill's re-entry sub-procedure. |
 | Phase 3 (unit loop) | Workflow `lsf-implement` | The wave loop below. |
 | Phase termination (meta-tasks, standing obligations) | Tail of `lsf-implement` | Termination stage, see Wave loop. |
 
@@ -113,13 +118,14 @@ and the reason in the escalation record). The requester sees the finding and dec
 applied fix is written to the signal ledger (kind `critical-fixed`) so the
 requester can review what the loop changed.
 
-Phases 1–2 are not workflows: their gates need the requester, since
-measured recall on premise-level defects at the gate's tier is near zero
-(Escalation below) and those phases are where such defects live, and their
-research fan-out already runs from the session via the Agent tool.
+Phases 1–2 are not workflows: their gates require requester sign-off on
+Critical findings, which no workflow agent can obtain (Constraints above),
+and premise-level defects — the kind a scripted critique gate has not been
+shown to catch (Escalation below) — are concentrated there. Their research
+fan-out already runs from the session via the Agent tool.
 
-`phronithm:feature` is not invoked inside the workflow — it needs
-ExitPlanMode approval, which no workflow agent can obtain. The workflow
+`phronithm:feature` is not invoked inside the workflow — it needs plan-mode
+approval, and EnterPlanMode is stripped (Constraints above). The workflow
 carries its own unit plan template and stages instead:
 
 1. **plan** agent: implementation plan from the architecture document and the
@@ -427,9 +433,12 @@ drift is a control the design relies on alongside the stop rule.
 - **Live narration.** The script calls `log()` at every wave boundary with the
   counts by kind and source, the units merged, conflicts, and the re-plan's
   amendment summary, so the run is readable in `/workflows` while in flight.
-- **Return value.** Every workflow returns, in this order, its status, the
-  escalation record when it stopped, the digest, and the ledger rows no
-  scribe committed; the ledger itself lives in the signals file. Rows
+- **Return value.** The workflow returns, in this order, its status
+  (`complete`, `stopped`, or `wave-cap`: `args.maxWaves`, default 20, reached
+  with units remaining, relaunched from the returned `planSha` with no
+  decisions), the escalation record when it stopped, the digest, and the
+  ledger rows no scribe committed; the ledger itself lives in the signals
+  file. Rows
   returned unscribed go back to the next launch as `args.unscribed`; a scribe
   appends them before the run does anything else, and they stay out of that
   run's digest. The session presents the escalation's `decision_needed` first on a stop, and the digest
@@ -448,12 +457,12 @@ drift is a control the design relies on alongside the stop rule.
 
 ### Relaunch target
 
-The session does not always relaunch the workflow that stopped. Per STOP kind:
+A stop does not always relaunch the workflow. Per STOP kind:
 
 | STOP kind | Relaunch | Inputs |
 |-----------|----------|--------|
-| Architecture invalidated; a re-plan item unabsorbed because the answer changes a decision in the architecture document or the request record | `phronithm:large-scale-feature` Phase 2, re-entry sub-procedure (fresh session; the skill's startup prompt carries the inputs) | Decision log SHA; the amended document; Phase 3 state — existing decomposition plan, completion reports, integration branch |
-| Done condition unevaluable as written | `phronithm:large-scale-feature` Phase 2, re-entry sub-procedure (fresh session; the skill's startup prompt carries the inputs) | Decision log SHA; Phase 3 state |
+| Architecture invalidated; a re-plan item unabsorbed because the answer changes a decision in the architecture document or the request record | `phronithm:large-scale-feature` Phase 2, re-entry sub-procedure (fresh session; the skill's startup prompt carries the inputs) | Per `phronithm:lsf-drive`'s *Return to Phase 2* prompt: plan SHA, architecture document and request record, integration branch, ledger path, the stop with the gate's five fields, the requester's decision, unscribed ledger rows |
+| Done condition unevaluable as written | `phronithm:large-scale-feature` Phase 2, re-entry sub-procedure (fresh session; the skill's startup prompt carries the inputs) | As above, without the five fields |
 | Everything else: cycle or unrepairable budget excess; gate non-convergence; unresolvable merge conflict or regression; environment drift; gated units; null agent; load failure; undischarged obligation | Same workflow | Decision log SHA |
 
 Returning to an earlier phase is the skill's own rule ("return to the earliest
@@ -470,7 +479,10 @@ disposition for each standing obligation), and runs a fresh
 `phronithm:breakdown` against the amended architecture document with the
 old plan, the reconciliation record, and the integration branch as inputs.
 Standing work is existing code the new units build on; superseded work
-yields units that adapt or revert it.
+yields units that adapt or revert it. The fresh breakdown retires unit ids,
+so the re-entry then retires the decision log's `clears` entries naming
+them, which would otherwise fail every later load. The unscribed ledger
+rows travel through the prompt into the relaunch's `args.unscribed`.
 
 Any new unit breakdown marks as already satisfied by standing work is a
 claim, not a completion: `phronithm:breakdown` records it complete only after
@@ -489,7 +501,8 @@ Returned by the workflow; presented verbatim by the session.
   decision_needed: [ { id, question, options?, affects: [units | stages] } ] }
 ```
 
-`plan_sha` is the plan to relaunch from: after a stop at a re-plan, or a wave
+`workflow` is the constant `lsf-implement`, kept so a second workflow would
+not change the shape. `plan_sha` is the plan to relaunch from: after a stop at a re-plan, or a wave
 stop with units merged and an item for the re-plan to absorb, it is the
 re-plan's own commit, which carries the amendments it did absorb, and
 `pre_replan_sha` is the plan the wave ran against. A wave stop with nothing
@@ -542,12 +555,12 @@ defined shapes:
 
 ## Persistence
 
-The script cannot write. Every artefact the skills name — research notes,
-brief, architecture document, decomposition plan and its archive
-(`docs/plans/<name>-archive.md`: completed entries and closed risks),
-implementation plans, completion reports, decision log, signal ledgers — is
-committed by the agent that produces it,
-on a branch the agent reports back. Where an agent's output is inline data
+The script cannot write. Every artefact the workflow produces — the
+decomposition plan and its archive (`docs/plans/<name>-archive.md`:
+completed entries and closed risks), the architecture-document corrections
+the re-plan makes, implementation plans, completion reports, the decision
+log, signal ledgers — is committed by the agent that produces it, on a
+branch the agent reports back. Where an agent's output is inline data
 rather than a file (critique findings, review-gate answers), a scribe agent
 commits it. This supersedes, for workflow agents only, the file-writes policy
 in [subagent-protocol](${CLAUDE_PLUGIN_ROOT}/docs/subagent-protocol.md); worktree
@@ -603,7 +616,9 @@ Each stage call carries a role tier (`args.tiers` overrides per role):
 critique (unit plan critique, code critique, lens review) runs opus at low
 effort; gate (the wave gate alone) runs opus at medium effort;
 planning (unit plan, re-plan, termination) runs opus at high effort;
-mechanical (plan-block copy, decision-log and ledger appends) runs haiku at
-low effort, since the script has already rendered what they write and the
-parser checks it on the next load; everything else, including the direct
-edits the re-plan and termination stages return, runs opus at low effort.
+mechanical (plan-block copy, decision-log and ledger appends, the
+completion-report copy, worktree cleanup) runs haiku at low effort, since the
+script has already rendered what they write and the parser checks it on the
+next load; everything else — implement, merge, the direct edits the re-plan
+and termination stages return, the obligation dispositions — runs opus at
+low effort.
