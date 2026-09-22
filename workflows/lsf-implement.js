@@ -1,7 +1,7 @@
 export const meta = {
   name: 'lsf-implement',
   description: 'Phase 3 of phronithm:large-scale-feature: wave loop over a decomposition plan — plan, critique, implement, review, merge, re-plan — stopping on structural signals and adjudicated architecture invalidation',
-  whenToUse: 'After lsf-architecture has committed a decomposition plan. Pass args { name, planSha, architectureDoc, integrationBranch, ... }; see the header comment in workflows/lsf/implement.js.',
+  whenToUse: 'After phronithm:large-scale-feature Phase 2 has committed a decomposition plan. Pass args { name, planSha, architectureDoc, integrationBranch, ... }; see the header comment in workflows/lsf/implement.js.',
   phases: [
     { title: 'Load', detail: 'decision log, plan graph, validation' },
     { title: 'Units', detail: 'per unit: plan, critique, implement, review, completion report' },
@@ -18,7 +18,7 @@ export const meta = {
 
 // ---- inlined from workflows/lsf/schema.js
 
-// Shared schema for the lsf-* workflows. Dependency-free; inlined into the
+// Shared schema for the lsf-implement workflow. Dependency-free; inlined into the
 // workflow scripts (the script cannot import). This file is the source of
 // truth. See docs/design/lsf-workflow.md, "Shared stage schema".
 
@@ -78,7 +78,7 @@ const UNIT_TYPES = Object.freeze(['foundation', 'feature', 'integration', 'desig
 // `gate-repin` is the workflow's own: a decision re-pins an environment gate.
 const AMENDMENT_KINDS = Object.freeze(['deferral', 'scope-reassignment', 'new-edge', 'done-condition', 'execution-order', 'unit-added', 'gate-repin']);
 
-// The one field every agent() in the three workflows returns beside `result`.
+// The one field every agent() in the lsf-implement workflow returns beside `result`.
 const STAGE_COMMON_PROPERTIES = Object.freeze({
   commits: {
     type: 'array',
@@ -947,7 +947,7 @@ function distressSignals(distress, { unit, wave }, config = DEFAULT_CONFIG) {
 
 // Kinds the re-plan is handed with ids and must return a verdict on.
 const REPLAN_ITEM_KINDS = Object.freeze(['deferral', 'discovery', 'claimed-disjoint-conflict', 'architecture-note', 'execution-distress']);
-// Stop kinds whose relaunch target is lsf-architecture: the plan is
+// Stop kinds whose relaunch is Phase 2's re-entry: the plan is
 // superseded there, so a wave stopping on one skips the re-plan.
 const PLAN_SUPERSEDING_STOP_KINDS = Object.freeze(['architecture-invalidated', 'done-condition-unevaluable']);
 
@@ -2078,7 +2078,7 @@ async function run(runtime) {
     ledger.push(...evalA.all);
     log(`wave ${wave}: merged ${merged.map((r) => r.unit).join(', ') || 'nothing'}; ${conflicts.length} conflict(s); ${evalA.records.length} recorded, ${evalA.stops.length} stop signal(s)`);
     // A wave stop still re-plans over whatever merged, unless nothing did
-    // or the stop supersedes the plan (its relaunch is lsf-architecture).
+    // or the stop supersedes the plan (its relaunch is Phase 2's re-entry).
     // A relaunch re-plans over decisions alone, so this is the only pass
     // that absorbs the merged reports.
     const superseded = evalA.stops.some((s) => PLAN_SUPERSEDING_STOP_KINDS.includes(s.kind));

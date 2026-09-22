@@ -15,7 +15,7 @@ const MODULES = ['schema.js', 'graph.js', 'scheduling.js', 'implement.js'];
 const META = `export const meta = {
   name: 'lsf-implement',
   description: 'Phase 3 of phronithm:large-scale-feature: wave loop over a decomposition plan — plan, critique, implement, review, merge, re-plan — stopping on structural signals and adjudicated architecture invalidation',
-  whenToUse: 'After lsf-architecture has committed a decomposition plan. Pass args { name, planSha, architectureDoc, integrationBranch, ... }; see the header comment in workflows/lsf/implement.js.',
+  whenToUse: 'After phronithm:large-scale-feature Phase 2 has committed a decomposition plan. Pass args { name, planSha, architectureDoc, integrationBranch, ... }; see the header comment in workflows/lsf/implement.js.',
   phases: [
     { title: 'Load', detail: 'decision log, plan graph, validation' },
     { title: 'Units', detail: 'per unit: plan, critique, implement, review, completion report' },

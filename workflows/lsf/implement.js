@@ -1049,7 +1049,7 @@ async function run(runtime) {
     ledger.push(...evalA.all);
     log(`wave ${wave}: merged ${merged.map((r) => r.unit).join(', ') || 'nothing'}; ${conflicts.length} conflict(s); ${evalA.records.length} recorded, ${evalA.stops.length} stop signal(s)`);
     // A wave stop still re-plans over whatever merged, unless nothing did
-    // or the stop supersedes the plan (its relaunch is lsf-architecture).
+    // or the stop supersedes the plan (its relaunch is Phase 2's re-entry).
     // A relaunch re-plans over decisions alone, so this is the only pass
     // that absorbs the merged reports.
     const superseded = evalA.stops.some((s) => PLAN_SUPERSEDING_STOP_KINDS.includes(s.kind));

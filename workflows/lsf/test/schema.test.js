@@ -37,7 +37,7 @@ test('stop and record kinds are disjoint', () => {
 });
 
 test('escalation omits plan_sha and wave when unset', () => {
-  const e = escalation({ workflow: 'lsf-brief', stage: 'critique', signals: [] });
+  const e = escalation({ workflow: 'lsf-implement', stage: 'critique', signals: [] });
   assert.deepEqual(Object.keys(e).sort(), ['decision_needed', 'signals', 'stage', 'workflow']);
   const f = escalation({ workflow: 'lsf-implement', planSha: 'abc', wave: 2, stage: 'merge', signals: [] });
   assert.equal(f.plan_sha, 'abc');

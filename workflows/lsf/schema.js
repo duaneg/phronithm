@@ -1,4 +1,4 @@
-// Shared schema for the lsf-* workflows. Dependency-free; inlined into the
+// Shared schema for the lsf-implement workflow. Dependency-free; inlined into the
 // workflow scripts (the script cannot import). This file is the source of
 // truth. See docs/design/lsf-workflow.md, "Shared stage schema".
 
@@ -58,7 +58,7 @@ const UNIT_TYPES = Object.freeze(['foundation', 'feature', 'integration', 'desig
 // `gate-repin` is the workflow's own: a decision re-pins an environment gate.
 const AMENDMENT_KINDS = Object.freeze(['deferral', 'scope-reassignment', 'new-edge', 'done-condition', 'execution-order', 'unit-added', 'gate-repin']);
 
-// The one field every agent() in the three workflows returns beside `result`.
+// The one field every agent() in the lsf-implement workflow returns beside `result`.
 const STAGE_COMMON_PROPERTIES = Object.freeze({
   commits: {
     type: 'array',

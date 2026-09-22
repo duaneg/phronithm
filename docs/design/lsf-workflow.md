@@ -1,9 +1,10 @@
-# Large-Scale Feature as a Workflow
+# Large-Scale Feature Phase 3 as a Workflow
 
-Design for running the `phronithm:large-scale-feature` lifecycle end-to-end
-under the Claude Code Workflow tool: a deterministic script orchestrates a fleet
-of agents, holds no judgement, and is restartable from any point. Human
-attention is spent only on two things: signals the script can verify
+Design for running Phase 3 of `phronithm:large-scale-feature` — the unit loop
+over a committed decomposition plan — under the Claude Code Workflow tool: a
+deterministic script orchestrates a fleet of agents, holds no judgement, and
+is restartable from any point. Phases 1–2 stay interactive in the skill. Human
+attention in Phase 3 is spent only on two things: signals the script can verify
 mechanically, and one adjudicated judgement per wave — that the architecture
 document no longer stands — delivered in a form the script checks for
 completeness and the requester can act on. Never procedural sign-off, and
@@ -14,7 +15,7 @@ Status: `lsf-implement` exists (`workflows/lsf/implement.js`, built into
 plugin loader registers it as `phronithm:lsf-implement` (confirmed 2026-09-10
 against Claude Code 2.1.267: the loader reads `workflows/` non-recursively,
 so `workflows/lsf/` is ignored). The signal model below has not yet run
-under the Workflow tool. `lsf-brief` and `lsf-architecture` do not exist yet.
+under the Workflow tool.
 
 ## Constraints from the Workflow tool
 
@@ -94,28 +95,28 @@ same documents, and nothing material the wave gate does not also raise.
 
 | LSF phase | Where it runs | Notes |
 |-----------|---------------|-------|
-| Phase 1 steps 1–2a (brainstorm, clarify, constraints) | Interactive session | Genuinely conversational; stays as-is. The request record the workflows name is the architecture brief's requirements and success criteria. |
-| Phase 1 steps 3–9 (research, synthesis, brief, critique, commit) | Workflow `lsf-brief` | Research fan-out via `pipeline`; brief by a synthesis agent; critique gate as a bounded loop, fixes applied autonomously (see below). |
-| Phase 2 (architecture document, critique, doc updates, breakdown) | Workflow `lsf-architecture` | Ends by committing the decomposition plan. |
+| Phase 1 (brainstorm, research, architecture brief) | Interactive session (`phronithm:large-scale-feature`) | The request record the workflow names is the architecture brief's requirements and success criteria. |
+| Phase 2 (architecture document, critique, doc updates, breakdown) | Interactive session (`phronithm:large-scale-feature`) | Ends by committing the decomposition plan. Phase 2 re-entry after a Phase 3 stop is the skill's re-entry sub-procedure. |
 | Phase 3 (unit loop) | Workflow `lsf-implement` | The wave loop below. |
 | Phase termination (meta-tasks, standing obligations) | Tail of `lsf-implement` | Termination stage, see Wave loop. |
 
-**Deliberate divergence from the skill.** LSF Phase 1 step 7 and Phase 2
-step 3 require requester sign-off on the fix for each Critical critique
-finding. This design drops that: the gate loop applies fixes autonomously, at
-the Critical-only bar, in all three workflows. The fix stage applies every
-Critical it can repair within the artefact under critique; a Critical it
-declines — because the repair would change the unit entry, the architecture
-document, or the request record, or because it cannot repair it — is a
-structural stop (`gate-non-convergence`, with the finding and the reason in
-the escalation record). The requester sees the finding and decides. Every
+**Deliberate divergence from the skill, in Phase 3 only.** LSF Phase 1
+step 7 and Phase 2 step 3 require requester sign-off on the fix for each
+Critical critique finding; that stands, since those phases are interactive.
+The workflow's critique gates (unit plan, code) apply fixes autonomously, at
+the Critical-only bar, because no workflow agent can obtain sign-off. The fix
+stage applies every Critical it can repair within the artefact under
+critique; a Critical it declines — because the repair would change the unit
+entry, the architecture document, or the request record, or because it cannot
+repair it — is a structural stop (`gate-non-convergence`, with the finding
+and the reason in the escalation record). The requester sees the finding and decides. Every
 applied fix is written to the signal ledger (kind `critical-fixed`) so the
 requester can review what the loop changed.
 
-Three workflows rather than one so each phase break stays a fresh-context
-boundary, which the skill already requires, and so that an escalation in one
-phase relaunches only that phase. The session runs them in sequence, pausing
-only on an escalation record.
+Phases 1–2 are not workflows: their gates need the requester, since
+measured recall on premise-level defects at the gate's tier is near zero
+(Escalation below) and those phases are where such defects live, and their
+research fan-out already runs from the session via the Agent tool.
 
 `phronithm:feature` is not invoked inside the workflow — it needs
 ExitPlanMode approval, which no workflow agent can obtain. The workflow
@@ -276,7 +277,7 @@ that absorbs the merged units' reports. The stop signals go to the re-plan as
 context it must not amend for; the unit each names stays incomplete. The
 re-plan is skipped when nothing merged, when the wave has nothing to absorb
 (below), and when a stop supersedes the plan (architecture invalidated, done
-condition unevaluable — the relaunch target is `lsf-architecture`).
+condition unevaluable — the relaunch is Phase 2's re-entry).
 
 **The wave gate asks one question**: does anything this wave invalidate the
 architecture document — does any decision it makes rest on a premise the
@@ -451,38 +452,32 @@ The session does not always relaunch the workflow that stopped. Per STOP kind:
 
 | STOP kind | Relaunch | Inputs |
 |-----------|----------|--------|
-| Architecture invalidated; a re-plan item unabsorbed because the answer changes a decision in the architecture document or the request record | `lsf-architecture` (or `lsf-brief` when the requester's decision amends the request record; the session then runs the later workflows in sequence without a further prompt) | Decision log SHA; the amended document; Phase 3 state — existing decomposition plan, completion reports, integration branch |
-| Done condition unevaluable as written | `lsf-architecture` | Decision log SHA; Phase 3 state |
+| Architecture invalidated; a re-plan item unabsorbed because the answer changes a decision in the architecture document or the request record | `phronithm:large-scale-feature` Phase 2, re-entry sub-procedure (fresh session; the skill's startup prompt carries the inputs) | Decision log SHA; the amended document; Phase 3 state — existing decomposition plan, completion reports, integration branch |
+| Done condition unevaluable as written | `phronithm:large-scale-feature` Phase 2, re-entry sub-procedure (fresh session; the skill's startup prompt carries the inputs) | Decision log SHA; Phase 3 state |
 | Everything else: cycle or unrepairable budget excess; gate non-convergence; unresolvable merge conflict or regression; environment drift; gated units; null agent; load failure; undischarged obligation | Same workflow | Decision log SHA |
 
 Returning to an earlier phase is the skill's own rule ("return to the earliest
 affected phase; do not patch forward"). Phase 3 work already merged is not
 discarded, but breakdown's re-plan mode cannot absorb it — that mode diffs
 completion reports against the existing plan and never reads an architecture
-document. When Phase 3 state is present, `lsf-architecture` runs two stages,
-reconciliation first:
-
-1. **Reconcile.** An agent reads the amended architecture document, the
-   integration branch, the old plan, its completion reports, and the merge
-   stage's conflict records, and returns a reconciliation record: for each
-   merged unit, whether it still stands under the amended architecture or is
-   superseded, with the evidence. The record is committed.
-2. **Fresh breakdown** against the amended architecture document, with the
-   reconciliation record and integration branch as inputs — the same footing
-   as breakdown's feature-description mode, which reads the codebase. Standing
-   work is existing code the new units build on; superseded work yields units
-   that adapt or revert it; merge conflicts and other Phase 3 signals inform
-   the risk registry and parallel-stream claims.
+document. The skill's re-entry sub-procedure (Phase 2) does the absorbing:
+a decision amending the request record is its first step; it then amends the
+architecture document, commits a reconciliation record
+(`docs/plans/<name>-reconciliation.md`, contents per the skill's Produces
+entry: each merged unit `stands` or `superseded` under the amended
+architecture with evidence, the unmerged units and their branches, and a
+disposition for each standing obligation), and runs a fresh
+`phronithm:breakdown` against the amended architecture document with the
+old plan, the reconciliation record, and the integration branch as inputs.
+Standing work is existing code the new units build on; superseded work
+yields units that adapt or revert it.
 
 Any new unit breakdown marks as already satisfied by standing work is a
-claim, not a completion: it is recorded complete only after its done
-condition is evaluated against the integration branch. In the interactive
-Phase 2, `phronithm:breakdown` makes this evaluation and reports an
-unevaluable condition to the requester; in `lsf-architecture` a verify agent
-makes it and an unevaluable condition is a STOP. A failed condition makes it
-new work. `lsf-implement` is
-then relaunched against the new plan SHA; every prompt changes, so resume has
-nothing to replay and it is a fresh run in effect.
+claim, not a completion: `phronithm:breakdown` records it complete only after
+evaluating its done condition against the integration branch, and reports an
+unevaluable condition to the requester. A failed condition makes it new work.
+`lsf-implement` is then relaunched against the new plan SHA; every prompt
+changes, so resume has nothing to replay and it is a fresh run in effect.
 
 ### Escalation record
 
@@ -494,8 +489,6 @@ Returned by the workflow; presented verbatim by the session.
   decision_needed: [ { id, question, options?, affects: [units | stages] } ] }
 ```
 
-`plan_sha`, `wave`, and `unit` are set by `lsf-implement` only; `stage` names
-the research, synthesis, critique, or breakdown stage in the other two.
 `plan_sha` is the plan to relaunch from: after a stop at a re-plan, or a wave
 stop with units merged and an item for the re-plan to absorb, it is the
 re-plan's own commit, which carries the amendments it did absorb, and
@@ -511,7 +504,7 @@ then referenced by SHA in affected prompts — state never lives only in `args`.
 
 ## Shared stage schema
 
-Every `agent()` in the three workflows returns:
+Every `agent()` in the workflow returns:
 
 ```
 { result: <stage-specific>,
@@ -614,8 +607,3 @@ mechanical (plan-block copy, decision-log and ledger appends) runs haiku at
 low effort, since the script has already rendered what they write and the
 parser checks it on the next load; everything else, including the direct
 edits the re-plan and termination stages return, runs opus at low effort.
-
-## Open questions
-
-- Whether the three workflows are exposed as separate plugin workflows or one
-  with a phase argument.

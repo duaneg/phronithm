@@ -358,7 +358,7 @@ function distressSignals(distress, { unit, wave }, config = DEFAULT_CONFIG) {
 
 // Kinds the re-plan is handed with ids and must return a verdict on.
 const REPLAN_ITEM_KINDS = Object.freeze(['deferral', 'discovery', 'claimed-disjoint-conflict', 'architecture-note', 'execution-distress']);
-// Stop kinds whose relaunch target is lsf-architecture: the plan is
+// Stop kinds whose relaunch is Phase 2's re-entry: the plan is
 // superseded there, so a wave stopping on one skips the re-plan.
 const PLAN_SUPERSEDING_STOP_KINDS = Object.freeze(['architecture-invalidated', 'done-condition-unevaluable']);
 

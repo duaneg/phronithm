@@ -1,7 +1,7 @@
 # Plan graph and decision log blocks
 
 A decomposition plan carries its graph in one fenced YAML block, and a decision
-log carries requester decisions in another. The `lsf-*` workflows read only
+log carries requester decisions in another. The `lsf-implement` workflow reads only
 these blocks; the prose entries are for people and for the agents that plan
 and implement units. The blocks are parsed by `workflows/lsf/graph.js`, which
 validates them and reports every defect as a structural signal. No agent
