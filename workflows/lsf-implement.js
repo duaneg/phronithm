@@ -1062,7 +1062,9 @@ function digest(ledger) {
 //   planSha             commit SHA of the decomposition plan to load (required)
 //   planPath            default docs/plans/<name>-breakdown.md
 //   architectureDoc     path (required); architectureSha its commit SHA
-//   requestRecord       path, optional
+//   requestRecord       the architecture brief; default docs/architecture/<name>-brief.md.
+//                       Its requirements and success criteria are the request
+//                       record the prompts name
 //   integrationBranch   the main checkout must be on this branch (required)
 //   decisionLogPath     default docs/plans/<name>-decisions.md
 //   decisionLogSha      SHA of the decision log already committed, optional
@@ -1280,7 +1282,7 @@ function header(ctx, plan) {
     `Feature: ${ctx.name}`,
     `Decomposition plan: ${plan.path} @ ${plan.sha}`,
     `Architecture document: ${ctx.architectureDoc} @ ${ctx.architectureSha ?? 'HEAD'}`,
-    ctx.requestRecord ? `Request record: ${ctx.requestRecord}` : null,
+    `Request record: ${ctx.requestRecord} (the architecture brief; its requirements and success criteria)`,
     `Decision log: ${ctx.decisionLogSha ? `${ctx.decisionLogPath} @ ${ctx.decisionLogSha}` : 'none'}`,
     `Integration branch: ${ctx.integrationBranch}`,
     `Read documents at the stated SHA (\`git show <sha>:<path>\`), not the working tree.`,
@@ -1861,7 +1863,7 @@ async function run(runtime) {
     planPath: args.planPath ?? `docs/plans/${name}-breakdown.md`,
     architectureDoc: requireArg(args, 'architectureDoc'),
     architectureSha: args.architectureSha,
-    requestRecord: args.requestRecord,
+    requestRecord: args.requestRecord ?? `docs/architecture/${name}-brief.md`,
     integrationBranch: requireArg(args, 'integrationBranch'),
     decisionLogPath: args.decisionLogPath ?? `docs/plans/${name}-decisions.md`,
     decisionLogSha: args.decisionLogSha,

@@ -16,6 +16,7 @@ Serves human teams planning work and agent teams needing structured task assignm
 - **goal**: What to decompose. One of:
   - A feature description or goal statement (most general — the skill does the full analysis)
   - An architecture document path (from `/phronithm:large-scale-feature` Phase 2 — requirements and design already settled; Phase 1 step 1 is abbreviated)
+  - An architecture document plus a reconciliation record and an integration branch (`/phronithm:large-scale-feature` Phase 2 re-entry after a Phase 3 stop — a fresh decomposition over merged work)
   - A list of existing work items to re-plan (issue numbers, TODO items, or equivalent)
   - An existing decomposition plan plus one or more unit completion reports (re-plan mode — see [Re-plan on unit completion](#re-plan-on-unit-completion))
 
@@ -36,6 +37,7 @@ Serves human teams planning work and agent teams needing structured task assignm
 ### Consumes
 
 - **architecture-document** (from phronithm:large-scale-feature Phase 2): When present, requirements and design are already settled — Phase 1 step 1 is abbreviated to reading the document and extracting components. Steps 2–5 run in full.
+- **reconciliation-record** (from phronithm:large-scale-feature Phase 2 re-entry): for each unit merged under the previous plan, whether it stands under the amended architecture or is superseded, with evidence. When present, Phase 1 step 1 reads the integration branch as the codebase, not abbreviated: standing work is existing code the new units build on; superseded work yields units that adapt or revert it; the previous plan's standing obligations and open risks carry into the new plan per the record's dispositions, and any requester decisions supplied alongside are applied as in re-plan mode. A unit whose done condition standing work already satisfies is marked `complete: true` only after that condition is evaluated against the integration branch, the evaluation cited in the entry; a failed condition leaves it new work, and an unevaluable one is reported to the requester rather than marked.
 - **impact-map** (from phronithm:impact-analysis): When present, informs scope boundaries and identifies cross-cutting concerns.
 - **completion-report** (from the unit's executor — `phronithm:feature` Phase 5 produces one in work-unit mode; free-form from other executors): the deviations, deferrals, discoveries, and execution signals (context consumption, decisions taken mid-implementation) recorded when a unit completed. Required for re-plan mode — the re-plan diff runs off it.
 
@@ -168,7 +170,7 @@ Understand the feature's structure before decomposing it.
 
 1. **Load context**. Depending on input type:
    - *Feature description*: Read relevant project documentation and codebase. Identify the major components, integration points, and boundaries.
-   - *Architecture document*: Read the document. Extract the component list, data model, and integration points. The requirements and design are settled — proceed directly to step 2.
+   - *Architecture document*: Read the document. Extract the component list, data model, and integration points. The requirements and design are settled — proceed directly to step 2. With a reconciliation record, read the integration branch as well, per the record's Consumes entry.
    - *Existing work items*: Fetch each item with full history. Build a picture of the intended scope and decisions already taken.
    - *Existing plan plus completion reports*: re-plan mode — skip Phases 1 and 2 and go directly to [Re-plan on unit completion](#re-plan-on-unit-completion).
 

@@ -94,7 +94,7 @@ same documents, and nothing material the wave gate does not also raise.
 
 | LSF phase | Where it runs | Notes |
 |-----------|---------------|-------|
-| Phase 1 steps 1–2a (brainstorm, clarify, constraints) | Interactive session | Genuinely conversational; stays as-is. Output: a committed request record the workflow reads. |
+| Phase 1 steps 1–2a (brainstorm, clarify, constraints) | Interactive session | Genuinely conversational; stays as-is. The request record the workflows name is the architecture brief's requirements and success criteria. |
 | Phase 1 steps 3–9 (research, synthesis, brief, critique, commit) | Workflow `lsf-brief` | Research fan-out via `pipeline`; brief by a synthesis agent; critique gate as a bounded loop, fixes applied autonomously (see below). |
 | Phase 2 (architecture document, critique, doc updates, breakdown) | Workflow `lsf-architecture` | Ends by committing the decomposition plan. |
 | Phase 3 (unit loop) | Workflow `lsf-implement` | The wave loop below. |
@@ -475,9 +475,12 @@ reconciliation first:
    the risk registry and parallel-stream claims.
 
 Any new unit breakdown marks as already satisfied by standing work is a
-claim, not a completion: it is recorded complete only after a verify agent
-evaluates its done condition against the integration branch. A failed
-condition makes it new work; an unevaluable one is a STOP. `lsf-implement` is
+claim, not a completion: it is recorded complete only after its done
+condition is evaluated against the integration branch. In the interactive
+Phase 2, `phronithm:breakdown` makes this evaluation and reports an
+unevaluable condition to the requester; in `lsf-architecture` a verify agent
+makes it and an unevaluable condition is a STOP. A failed condition makes it
+new work. `lsf-implement` is
 then relaunched against the new plan SHA; every prompt changes, so resume has
 nothing to replay and it is a fresh run in effect.
 

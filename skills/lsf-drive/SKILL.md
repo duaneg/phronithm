@@ -16,7 +16,8 @@ Design: [lsf-workflow](${CLAUDE_PLUGIN_ROOT}/docs/design/lsf-workflow.md), secti
 - **name**: the feature name; default paths derive from it (`docs/plans/<name>-breakdown.md`, `-decisions.md`, `-archive.md`, and `-signals/<plan SHA>.md`, one ledger file per launch).
 - **architecture-document**: path, committed on the integration branch.
 - **integration-branch**: the branch units merge into. The main checkout must be on it.
-- **request-record** (optional): the Phase 1 request record, where the project committed one; passed as `requestRecord`. Without it, the relaunch table's request-record clause does not apply.
+- **request-record**: the architecture brief (`docs/architecture/<name>-brief.md`), whose requirements and success criteria are what the relaunch table's request-record clause refers to; passed as `requestRecord`, defaulting to that path.
+- **unscribed** (optional): ledger rows a previous return or a Phase 2 re-entry prompt carried; passed as `args.unscribed` unchanged.
 - One of:
   - a committed **decomposition-plan** (first launch);
   - a previous run's **return value** or run id (relaunch after a stop, or recovery).
@@ -45,12 +46,12 @@ Follow the [pre-flight](${CLAUDE_PLUGIN_ROOT}/docs/pre-flight.md) check. Do not 
 Then confirm the workflow's preconditions from the shell, not from memory:
 
 1. `git rev-parse --abbrev-ref HEAD` is the integration branch. The workflow stops at load otherwise.
-2. The plan at the SHA to launch from has a `yaml lsf-plan` block with a closing fence: `git show <sha>:<plan-path> | grep -n 'lsf-plan'`, then check the fence after it. A plan drafted before the block existed needs `phronithm:breakdown` re-plan mode run once to add it, committed, before launch.
+2. The plan at the SHA to launch from (`git rev-list -1 <branch> -- <plan-path>` on a first launch) has a `yaml lsf-plan` block with a closing fence: `git show <sha>:<plan-path> | grep -n 'lsf-plan'`, then check the fence after it. A plan without the block needs `phronithm:breakdown` re-plan mode run once to add it, committed, before launch.
 3. The decision log, if it exists, has a `yaml lsf-decisions` block with a closing fence (`tail -n 3`), and its SHA is `git rev-list -1 <branch> -- <path>`.
-4. `git worktree list` shows no stale `.claude/worktrees/wf_*` entries with unmerged work from a run the requester has abandoned. Leave entries from a run being resumed.
+4. `git worktree list` shows no stale `.claude/worktrees/wf_*` entries with unmerged work from a run the requester has abandoned. Leave entries from a run being resumed. A relaunch after a Phase 2 re-entry resumes nothing; its worktrees are stale unless the reconciliation record names them.
 5. `wc -c CLAUDE.md` in the target project. This step never blocks a launch; it is a report. The harness injects the file into every agent the workflow spawns, so its size is part of every agent's floor before the first read: roughly 2.5k tokens per 10 KB. Report the size and the tokens it implies per agent; above 40 KB — about 10k tokens on every agent — say so. Do not trim it — that is the project's call, outside this skill.
 
-Which script to launch: `name: 'phronithm:lsf-implement'` when the plugin is installed and the session started after the last change to `workflows/lsf-implement.js`; otherwise `scriptPath: ${CLAUDE_PLUGIN_ROOT}/workflows/lsf-implement.js`, absolute, since the session's cwd is the target project. The plugin's copy is cached at session start and does not pick up rebuilds mid-session.
+Launch by `name: 'phronithm:lsf-implement'` when the plugin is installed; otherwise by `scriptPath: ${CLAUDE_PLUGIN_ROOT}/workflows/lsf-implement.js`, absolute, since the session's cwd is the target project.
 
 ### Launch
 
@@ -64,7 +65,8 @@ integrationBranch: <branch>
 maxUnitsPerWave: <n>
 maxWaves: <n>              # default 20; a wave-cap return relaunches
 decisionLogSha: <SHA>        # only when the log exists
-requestRecord: <path>        # only when one exists
+requestRecord: <path>        # the architecture brief; default docs/architecture/<name>-brief.md
+unscribed: <rows>            # only after a Phase 2 re-entry whose prompt carried them
 ```
 
 Record the run id from the tool result. The workflow runs in the background and re-invokes this session when it returns; do not poll. `/workflows` shows it in flight.
@@ -87,7 +89,7 @@ On every run, in this order:
 
 1. **Status**, and on a stop the stage and wave it stopped at.
 2. **`escalation.decision_needed`**, verbatim, one item per question. Each carries a `d<n>` id, the question (the signal's kind, source, stage, unit, and statement) and what it affects. An `architecture-invalidated` question includes the gate's proposed amendment; present the five fields as the gate returned them.
-3. **The digest**: counts by kind, source, and disposition; then `attention` in full — architecture notes and amendments, unfixed Significant and Minor finding counts per unit, distressed units, and every direct edit with its path. Direct edits passed no gate; name each so the requester can review it.
+3. **The digest**: counts by kind, source, and disposition; then `attention` in full — architecture notes and amendments, unfixed Significant and Minor finding counts per unit, distressed units, and every direct edit with its path. Direct edits passed no gate; name each so the requester can review it. Ask the requester whether any architecture note amounts to an invalidation the gate did not call; if one does, treat the run as a first-row stop of the relaunch table and go to *Return to Phase 2*.
 4. **`unscribed`**: ledger rows no scribe committed. If non-empty, say so and include the rows; until the next launch carries them, they exist nowhere else. Name `ledgerPath` too: each launch writes its own file under `docs/plans/<name>-signals/`, so carried rows land in the next launch's file, not the one they were raised in.
 5. On `complete`, the digest's note: silence is not evidence.
 
@@ -113,10 +115,12 @@ Some decisions are not the plan's to carry out. Before relaunching, classify eac
 | `wave-cap` return (no escalation) | `phronithm:lsf-implement` again, `planSha` from the return's top-level `planSha`, no decisions |
 | Everything else: `cycle`, `unit-over-budget`, `gate-non-convergence`, `merge-conflict-unresolvable`, `merge-regression`, `environment-gate-drift`, `no-ready-unit`, `standing-obligation-undischarged`, `agent-null`, `precondition`, `invalid-plan`, `unserialised-overlap`, and `plan-defect-unabsorbed` otherwise | `phronithm:lsf-implement` again, with the decisions |
 
+A mixed agenda takes the first matching row: the run returns to Phase 2, and every other decision travels in the startup prompt — one `Decision:` line per item — for the Phase 2 session to carry into the plan through `phronithm:breakdown`.
+
 A relaunch is a fresh Workflow call, not a resume:
 
 ```
-name, architectureDoc, integrationBranch, maxUnitsPerWave   # as before
+name, architectureDoc, integrationBranch, maxUnitsPerWave, maxWaves, requestRecord   # as before
 planSha: <escalation.plan_sha>
 decisions: [ ...the entries above... ]
 decisionLogSha: <current SHA, when the log exists>
@@ -129,7 +133,7 @@ The relaunch starts a new ledger file, named by its `planSha`; the previous laun
 
 An `environment-gate-drift` stop is not answered by a decision: either the environment is restored to the pin the plan records, and the relaunch carries no decision, or the requester re-pins the gate, and the decision says so for the re-plan to amend the plan's gate entry (amendment kind `gate-repin`).
 
-A `precondition` or `invalid-plan` stop names a defect the session can usually see from the shell (wrong branch, a block without its fence, a scope pair with no edge). Fix the repo state through the tool that owns it — `phronithm:breakdown` re-plan mode for the plan, a checkout for the branch — commit, and relaunch with the new SHA and no decision.
+A `precondition` or `invalid-plan` stop names a defect the session can usually see from the shell (wrong branch, a block without its fence, a scope pair with no edge). Fix the repo state through the tool that owns it — `phronithm:breakdown` re-plan mode for the plan, a decision for the decision log, a checkout for the branch — commit, and relaunch with the new SHA and no decision.
 
 ### Recovery
 
@@ -143,27 +147,34 @@ Never finish a unit, a re-plan, or a termination stage by hand to recover a run.
 
 ### Return to Phase 2
 
-A stop in the first row of the relaunch table is handled in a fresh session by `phronithm:large-scale-feature` Phase 2, with the stop's signals and the requester's decision as the input to the document amendment. That pass also does what the design's *Relaunch target* section assigns to the reconcile stage: for each merged unit, record whether it stands under the amended architecture or is superseded, before `phronithm:breakdown` runs fresh against the amended document with the integration branch as its codebase. Present this startup prompt in a fenced code block and wait:
+A stop in the first row of the relaunch table is handled in a fresh session by `phronithm:large-scale-feature` Phase 2's re-entry step. The startup prompt carries what the step needs. Present it in a fenced code block and wait:
 
 ```
 Load the phronithm:large-scale-feature skill and re-enter Phase 2 after a phronithm:lsf-implement stop.
 Architecture document: docs/architecture/<name>.md
+Architecture brief (request record): docs/architecture/<name>-brief.md
 Decomposition plan: docs/plans/<name>-breakdown.md @ <escalation.plan_sha>
-Stop: <kind>, wave <n>; decision: <the requester's answer>
 Integration branch: <branch>
+Signal ledger: <ledgerPath>
+Stop: <kind>, wave <n>, stage <stage>
+Decision: <the requester's answer; one line per agenda item>
+Invalidation: <the gate's five fields verbatim — section, decision, premise, evidence, amendment — when the stop is architecture-invalidated>
+Unscribed ledger rows: <the return's unscribed array verbatim, or none>
 ```
 
-The new plan gets a new SHA; the relaunch of `phronithm:lsf-implement` against it is a first launch in effect.
+Entered from an architecture note rather than a gate stop: the plan is the return's top-level `planSha`, `Stop:` reads `architecture note (requester-judged), wave <the note's wave>`, the `Invalidation:` line is omitted, and one line is added — `Note: <the note's statement and referent, verbatim from the digest>`.
+
+A fresh breakdown retires unit ids; Phase 2's re-entry step retires the decision log's stale `clears` entries before handing off, so the load has nothing to fail on. The relaunch of `phronithm:lsf-implement` against the new plan is a first launch in effect, with `unscribed` passed from the prompt.
 
 ### Termination
 
-A `complete` return ends Phase 3. Present the digest and the note, confirm `git log` on the integration branch shows the merge commits the return implies, and hand back to `phronithm:large-scale-feature`'s termination: the feature is complete when the requester accepts the digest.
+A `complete` return ends Phase 3 unless the requester judges an architecture note an invalidation (*Present*, step 3). Present the digest and the note, confirm `git log` on the integration branch shows the merge commits the return implies, and hand back to `phronithm:large-scale-feature`'s termination: the feature is complete when the requester accepts the digest.
 
 ## What the session never does
 
 - **No unit work in the session.** Not a small one, not a documentation unit, not a termination meta-task. Every unit goes through the workflow's five stages; a unit too small to be worth a wave is still worth a wave.
 - **No plan or architecture-document edits in the session.** A correction is a decision; the re-plan applies it (`amended`, `document-text`) or declines (`cannot`), and the ledger records which.
-- **No decision-log writes in the session.** Decisions travel as `args.decisions`; the workflow's scribe commits them.
+- **No decision-log writes in the session.** Decisions travel as `args.decisions`; the workflow's scribe commits them. Phase 2's re-entry step, not this skill, retires stale `clears` entries.
 - **No ledger writes in the session.** `unscribed` rows go back to the next launch as `args.unscribed`, unchanged; the workflow's first scribe appends them.
 - **No reading the outcome from partial output.** `status` and `escalation` come first in the return by design.
 
