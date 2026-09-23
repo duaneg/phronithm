@@ -1055,3 +1055,103 @@ test('args.unscribed rows are scribed first, keep their wave, and stay out of th
 
   await assert.rejects(run(runtime(twoWaves(), {}, { unscribed: [{ statement: 'no kind' }] }).rt), /kind is required/);
 });
+
+test('a pause ref seen by the merge stage pauses the run at the wave boundary, after the ledger is scribed', async () => {
+  const base = defaults(twoWaves());
+  const { rt, calls, labels, logs } = runtime(twoWaves(), {
+    merge: (...a) => { const r = base.merge(...a); r.result.pauseRequested = true; return r; },
+    ...discovering,
+  });
+  const out = await run(rt);
+  assert.equal(out.status, 'paused');
+  assert.equal(out.waves, 1);
+  assert.match(out.note, /refs\/lsf\/f\/pause/);
+  assert.match(out.note, /1 unit\(s\) remain/);
+  assert.match(out.planSha, /^replan/, 'the wave\'s re-plan committed before the pause');
+  assert.equal(out.escalation, undefined);
+  const l = labels();
+  assert.ok(l.includes('replan:w1') && l.includes('ledger:w1'), 'the wave finishes: re-plan and ledger run');
+  assert.ok(!l.includes('plan:B') && !l.includes('implement:B'), 'no new unit starts');
+  assert.ok(logs.some((m) => /pause requested .*merge:w1/.test(m)));
+  assert.match(calls.find((c) => c.label === 'merge:w1').prompt, /git show-ref --verify --quiet refs\/lsf\/f\/pause/);
+  assert.match(calls.find((c) => c.label === 'ledger:w1').prompt, /refs\/lsf\/f\/pause/);
+});
+
+test('a pause ref present at load pauses before any unit starts; args.pauseRef names the ref', async () => {
+  const { rt, labels, calls } = runtime(twoWaves(), { load: (p, o, u, state) => copied(state.plan, { pauseRequested: true }) }, { pauseRef: 'refs/custom/pause' });
+  const out = await run(rt);
+  assert.equal(out.status, 'paused');
+  assert.equal(out.waves, 0);
+  assert.equal(out.planSha, 'plan0');
+  assert.match(out.note, /refs\/custom\/pause/);
+  assert.ok(!labels().some((x) => x.startsWith('plan:') || x.startsWith('implement:')));
+  assert.match(calls.find((c) => c.label === 'load').prompt, /refs\/custom\/pause/);
+});
+
+test('a pause ref seen by the ledger scribe on a wave with nothing to absorb pauses the run', async () => {
+  const { rt, labels } = runtime(twoWaves(), {
+    implement: (p, o, u) => ret(implemented(u, { deviations: [`dev-${u}`] })),
+    ledger: () => ret({ path: 'docs/plans/f-signals.md', sha: 'l', pauseRequested: true }),
+  });
+  const out = await run(rt);
+  assert.equal(out.status, 'paused');
+  assert.equal(out.waves, 1);
+  assert.deepEqual(out.unscribed, []);
+  assert.ok(!labels().includes('implement:B'));
+});
+
+test('a stop outranks a pause seen in the same wave', async () => {
+  const { rt } = runtime(twoWaves(), {
+    merge: () => ret({ integrationBranch: 'integration', merges: [{ unit: 'A', status: 'regressed', files: ['test/a.test.js'], sha: 'm' }], planSha: 'm1', pauseRequested: true }),
+  });
+  const out = await run(rt);
+  assert.equal(out.status, 'stopped');
+  assert.deepEqual(out.escalation.signals.map((s) => s.kind), ['merge-regression']);
+});
+
+test('a pause at load still commits the decisions and returns the decision re-plan\'s SHA', async () => {
+  const decisionsBlock = ['```yaml lsf-decisions', 'decisions:', '  - id: d1', '    date: 2026-09-12', '    question: q', '    decision: yes', '```'].join('\n');
+  const { rt, labels } = runtime(twoWaves(), { load: (p, o, u, st) => copied(st.plan, { decisionsBlock, pauseRequested: true }) }, { decisions: [{ id: 'd1', question: 'q', decision: 'yes' }] });
+  const out = await run(rt);
+  assert.equal(out.status, 'paused');
+  assert.equal(out.planSha, 'decided1');
+  assert.deepEqual(labels().slice(0, 2), ['decision-log', 'decision-replan']);
+  assert.match(out.note, /no decisions/);
+  assert.ok(!labels().some((x) => x.startsWith('plan:')));
+});
+
+test('a pause seen by a reload or the termination load pauses before the next wave', async () => {
+  for (const at of ['load:w1', 'load:termination']) {
+    const { rt, labels } = runtime(twoWaves(), {
+      ...discovering,
+      load: (p, o, u, st) => copied(st.plan, { pauseRequested: o.label === at }),
+    });
+    const out = await run(rt);
+    assert.equal(out.status, 'paused', at);
+    if (at === 'load:w1') assert.ok(!labels().includes('plan:B'), at);
+    else assert.ok(!labels().some((x) => x.startsWith('obligations')), at);
+  }
+});
+
+test('a paused return carries a null scribe\'s rows in unscribed and says to pass them back', async () => {
+  const base = defaults(twoWaves());
+  const { rt } = runtime(twoWaves(), {
+    merge: (...a) => { const r = base.merge(...a); r.result.pauseRequested = true; return r; },
+    implement: (p, o, u) => ret(implemented(u, { deviations: [`dev-${u}`] })),
+    ledger: () => null,
+  });
+  const out = await run(rt);
+  assert.equal(out.status, 'paused');
+  assert.deepEqual(out.unscribed.map((s) => s.statement), ['dev-A']);
+  assert.match(out.note, /passing unscribed back/);
+});
+
+test('a seeded return\'s pause report is ignored', async () => {
+  const base = defaults(twoWaves());
+  const state = { plan: twoWaves(), completed: new Set(), mergeOrder: ['A'] };
+  const seeded = base.merge('', {}, 'w1', state);
+  seeded.result.pauseRequested = true;
+  const { rt } = runtime(twoWaves(), {}, { seed: { 'merge:w1': seeded } });
+  const out = await run(rt);
+  assert.equal(out.status, 'complete', JSON.stringify(out.escalation?.signals));
+});

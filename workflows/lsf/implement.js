@@ -42,6 +42,17 @@
 //   config              overrides for scheduling DEFAULT_CONFIG
 //   maxWaves            default 20
 //   maxUnitsPerWave     cap on units started per wave, in execution order; default unbounded
+//   pauseRef            default refs/lsf/<name>/pause. While this git ref
+//                       exists the run returns `paused` at the next wave
+//                       boundary — after the wave's merge, re-plan and ledger
+//                       commits — or at load, after any decisions and carried
+//                       rows are committed and before any unit starts. Set it
+//                       with `git update-ref <ref> HEAD`; delete it with
+//                       `git update-ref -d <ref>` before relaunching. The
+//                       merge, ledger and plan-copy stages report it; a ref
+//                       set after the last of them in a wave is seen next wave.
+//                       A stop outranks a pause and leaves the ref set. A
+//                       seeded return's report is ignored
 //   unscribed           ledger rows a previous run returned under `unscribed`,
 //                       passed back unchanged; a scribe appends them before
 //                       anything else runs. They are not re-evaluated and
@@ -60,12 +71,14 @@
 //                       default (everything else)
 //
 // returns, in this order:
-//   status              complete | stopped | wave-cap
+//   status              complete | stopped | wave-cap | paused
 //   workflow            lsf-implement
 //   escalation          stopped only: { workflow, stage, signals,
 //                       decision_needed, plan_sha, pre_replan_sha?, wave? };
 //                       decision_needed is what the session presents
 //   digest              counts and attention items over the whole ledger
+//   note                wave-cap and paused only: what stopped the run and
+//                       how to relaunch
 //   planSha, integrationBranch, waves
 //   ledgerPath          the signal ledger, where every scribed row lives
 //   unscribed           ledger rows no scribe committed (a null scribe return),
@@ -135,7 +148,10 @@ const COMMIT_FIELDS = { branch: str, sha: SHA_FIELD };
 const DECISION_LOG_SCHEMA = stageSchema(obj({ path: str, sha: SHA_FIELD }));
 const CLEANUP_SCHEMA = stageSchema(obj({ removed: { type: 'integer' }, kept: strings }));
 
+const PAUSE_FIELD = { pauseRequested: { type: 'boolean', description: 'Whether the pause ref named in the prompt exists' } };
+
 const COPY_SCHEMA = stageSchema(obj({
+  ...PAUSE_FIELD,
   planBlock: { ...str, description: 'The plan document\'s ```yaml lsf-plan fenced block, verbatim, fences included' },
   decisionsBlock: { ...str, description: 'The decision log\'s ```yaml lsf-decisions fenced block, verbatim, fences included; empty string when there is no decision log' },
   headBranch: { ...str, description: 'Branch the main checkout is on' },
@@ -197,8 +213,9 @@ const COMPLETION_SCHEMA = stageSchema(obj({ ...COMMIT_FIELDS, path: str }));
 
 const MERGE_SCHEMA = stageSchema(obj({
   ...MERGE_RESULT_SCHEMA.properties,
+  ...PAUSE_FIELD,
   planSha: { ...str, description: 'Plan SHA after completion entries were recorded' },
-}, [...MERGE_RESULT_SCHEMA.required, 'planSha']));
+}, [...MERGE_RESULT_SCHEMA.required, 'planSha', 'pauseRequested']));
 
 const GATE_SCHEMA = stageSchema(obj({
   invalidations: arr(INVALIDATION_SCHEMA),
@@ -238,11 +255,16 @@ const OBLIGATIONS_SCHEMA = stageSchema(obj({
 }));
 
 const SCRIBE_SCHEMA = stageSchema(obj({ path: str, sha: SHA_FIELD }));
+const LEDGER_SCHEMA = stageSchema(obj({ path: str, sha: SHA_FIELD, ...PAUSE_FIELD }));
 
 // ---------------------------------------------------------------- prompts
 
 const RETURN_FIELDS = `
 Besides \`result\`, return \`commits\`: every commit you made, branch and SHA; an empty array when none. A SHA is what \`git rev-parse --short HEAD\` prints after the commit, copied from that output. Nothing else: no questions or remarks outside the fields named. The return is one flat object.`;
+
+// The stages that run in the main checkout at a wave boundary report the
+// pause ref; the script acts on it at the loop top.
+const pauseClause = (ctx) => `Run \`git show-ref --verify --quiet ${ctx.pauseRef} && echo present || echo absent\` and return \`pauseRequested\` true exactly when it prints \`present\`. Do not create, delete, or read the ref beyond that.`;
 
 // Commit message form for the append stages: the subject alone on the
 // first line, a blank line, then any trailers.
@@ -319,7 +341,7 @@ function copyPrompt(ctx, sha) {
 
 Copy stage. Run \`git show ${sha}:${ctx.planPath}\` and return, in \`planBlock\`, its \`\`\`yaml lsf-plan fenced block verbatim: from the opening fence line to the closing fence line inclusive, every character unchanged. A block with no closing fence is returned as it stands, to the end of the file, without adding one; the script's parser reports it. ${decisions} Also return the branch the main checkout is on (\`git rev-parse --abbrev-ref HEAD\`) and the commit SHA of ${ctx.architectureDoc} on ${ctx.integrationBranch} (\`git rev-list -1 ${ctx.integrationBranch} -- ${ctx.architectureDoc}\`).
 
-Do not read, assess, or summarise the prose. Do not correct, reformat, or complete anything in the blocks; do not add units, edges, or gates. This stage copies; the script parses and checks the blocks itself.
+Do not read, assess, or summarise the prose. Do not correct, reformat, or complete anything in the blocks; do not add units, edges, or gates. This stage copies; the script parses and checks the blocks itself. ${pauseClause(ctx)}
 ${RETURN_FIELDS}`;
 }
 
@@ -492,7 +514,7 @@ Then, for every unit merged clean or resolved, in one commit on ${ctx.integratio
 - Leave in the entry's place the one-line stub \`### <unit id> — complete at <merge SHA>; entry archived to ${ctx.archivePath}; report <completion report path>\`.
 - Append to the plan's \`## Plan Maintenance\` the entry \`### <date, date -I> — <unit id> complete\` with the single line \`Report: <completion report path> @ <merge SHA>. Ledger: ${ctx.ledgerPath} wave ${wave}.\` and nothing else: no restated report content.
 - Set \`complete: true\` on the unit in the \`\`\`yaml lsf-plan block; the block is otherwise untouched.
-${ownFilesOnly(`${plan.path} and ${ctx.archivePath}`)} Return the new plan SHA. Do not amend anything else in the plan; the re-plan stage does that.
+${ownFilesOnly(`${plan.path} and ${ctx.archivePath}`)} Return the new plan SHA. Do not amend anything else in the plan; the re-plan stage does that. ${pauseClause(ctx)}
 
 Wave ${wave} merge order:
 ${merges.map((m) => `- ${m.unit}: branch ${m.branch} (completion report ${m.completionPath})`).join('\n')}
@@ -591,7 +613,7 @@ function ledgerPrompt(ctx, plan, wave, entries) {
 Append stage. You are in the main checkout on ${ctx.integrationBranch}. Append the Markdown between the markers below to the end of ${ctx.ledgerPath}, every character unchanged, preceded by one blank line. If the file does not exist, create its directory (\`mkdir -p $(dirname ${ctx.ledgerPath})\`) and the file with this heading first:
 
 ${ledgerHeading(ctx.name)}
-Do not reword, reorder, merge, or drop rows, and never edit earlier content. Commit on ${ctx.integrationBranch}. ${ownFilesOnly(ctx.ledgerPath)} ${commitMessage(`docs(${ctx.name}): append ${ledgerLabel(entries, wave)} signal ledger entries`)} Return the path and the ${SHORT_SHA}.
+Do not reword, reorder, merge, or drop rows, and never edit earlier content. Commit on ${ctx.integrationBranch}. ${ownFilesOnly(ctx.ledgerPath)} ${commitMessage(`docs(${ctx.name}): append ${ledgerLabel(entries, wave)} signal ledger entries`)} Return the path and the ${SHORT_SHA}. ${pauseClause(ctx)}
 
 <<<LEDGER
 ${renderLedger(entries, wave)}LEDGER>>>
@@ -819,14 +841,16 @@ function requireArg(args, key) {
 
 async function run(runtime) {
   const args = runtime.args ?? {};
-  // Seeded stage returns stand in for the agent; matched by label.
+  // Seeded stage returns stand in for the agent; matched by label. A seed
+  // reports the pause ref as it stood when salvaged, so its report is dropped.
   const seed = args.seed ?? {};
   const rt = {
     ...runtime,
     agent: async (prompt, opts) => {
       if (Object.hasOwn(seed, opts.label)) {
         runtime.log(`${opts.label}: seeded from args.seed; agent not spawned`);
-        return seed[opts.label];
+        const s = seed[opts.label];
+        return s?.result?.pauseRequested ? { ...s, result: { ...s.result, pauseRequested: false } } : s;
       }
       return runtime.agent(prompt, opts);
     },
@@ -850,6 +874,7 @@ async function run(runtime) {
     config: { ...DEFAULT_CONFIG, ...(args.config ?? {}) },
     maxWaves: args.maxWaves ?? DEFAULT_MAX_WAVES,
     maxUnitsPerWave: args.maxUnitsPerWave ?? Infinity,
+    pauseRef: args.pauseRef ?? `refs/lsf/${name}/pause`,
     tiers: { ...DEFAULT_TIERS, ...(args.tiers ?? {}) },
   };
 
@@ -876,11 +901,20 @@ async function run(runtime) {
     planSha: plan.sha, integrationBranch: ctx.integrationBranch, waves: wave,
     ledgerPath: ctx.ledgerPath, unscribed: ledger.filter((e) => !scribed.has(e)), ...extra,
   });
+  // A stage that saw the pause ref sets this; the loop top honours it once
+  // the wave's commits are in.
+  let pauseRequested = false;
+  const notePause = (r, label) => {
+    if (!r?.result?.pauseRequested || pauseRequested) return;
+    pauseRequested = true;
+    log(`pause requested (${ctx.pauseRef} seen by ${label}); the run pauses at the next wave boundary`);
+  };
   const scribeLedger = async (label = `ledger:w${wave}`) => {
     const fresh = ledger.filter((e) => !scribed.has(e));
     if (!fresh.length) return;
-    const r = await agent(ledgerPrompt(ctx, plan, wave, fresh), { label, ...tier(ctx, 'mechanical'), phase: 'Ledger', schema: SCRIBE_SCHEMA });
+    const r = await agent(ledgerPrompt(ctx, plan, wave, fresh), { label, ...tier(ctx, 'mechanical'), phase: 'Ledger', schema: LEDGER_SCHEMA });
     if (!r) { log(`ledger scribe returned null (${label}); ${fresh.length} row(s) stay unscribed`); return; }
+    notePause(r, label);
     for (const e of fresh) scribed.add(e);
   };
   if (carried.size) {
@@ -942,6 +976,7 @@ async function run(runtime) {
   const loadPlan = async (sha, label, w) => {
     const copy = await agent(copyPrompt(ctx, sha), { label, ...tier(ctx, 'mechanical'), phase: 'Load', schema: COPY_SCHEMA });
     if (!copy) return { plan: null, copy: null, stops: [nullReturnSignal({ stage: 'load', wave: w })] };
+    notePause(copy, label);
     const g = loadGraph({ planMarkdown: copy.result.planBlock, decisionsMarkdown: ctx.decisionLogSha ? copy.result.decisionsBlock : null });
     const stops = g.problems.map((p) => signal({ ...p, source: 'structural', stage: 'load', wave: w }));
     let loadedPlan = null;
@@ -973,6 +1008,13 @@ async function run(runtime) {
   let terminationRan = false;
 
   for (;;) {
+    // Everything the wave produced is committed by here; a pause returns
+    // like a wave cap, from the plan as it stands.
+    if (pauseRequested) {
+      await scribeLedger();
+      log(`PAUSED after wave ${wave} on ${ctx.pauseRef}`);
+      return outcome('paused', { note: `paused after ${wave} wave(s): ${ctx.pauseRef} exists; ${plan.units.length - completed.size} unit(s) remain. To resume: delete the ref (git update-ref -d ${ctx.pauseRef}) and relaunch from planSha with no decisions, passing unscribed back when non-empty` });
+    }
     const allReady = readySet(plan, completed);
     const ready = allReady.slice(0, ctx.maxUnitsPerWave);
     if (ready.length < allReady.length) log(`wave ${wave + 1}: ${allReady.length} ready, capped at ${ready.length}: ${allReady.slice(ready.length).map((u) => u.id).join(', ')} deferred`);
@@ -1028,6 +1070,7 @@ async function run(runtime) {
       if (!m) {
         waveSignals.push(nullReturnSignal({ stage: 'merge', wave }));
       } else {
+        notePause(m, `merge:w${wave}`);
         waveSignals.push(...signalsFromMerge(m.result, { wave }));
         for (const x of m.result.merges) {
           if (x.status === 'clean' || x.status === 'resolved') { completed.add(x.unit); merged.push(byUnit.get(x.unit)); }

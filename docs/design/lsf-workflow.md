@@ -28,6 +28,9 @@ Documented behaviour this design relies on:
 - **No mid-run user input.** Workflow agents have AskUserQuestion and
   EnterPlanMode stripped; only permission prompts pause a run. Sign-off between
   stages means one workflow invocation per stage.
+- **No pause.** TaskStop kills the run; an agent in flight is re-run from
+  the start of its prompt on resume. The script cannot read the filesystem.
+  The wave loop's pause ref works around both.
 - **The main checkout is shared with the requester**, who may edit it while
   a run is live. Every stage that commits there (decision log, merge, re-plans,
   termination, direct edits, ledger) stages and commits only its own files by
@@ -348,6 +351,18 @@ path alone. A re-plan produces a new SHA, every downstream prompt changes, and
 resume re-runs exactly the work the amendment affects. A prompt referencing a
 path only would replay a cached result against a plan that no longer exists.
 
+**A pause lands at a wave boundary.** The merge, ledger and plan-copy
+stages report whether the git ref `args.pauseRef` (default
+`refs/lsf/<name>/pause`) exists; the script latches the first report and,
+at the loop top, once the wave's merge, re-plan and ledger commits are in,
+returns `paused`. A ref set after the last of those stages in a wave is seen
+the wave after, so the latency is up to one wave. At load the decisions and
+carried rows are committed first, and the return's `planSha` is the decision
+re-plan's. A stop outranks a pause and leaves the ref for the session to
+report. A seeded return's report is ignored; a resumed run's replayed stages
+report the ref as it stood when they first ran. A ref dirties no working
+tree, so the breakdown pre-flight inside the re-plan stays green.
+
 ## Escalation
 
 The script stops on a deterministic rule over signals. It never judges a
@@ -441,9 +456,11 @@ drift is a control the design relies on alongside the stop rule.
   counts by kind and source, the units merged, conflicts, and the re-plan's
   amendment summary, so the run is readable in `/workflows` while in flight.
 - **Return value.** The workflow returns, in this order, its status
-  (`complete`, `stopped`, or `wave-cap`: `args.maxWaves`, default 20, reached
-  with units remaining, relaunched from the returned `planSha` with no
-  decisions), the escalation record when it stopped, the digest, and the
+  (`complete`, `stopped`, `wave-cap`: `args.maxWaves`, default 20, reached
+  with units remaining, or `paused`: the pause ref seen, see *Wave loop*;
+  both relaunched from the returned `planSha` with no decisions, a `paused`
+  one only once the requester lifts the pause), the escalation record
+  when it stopped, the digest, and the
   ledger rows no scribe committed; the ledger itself lives in the signals
   file. Rows
   returned unscribed go back to the next launch as `args.unscribed`; a scribe
