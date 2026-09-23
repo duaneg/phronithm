@@ -248,6 +248,11 @@ Besides \`result\`, return \`commits\`: every commit you made, branch and SHA; a
 // first line, a blank line, then any trailers.
 const commitMessage = (subject) => `The commit message is the subject line "${subject}", then a blank line, then any trailer lines; nothing on the subject line but the subject.`;
 
+// The main checkout is shared with the requester, who may edit it while the
+// run is live. A stage there commits only the files it wrote, by name, so an
+// edit it did not make is never swept into its commit or discarded.
+const ownFilesOnly = (what) => `The main checkout may hold uncommitted changes that are not yours: the requester can edit it while this run is live. Commit only the files this stage wrote (${what}), naming them: \`git add -- <paths>\`, then \`git commit -- <paths>\`, whose pathspec keeps everything else out of the commit. Never run \`git add -A\`, \`git add .\`, \`git add -u\`, \`git commit -a\`, \`git stash\`, \`git clean\` or \`git reset --hard\` in the main checkout, and never stage, revert, or discard a change you did not make.`;
+
 function header(ctx, plan) {
   const lines = [
     `Feature: ${ctx.name}`,
@@ -302,7 +307,7 @@ decisions:
 Decisions to append:
 ${JSON.stringify(decisions, null, 2)}
 
-${commitMessage(`docs(${ctx.name}): append decision(s) ${decisions.map((d) => d.id).join(', ')}`)} Return the file path and the ${SHORT_SHA}.
+${ownFilesOnly(ctx.decisionLogPath)} ${commitMessage(`docs(${ctx.name}): append decision(s) ${decisions.map((d) => d.id).join(', ')}`)} Return the file path and the ${SHORT_SHA}.
 ${RETURN_FIELDS}`;
 }
 
@@ -480,14 +485,14 @@ ${RETURN_FIELDS}`;
 function mergePrompt(ctx, plan, wave, merges) {
   return `${header(ctx, plan)}
 
-You are in the main checkout on ${ctx.integrationBranch}. Merge each unit branch below into ${ctx.integrationBranch}, in exactly this order, with a merge commit each (\`git merge --no-ff -m "merge(${ctx.name}): <unit id>"\`). For each unit report clean, resolved, unresolvable, or regressed, with the files involved and the merge SHA. Resolve a conflict only when the resolution is mechanical — both sides' changes apply without judgement about intent; otherwise abort that merge (\`git merge --abort\`), report it unresolvable, and continue with the next unit. Run the project's gates after each merge — the test suite and whatever else the project's own instructions name as a gate (linters, type checks). If a gate fails after a clean or resolved merge, undo that merge (\`git reset --hard\` to the pre-merge tip of ${ctx.integrationBranch}), report the unit as regressed with the failing test files, and continue with the next unit.
+You are in the main checkout on ${ctx.integrationBranch}. Merge each unit branch below into ${ctx.integrationBranch}, in exactly this order, with a merge commit each (\`git merge --no-ff -m "merge(${ctx.name}): <unit id>"\`). For each unit report clean, resolved, unresolvable, or regressed, with the files involved and the merge SHA. Resolve a conflict only when the resolution is mechanical — both sides' changes apply without judgement about intent; otherwise abort that merge (\`git merge --abort\`), report it unresolvable, and continue with the next unit. A merge git refuses because it would overwrite an uncommitted change that is not yours is also unresolvable: report it with the files named, leave the change as it is, and continue with the next unit. Run the project's gates after each merge — the test suite and whatever else the project's own instructions name as a gate (linters, type checks). If a gate fails after a clean or resolved merge, undo that merge with \`git reset --merge <pre-merge tip of ${ctx.integrationBranch}>\`, which keeps uncommitted changes that are not yours (never \`git reset --hard\`, which discards them), report the unit as regressed with the failing test files, and continue with the next unit.
 
 Then, for every unit merged clean or resolved, in one commit on ${ctx.integrationBranch}:
 - Move its \`### <unit id>\` entry under \`## Work Units\` in ${plan.path} to ${ctx.archivePath}, appended verbatim as its own \`### <unit id>\` section under \`## Work Units\`. The archive is append-only; create it with the heading \`# Archive: ${ctx.name}\` and a \`## Work Units\` section if it does not exist.
 - Leave in the entry's place the one-line stub \`### <unit id> — complete at <merge SHA>; entry archived to ${ctx.archivePath}; report <completion report path>\`.
 - Append to the plan's \`## Plan Maintenance\` the entry \`### <date, date -I> — <unit id> complete\` with the single line \`Report: <completion report path> @ <merge SHA>. Ledger: ${ctx.ledgerPath} wave ${wave}.\` and nothing else: no restated report content.
 - Set \`complete: true\` on the unit in the \`\`\`yaml lsf-plan block; the block is otherwise untouched.
-Return the new plan SHA. Do not amend anything else in the plan; the re-plan stage does that.
+${ownFilesOnly(`${plan.path} and ${ctx.archivePath}`)} Return the new plan SHA. Do not amend anything else in the plan; the re-plan stage does that.
 
 Wave ${wave} merge order:
 ${merges.map((m) => `- ${m.unit}: branch ${m.branch} (completion report ${m.completionPath})`).join('\n')}
@@ -534,7 +539,7 @@ ${stops.length ? `
 The run stops after this re-plan on the signals below; they go to the requester. Do not amend the plan for them — no edge, scope, or order change on their account — and leave every unit they name as it is: its branch is unmerged and it stays incomplete. Absorb the merged units' reports as above.
 ${JSON.stringify(stops.map(({ kind, unit, stage, statement, referent }) => ({ kind, unit, stage, statement, referent })), null, 2)}
 ` : ''}
-Every amendment to a unit's type, dependencies, scope, publishes, gates, or completion, and to the execution order, is made in both the unit's entry and the plan's \`\`\`yaml lsf-plan block, which must agree; the script reads the block. Commit the amended plan on ${ctx.integrationBranch}. Return the new plan SHA; each amendment with its kind (${AMENDMENT_KINDS.join(', ')}), unit, and statement; a verdict per item id; \`directEdits\` (an empty array when none); and every remaining unit over its size budget with its disposition: \`extracted\` (a preceding design unit now carries the excess), \`flagged\` (the excess is wall-clock, not context, and the unit carries the rationale — breakdown's size budget discharges it), or \`unrepaired\`. A flag already on the unit from an earlier pass stands unless the unit's scope has grown since; report it as \`flagged\`. Do not answer whether the architecture document still stands — the gate did. Do not select or execute any unit.
+Every amendment to a unit's type, dependencies, scope, publishes, gates, or completion, and to the execution order, is made in both the unit's entry and the plan's \`\`\`yaml lsf-plan block, which must agree; the script reads the block. Commit the amended plan on ${ctx.integrationBranch}. ${ownFilesOnly(`${plan.path}, and ${ctx.architectureDoc} if you made a \`document-text\` correction`)} Return the new plan SHA; each amendment with its kind (${AMENDMENT_KINDS.join(', ')}), unit, and statement; a verdict per item id; \`directEdits\` (an empty array when none); and every remaining unit over its size budget with its disposition: \`extracted\` (a preceding design unit now carries the excess), \`flagged\` (the excess is wall-clock, not context, and the unit carries the rationale — breakdown's size budget discharges it), or \`unrepaired\`. A flag already on the unit from an earlier pass stands unless the unit's scope has grown since; report it as \`flagged\`. Do not answer whether the architecture document still stands — the gate did. Do not select or execute any unit.
 ${RETURN_FIELDS}`;
 }
 
@@ -546,21 +551,21 @@ You are in the main checkout on ${ctx.integrationBranch}. The requester has answ
 ${replanBoundary('A decision')}
 ${JSON.stringify(decisions, null, 2)}
 
-Every amendment to a unit's type, dependencies, scope, publishes, gates, or completion, and to the execution order, is made in both the unit's entry and the plan's \`\`\`yaml lsf-plan block, which must agree; the script reads the block. Commit on ${ctx.integrationBranch} and return the new plan SHA (the SHA given when nothing changed), each amendment with its kind (${AMENDMENT_KINDS.join(', ')}), unit, and statement, a verdict per decision id, and \`directEdits\` (an empty array when none). Do not select or execute any unit.
+Every amendment to a unit's type, dependencies, scope, publishes, gates, or completion, and to the execution order, is made in both the unit's entry and the plan's \`\`\`yaml lsf-plan block, which must agree; the script reads the block. Commit on ${ctx.integrationBranch}. ${ownFilesOnly(`${plan.path}, and ${ctx.architectureDoc} if you made a \`document-text\` correction`)} Return the new plan SHA (the SHA given when nothing changed), each amendment with its kind (${AMENDMENT_KINDS.join(', ')}), unit, and statement, a verdict per decision id, and \`directEdits\` (an empty array when none). Do not select or execute any unit.
 ${RETURN_FIELDS}`;
 }
 
 function terminationPrompt(ctx, plan) {
   return `${header(ctx, plan)}
 
-You are in the main checkout on ${ctx.integrationBranch}. Every work unit in ${plan.path} is complete. Read its Meta-Tasks and Standing Obligations sections. Turn each substantial meta-task (integration testing, tuning infrastructure, anything needing its own implementation plan) into a work unit entry of type meta with a verifiable done condition, scope, dependencies, and gates, following phronithm:breakdown's unit conventions; append these to the plan's Work Units, to its execution order, and to its \`\`\`yaml lsf-plan block (entry and block must agree; the script reads the block), record the amendment in Plan Maintenance, and commit. List each small meta-task (documentation updates and the like) under \`directEdits\` with the path and what to change; do not make those edits. Return the new plan SHA and the ids of the appended units. If no meta-task remains, return the plan SHA given, unchanged.
+You are in the main checkout on ${ctx.integrationBranch}. Every work unit in ${plan.path} is complete. Read its Meta-Tasks and Standing Obligations sections. Turn each substantial meta-task (integration testing, tuning infrastructure, anything needing its own implementation plan) into a work unit entry of type meta with a verifiable done condition, scope, dependencies, and gates, following phronithm:breakdown's unit conventions; append these to the plan's Work Units, to its execution order, and to its \`\`\`yaml lsf-plan block (entry and block must agree; the script reads the block), record the amendment in Plan Maintenance, and commit. ${ownFilesOnly(plan.path)} List each small meta-task (documentation updates and the like) under \`directEdits\` with the path and what to change; do not make those edits. Return the new plan SHA and the ids of the appended units. If no meta-task remains, return the plan SHA given, unchanged.
 ${RETURN_FIELDS}`;
 }
 
 function directEditsPrompt(ctx, plan, what, edits) {
   return `${header(ctx, plan)}
 
-You are in the main checkout on ${ctx.integrationBranch}. Make these small edits, which the ${what} returned as outside the plan; commit them with the project's commit discipline, and return the path of the plan and the final commit SHA:
+You are in the main checkout on ${ctx.integrationBranch}. Make these small edits, which the ${what} returned as outside the plan; commit them with the project's commit discipline, and return the path of the plan and the final commit SHA. ${ownFilesOnly('the paths the edits below name')}
 
 ${JSON.stringify(edits, null, 2)}
 ${RETURN_FIELDS}`;
@@ -586,7 +591,7 @@ function ledgerPrompt(ctx, plan, wave, entries) {
 Append stage. You are in the main checkout on ${ctx.integrationBranch}. Append the Markdown between the markers below to the end of ${ctx.ledgerPath}, every character unchanged, preceded by one blank line. If the file does not exist, create its directory (\`mkdir -p $(dirname ${ctx.ledgerPath})\`) and the file with this heading first:
 
 ${ledgerHeading(ctx.name)}
-Do not reword, reorder, merge, or drop rows, and never edit earlier content. Commit on ${ctx.integrationBranch}. ${commitMessage(`docs(${ctx.name}): append ${ledgerLabel(entries, wave)} signal ledger entries`)} Return the path and the ${SHORT_SHA}.
+Do not reword, reorder, merge, or drop rows, and never edit earlier content. Commit on ${ctx.integrationBranch}. ${ownFilesOnly(ctx.ledgerPath)} ${commitMessage(`docs(${ctx.name}): append ${ledgerLabel(entries, wave)} signal ledger entries`)} Return the path and the ${SHORT_SHA}.
 
 <<<LEDGER
 ${renderLedger(entries, wave)}LEDGER>>>

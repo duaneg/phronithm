@@ -809,6 +809,39 @@ test('an obligation carried by its own terms is a record with its carrier, and a
   assert.match(uncarried.escalation.signals[0].statement, /^carried without a carrier: perf numbers/);
 });
 
+test('every main-checkout stage that commits names its own files and is barred from sweeping or discarding anyone else\'s', async () => {
+  const decisionsBlock = ['```yaml lsf-decisions', 'decisions:', '  - id: d1', '    date: 2026-09-24', '    question: q', '    decision: yes', '```'].join('\n');
+  let terminated = false;
+  const { rt, calls } = runtime(twoWaves(), {
+    ...discovering,
+    load: (p, o, u, st) => copied(st.plan, { decisionsBlock }),
+    termination: (p, o, u, s) => {
+      const edits = terminated ? [] : [{ path: 'README.md', description: 'mention A' }];
+      terminated = true;
+      return ret({ planSha: s.plan.sha, appendedUnits: [], directEdits: edits });
+    },
+  }, { decisions: [{ id: 'd1', question: 'q', decision: 'yes' }] });
+  await run(rt);
+  const committing = ['decision-log', 'decision-replan', 'merge', 'replan', 'ledger', 'termination', 'direct-edits'];
+  const seen = new Set();
+  for (const c of calls) {
+    const prefix = c.label.split(':')[0];
+    if (!committing.includes(prefix)) continue;
+    seen.add(prefix);
+    assert.match(c.prompt, /git add -- <paths>`, then `git commit -- <paths>`/, c.label);
+    assert.match(c.prompt, /Never run `git add -A`, `git add \.`, `git add -u`, `git commit -a`, `git stash`, `git clean` or `git reset --hard` in the main checkout/, c.label);
+  }
+  assert.deepEqual([...seen].sort(), [...committing].sort());
+  const at = (label) => calls.find((c) => c.label.startsWith(label)).prompt;
+  assert.match(at('decision-log'), /Commit only the files this stage wrote \(docs\/plans\/f-decisions\.md\)/);
+  assert.match(at('ledger'), /Commit only the files this stage wrote \(docs\/plans\/f-signals\/plan0\.md\)/);
+  assert.match(at('replan'), /Commit only the files this stage wrote \(docs\/plans\/f-breakdown\.md, and docs\/architecture\/f\.md if you made a `document-text` correction\)/);
+  const merge = at('merge');
+  assert.match(merge, /Commit only the files this stage wrote \(docs\/plans\/f-breakdown\.md and docs\/plans\/f-archive\.md\)/);
+  assert.match(merge, /undo that merge with `git reset --merge <pre-merge tip of integration>`/);
+  assert.match(merge, /would overwrite an uncommitted change that is not yours is also unresolvable/);
+});
+
 test('decisions are committed first, applied by a re-plan, and both SHAs reach every later prompt', async () => {
   const decisionsBlock = ['```yaml lsf-decisions', 'decisions:', '  - id: d1', '    date: 2026-09-12', '    question: q', '    decision: yes', '```'].join('\n');
   const { rt, calls, labels } = runtime(twoWaves(), { load: (p, o, u, st) => copied(st.plan, { decisionsBlock }), ledger: () => null }, { decisions: [{ id: 'd1', question: 'q', decision: 'yes' }] });

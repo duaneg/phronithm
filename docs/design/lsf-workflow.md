@@ -28,6 +28,13 @@ Documented behaviour this design relies on:
 - **No mid-run user input.** Workflow agents have AskUserQuestion and
   EnterPlanMode stripped; only permission prompts pause a run. Sign-off between
   stages means one workflow invocation per stage.
+- **The main checkout is shared with the requester**, who may edit it while
+  a run is live. Every stage that commits there (decision log, merge, re-plans,
+  termination, direct edits, ledger) stages and commits only its own files by
+  pathspec. It never uses `add -A`, `commit -a`, `stash`, `clean` or
+  `reset --hard` there: an unscoped commit once swept a requester's
+  `CLAUDE.md` edit into a ledger commit. A regressed merge is undone with
+  `git reset --merge`, which keeps unrelated uncommitted changes.
 - **Resume replays the longest unchanged prefix of `agent()` calls**, keyed on
   prompt text in call order. The first call whose prompt differs re-runs, and so
   does everything after it.
