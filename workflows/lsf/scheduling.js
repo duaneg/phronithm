@@ -216,6 +216,15 @@ function nullReturnSignal({ stage, unit, wave }) {
   });
 }
 
+// An append stage that returned without a commit SHA: its write may sit
+// uncommitted in the main checkout.
+function noCommitSignal({ stage, wave, path }) {
+  return signal({
+    kind: 'agent-null', source: 'structural', stage, wave,
+    statement: `${stage} returned no commit SHA; ${path} may hold an uncommitted change in the main checkout`, referent: path,
+  });
+}
+
 // Unit plan stage: one row per unit counting the clauses that admitted more
 // than one reading; the readings themselves live in the unit plan's
 // Readings section at `path`.
@@ -452,6 +461,6 @@ export {
   DEFAULT_CONFIG, BLOCKING_GATE_KINDS, REPLAN_ITEM_KINDS, PLAN_SUPERSEDING_STOP_KINDS,
   findCycle, ancestors, pathsOverlap, scopesOverlap, overlappingPairs, validatePlan,
   readySet, blockedUnits, mergeOrder, wavePlan,
-  nullReturnSignal, signalsFromReadings, signalsFromDocumentSize, OVERSIZE_FACTOR, signalsFromImplement, signalsFromFindings, signalsFromGate, invalidationComplete,
+  nullReturnSignal, noCommitSignal, signalsFromReadings, signalsFromDocumentSize, OVERSIZE_FACTOR, signalsFromImplement, signalsFromFindings, signalsFromGate, invalidationComplete,
   signalsFromMerge, distressSignals, evaluateWave, digest, renderLedger, ledgerWave, ledgerLabel, ledgerHeading,
 };

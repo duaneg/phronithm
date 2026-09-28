@@ -90,7 +90,7 @@ import {
 import { loadGraph } from './graph.js';
 import {
   DEFAULT_CONFIG, REPLAN_ITEM_KINDS, PLAN_SUPERSEDING_STOP_KINDS, validatePlan, readySet, blockedUnits, mergeOrder, wavePlan,
-  nullReturnSignal, signalsFromReadings, signalsFromDocumentSize, signalsFromImplement, signalsFromFindings, signalsFromGate,
+  nullReturnSignal, noCommitSignal, signalsFromReadings, signalsFromDocumentSize, signalsFromImplement, signalsFromFindings, signalsFromGate,
   signalsFromMerge, distressSignals, evaluateWave, digest, renderLedger, ledgerLabel, ledgerHeading,
 } from './scheduling.js';
 
@@ -257,6 +257,9 @@ const OBLIGATIONS_SCHEMA = stageSchema(obj({
 const SCRIBE_SCHEMA = stageSchema(obj({ path: str, sha: SHA_FIELD }));
 const LEDGER_SCHEMA = stageSchema(obj({ path: str, sha: SHA_FIELD, ...PAUSE_FIELD }));
 
+// An append stage's return names the commit it made; an empty SHA is no commit.
+const committed = (r) => Boolean(r.result.sha?.trim());
+
 // ---------------------------------------------------------------- prompts
 
 const RETURN_FIELDS = `
@@ -273,7 +276,7 @@ const commitMessage = (subject) => `The commit message is the subject line "${su
 // The main checkout is shared with the requester, who may edit it while the
 // run is live. A stage there commits only the files it wrote, by name, so an
 // edit it did not make is never swept into its commit or discarded.
-const ownFilesOnly = (what) => `The main checkout may hold uncommitted changes that are not yours: the requester can edit it while this run is live. Commit only the files this stage wrote (${what}), naming them: \`git add -- <paths>\`, then \`git commit -- <paths>\`, whose pathspec keeps everything else out of the commit. Never run \`git add -A\`, \`git add .\`, \`git add -u\`, \`git commit -a\`, \`git stash\`, \`git clean\` or \`git reset --hard\` in the main checkout, and never stage, revert, or discard a change you did not make.`;
+const ownFilesOnly = (what) => `The main checkout may hold uncommitted changes that are not yours: the requester can edit it while this run is live. Commit only the files this stage wrote (${what}), naming them: \`git add -- <paths>\`, then \`git commit -m <message> -- <paths>\`, options before the \`--\`, whose pathspec keeps everything else out of the commit. If the commit fails, return an empty SHA; never retry it without the pathspec. Never run \`git add -A\`, \`git add .\`, \`git add -u\`, \`git commit -a\`, \`git stash\`, \`git clean\` or \`git reset --hard\` in the main checkout, and never stage, revert, or discard a change you did not make.`;
 
 function header(ctx, plan) {
   const lines = [
@@ -909,18 +912,23 @@ async function run(runtime) {
     pauseRequested = true;
     log(`pause requested (${ctx.pauseRef} seen by ${label}); the run pauses at the next wave boundary`);
   };
+  // A scribe that returns without a commit SHA may have left its append
+  // uncommitted in the main checkout, where the next merge would meet it as
+  // a conflict. That is a stop, and no later scribe runs over the leftover.
+  let ledgerFault = null;
   const scribeLedger = async (label = `ledger:w${wave}`) => {
     const fresh = ledger.filter((e) => !scribed.has(e));
-    if (!fresh.length) return;
+    if (ledgerFault || !fresh.length) return;
     const r = await agent(ledgerPrompt(ctx, plan, wave, fresh), { label, ...tier(ctx, 'mechanical'), phase: 'Ledger', schema: LEDGER_SCHEMA });
     if (!r) { log(`ledger scribe returned null (${label}); ${fresh.length} row(s) stay unscribed`); return; }
     notePause(r, label);
+    if (!committed(r)) {
+      ledgerFault = noCommitSignal({ stage: 'ledger', wave: wave || undefined, path: ctx.ledgerPath });
+      log(`ledger scribe returned no commit SHA (${label}); ${fresh.length} row(s) stay unscribed`);
+      return;
+    }
     for (const e of fresh) scribed.add(e);
   };
-  if (carried.size) {
-    log(`${carried.size} ledger row(s) carried from a previous run`);
-    await scribeLedger('ledger:carried');
-  }
   // Every stop path: stamp, ledger, scribe, escalate. `stops` may already be
   // in the ledger (from evaluateWave); the rest are appended here. Rows
   // not yet scribed ride in the same append, so a stop costs one scribe.
@@ -928,12 +936,27 @@ async function run(runtime) {
     for (const s of stops) s.disposition = 'stopped';
     ledger.push(...stops.filter((s) => !ledger.includes(s)));
     await scribeLedger();
+    if (ledgerFault && !stops.includes(ledgerFault)) {
+      ledgerFault.disposition = 'stopped';
+      ledger.push(ledgerFault);
+      stops = [...stops, ledgerFault];
+    }
     log(`STOP at ${stage}: ${stops.map((s) => s.kind).join(', ')}`);
     return outcome('stopped', {
       escalation: escalation({ workflow: WORKFLOW, planSha: plan.sha, wave: wave || undefined, stage, signals: stops, decisionNeeded: decisionsFor(stops), ...extra }),
     });
   };
   const stopOn = stopped;
+  // Scribe, and stop when the scribe left no commit.
+  const scribeOrStop = async (label) => {
+    await scribeLedger(label);
+    return ledgerFault ? stopped('ledger', []) : null;
+  };
+  if (carried.size) {
+    log(`${carried.size} ledger row(s) carried from a previous run`);
+    const halt = await scribeOrStop('ledger:carried');
+    if (halt) return halt;
+  }
   // Edits a planning stage returned as outside the plan: one scribe makes
   // and commits them, and the ledger records each against the stage that
   // asked. Returns the signals; the caller evaluates them.
@@ -942,6 +965,7 @@ async function run(runtime) {
     const label = w === undefined ? 'direct-edits' : `direct-edits:w${w}`;
     const r = await agent(directEditsPrompt(ctx, at, what, edits), { label, ...tier(ctx, 'default'), phase, schema: SCRIBE_SCHEMA });
     if (!r) return [nullReturnSignal({ stage: 'direct-edits', wave: w })];
+    if (!committed(r)) return [noCommitSignal({ stage: 'direct-edits', wave: w, path: edits.map((e) => e.path).join(',') })];
     return edits.map((e) => signal({ kind: 'direct-edit', source: 'reported', stage, wave: w, statement: e.description, referent: e.path }));
   };
 
@@ -950,6 +974,7 @@ async function run(runtime) {
   if (Array.isArray(args.decisions) && args.decisions.length) {
     const d = await agent(decisionLogPrompt(ctx, args.decisions), { label: 'decision-log', ...tier(ctx, 'mechanical'), phase: 'Load', schema: DECISION_LOG_SCHEMA });
     if (!d) return stopOn('decision-log', [nullReturnSignal({ stage: 'decision-log' })]);
+    if (!committed(d)) return stopOn('decision-log', [noCommitSignal({ stage: 'decision-log', path: ctx.decisionLogPath })]);
     ctx.decisionLogSha = d.result.sha;
     ctx.decisionLogPath = d.result.path;
 
@@ -963,7 +988,8 @@ async function run(runtime) {
     const ev = evaluateWave(sigs);
     ledger.push(...ev.all);
     if (ev.stop) return stopped('decision-replan', ev.stops, { planSha: rp.result.planSha, preReplanSha: plan.sha });
-    await scribeLedger();
+    const halt = await scribeOrStop();
+    if (halt) return halt;
     plan = { ...plan, sha: rp.result.planSha };
     ctx.planSha = plan.sha;
     log(`decisions applied: ${rp.result.amendments.length} amendment(s) → plan @ ${plan.sha}`);
@@ -1011,7 +1037,8 @@ async function run(runtime) {
     // Everything the wave produced is committed by here; a pause returns
     // like a wave cap, from the plan as it stands.
     if (pauseRequested) {
-      await scribeLedger();
+      const halt = await scribeOrStop();
+      if (halt) return halt;
       log(`PAUSED after wave ${wave} on ${ctx.pauseRef}`);
       return outcome('paused', { note: `paused after ${wave} wave(s): ${ctx.pauseRef} exists; ${plan.units.length - completed.size} unit(s) remain. To resume: delete the ref (git update-ref -d ${ctx.pauseRef}) and relaunch from planSha with no decisions, passing unscribed back when non-empty` });
     }
@@ -1114,7 +1141,8 @@ async function run(runtime) {
     if (!items.length && !conflicts.length) {
       log(`wave ${wave}: nothing to absorb; re-plan skipped, plan @ ${plan.sha}`);
       if (evalA.stop) return stopped('wave', evalA.stops);
-      await scribeLedger();
+      const halt = await scribeOrStop();
+      if (halt) return halt;
       for (const u of plan.units) if (u.complete) completed.add(u.id);
       continue;
     }
@@ -1139,7 +1167,8 @@ async function run(runtime) {
     if (evalA.stop || evalB.stop) {
       return stopped(evalA.stop ? 'wave' : 'replan', [...evalA.stops, ...evalB.stops], rp ? { planSha: rp.result.planSha, preReplanSha: plan.sha } : {});
     }
-    await scribeLedger();
+    const halt = await scribeOrStop();
+    if (halt) return halt;
     plan = nextPlan;
     for (const u of plan.units) if (u.complete) completed.add(u.id);
     log(`wave ${wave}: re-plan ${rp.result.amendments.length} amendment(s) → plan @ ${plan.sha}; ${rp.result.summary}`);
@@ -1165,7 +1194,8 @@ async function run(runtime) {
   const obEval = evaluateWave(obSignals);
   ledger.push(...obEval.all);
   if (obEval.stop) return stopped('obligations', obEval.stops);
-  await scribeLedger();
+  const halt = await scribeOrStop();
+  if (halt) return halt;
 
   log(`complete: ${completed.size} unit(s) over ${wave} wave(s); silence is not evidence`);
   return outcome('complete');

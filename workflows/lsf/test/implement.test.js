@@ -215,6 +215,45 @@ test('a null scribe does not stop; its rows ride in the next append, or stay in 
   assert.deepEqual(never.unscribed.filter((s) => s.kind === 'deviation').map((s) => s.statement), ['dev-A', 'dev-B']);
 });
 
+test('a ledger scribe that returns no commit SHA stops the run at that append, and no later scribe runs', async () => {
+  const { rt, labels } = runtime(twoWaves(), {
+    implement: (p, o, u) => ret(implemented(u, { deviations: [`dev-${u}`] })),
+    ledger: () => ret({ path: 'docs/plans/f-signals.md', sha: ' ', pauseRequested: false }),
+  });
+  const out = await run(rt);
+  assert.equal(out.status, 'stopped');
+  assert.equal(out.escalation.stage, 'ledger');
+  assert.deepEqual(out.escalation.signals.map((s) => [s.kind, s.stage, s.referent]), [['agent-null', 'ledger', 'docs/plans/f-signals/plan0.md']]);
+  assert.match(out.escalation.signals[0].statement, /no commit SHA/);
+  assert.ok(!labels().includes('merge:w2'), 'the next wave does not merge over the leftover append');
+  assert.deepEqual(labels().filter((l) => l.startsWith('ledger')), ['ledger:w1']);
+  assert.deepEqual(out.unscribed.map((s) => s.kind), ['deviation', 'agent-null']);
+});
+
+test('a ledger scribe on a stop path that returns no commit SHA joins the escalation', async () => {
+  const conflict = { merge: () => ret({ integrationBranch: 'integration', merges: [{ unit: 'A', status: 'unresolvable', files: ['src/x.js'] }], planSha: 'm1' }) };
+  const { rt, labels } = runtime(twoWaves(), { ...conflict, ledger: () => ret({ path: 'x', sha: '' }) });
+  const out = await run(rt);
+  assert.equal(out.escalation.stage, 'wave');
+  assert.deepEqual(out.escalation.signals.map((s) => s.kind), ['merge-conflict-unresolvable', 'agent-null']);
+  assert.ok(out.escalation.signals.every((s) => s.disposition === 'stopped'));
+  assert.deepEqual(labels().filter((l) => l.startsWith('ledger')), ['ledger:w1']);
+});
+
+test('a decision-log or direct-edits scribe that returns no commit SHA stops like a null return', async () => {
+  const decisions = { decisions: [{ id: 'd1', question: 'q', decision: 'yes' }] };
+  const dec = await run(runtime(twoWaves(), { 'decision-log': () => ret({ path: 'docs/plans/f-decisions.md', sha: '' }) }, decisions).rt);
+  assert.equal(dec.escalation.stage, 'decision-log');
+  assert.deepEqual(dec.escalation.signals.map((s) => [s.kind, s.referent]), [['agent-null', 'docs/plans/f-decisions.md']]);
+
+  const edits = await run(runtime(twoWaves(), {
+    termination: (p, o, u, s) => ret({ planSha: s.plan.sha, appendedUnits: [], directEdits: [{ path: 'README.md', description: 'mention A' }] }),
+    'direct-edits': () => ret({ path: 'README.md', sha: '' }),
+  }).rt);
+  assert.equal(edits.escalation.stage, 'direct-edits');
+  assert.deepEqual(edits.escalation.signals.map((s) => [s.kind, s.referent]), [['agent-null', 'README.md']]);
+});
+
 test('the re-planned SHA appears in the next wave\'s prompts', async () => {
   const { rt, calls } = runtime(twoWaves(), discovering);
   await run(rt);
@@ -828,7 +867,8 @@ test('every main-checkout stage that commits names its own files and is barred f
     const prefix = c.label.split(':')[0];
     if (!committing.includes(prefix)) continue;
     seen.add(prefix);
-    assert.match(c.prompt, /git add -- <paths>`, then `git commit -- <paths>`/, c.label);
+    assert.match(c.prompt, /git add -- <paths>`, then `git commit -m <message> -- <paths>`, options before the `--`/, c.label);
+    assert.match(c.prompt, /never retry it without the pathspec/, c.label);
     assert.match(c.prompt, /Never run `git add -A`, `git add \.`, `git add -u`, `git commit -a`, `git stash`, `git clean` or `git reset --hard` in the main checkout/, c.label);
   }
   assert.deepEqual([...seen].sort(), [...committing].sort());
