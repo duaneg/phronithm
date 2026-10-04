@@ -49,3 +49,7 @@ test('escalation omits plan_sha and wave when unset', () => {
 test('gate-repin is an amendment kind', () => {
   assert.ok(AMENDMENT_KINDS.includes('gate-repin'));
 });
+
+test('unit removal and gate addition and removal are amendment kinds', () => {
+  for (const kind of ['unit-removed', 'gate-added', 'gate-removed']) assert.ok(AMENDMENT_KINDS.includes(kind), kind);
+});

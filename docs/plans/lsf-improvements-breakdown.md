@@ -844,7 +844,7 @@ On each unit completion, run the re-plan step before starting its dependants.
 
 ### 2026-10-04 — cleanup-data-safety returned
 Report: docs/plans/cleanup-data-safety-completion.md @ d2172e1.
-retired cleanup-data-safety — requester disputes the premise: the data was regenerable, and the defect is that records call it must-keep (kind outside the vocabulary; nothing was implemented)
+unit-removed cleanup-data-safety — requester disputes the premise: the data was regenerable, and the defect is that records call it must-keep
 done-condition problem-register — §D "Retained data" row restated; interrupted-attempt reset row added
 done-condition empirical-unit-design — retained artefacts weighs storage cost, a recipe against a path, and substrates with no storage outside the worktree
 done-condition long-running-design — resume distinguishes interrupted from superseded attempts
@@ -860,4 +860,5 @@ done-condition drive-decision-design — states whether the role binds only lsf-
 done-condition drive-mechanics — items cited by register id
 new-edge drive-decision-design → drive-mechanics — scope of driving rules
 done-condition long-running-impl — resume test for P-D6
-gate-added empirical-criteria-design, programme-close-out — data gates for the archipeligo and cartomancer records their walks read (kind outside the vocabulary)
+gate-added empirical-criteria-design, programme-close-out — data gates for the archipeligo and cartomancer records their walks read
+check significant-precision-sample — size budget re-checked on execution signals; within budget, rubric fixed before classification

@@ -75,8 +75,10 @@ const GATE_KINDS = Object.freeze(['environment', 'organisational', 'release', 'd
 const UNIT_TYPES = Object.freeze(['foundation', 'feature', 'integration', 'design', 'refactor', 'bug-fix', 'polish', 'meta']);
 
 // Re-plan amendment kinds, as breakdown's re-plan mode names them.
-// `gate-repin` is the workflow's own: a decision re-pins an environment gate.
-const AMENDMENT_KINDS = Object.freeze(['deferral', 'scope-reassignment', 'new-edge', 'done-condition', 'execution-order', 'unit-added', 'gate-repin']);
+// `unit-removed` deletes an incomplete unit; `gate-added` and `gate-removed`
+// change which gates a unit carries. `gate-repin` is the workflow's own: a
+// decision re-pins an environment gate.
+const AMENDMENT_KINDS = Object.freeze(['deferral', 'scope-reassignment', 'new-edge', 'done-condition', 'execution-order', 'unit-added', 'unit-removed', 'gate-added', 'gate-removed', 'gate-repin']);
 
 // The one field every agent() in the lsf-implement workflow returns beside `result`.
 const STAGE_COMMON_PROPERTIES = Object.freeze({
@@ -1592,7 +1594,7 @@ function replanPrompt(ctx, plan, wave, merged, conflicts, items, stops) {
 
 You are in the main checkout on ${ctx.integrationBranch}. Run the phronithm:breakdown skill in re-plan mode over ${plan.path} with the completion reports of wave ${wave}: ${merged.map((m) => m.completionPath).join(', ')}. Diff their deviations, deferrals, and discoveries against every remaining unit's scope, dependencies, and done condition; amend the plan; re-run the quality check over the remaining units, examining the size budget first where a completed unit showed distress. ${maintenanceForm(ctx, `re-plan wave ${wave} (<item ids>)`)} Treat each merge conflict below between units the plan claimed disjoint as a plan defect: record it and add the missing edge or scope correction. A file a unit wrote outside its Scope line is a Scope correction where a later unit shares the file.
 
-Items this wave, each with an id — deferrals, discoveries, claimed-disjoint conflicts, the gate's notes, and distress. Each is yours to absorb: amend the plan (a Scope or Publishes line, a done condition, an edge, the execution order, a unit added), or show the plan as it stands already answers it. Return a verdict for every id: \`amended\`, \`no-change\` (with what in the plan answers it), \`document-text\`, or \`cannot\` (with why the plan cannot absorb it — the answer changes a decision in the architecture document or the request record, or needs the requester). An id you do not answer is treated as \`cannot\` and stops the run.
+Items this wave, each with an id — deferrals, discoveries, claimed-disjoint conflicts, the gate's notes, and distress. Each is yours to absorb: amend the plan (a Scope or Publishes line, a done condition, an edge, the execution order, a unit added or removed), or show the plan as it stands already answers it. Return a verdict for every id: \`amended\`, \`no-change\` (with what in the plan answers it), \`document-text\`, or \`cannot\` (with why the plan cannot absorb it — the answer changes a decision in the architecture document or the request record, or needs the requester). An id you do not answer is treated as \`cannot\` and stops the run.
 
 \`document-text\` is for a gate note whose only remedy is wording in the architecture document and that moves no decision — a resolved unknown still marked open, a measured figure replacing an estimate, a named accessor or signature the code settled. Make that correction in the document, commit it, and put the section and the new wording in the verdict statement. A correction that would change what a section decides is not text; that is \`cannot\`.
 

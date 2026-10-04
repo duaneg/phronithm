@@ -300,14 +300,23 @@ Build the execution plan from the analysis.
    <amendment record in a fixed compact form, one entry per event, no restated
     statements — the completion reports and the signal ledger hold those:
     `### <date> — <unit> complete` with the one line
-    `Report: <path> @ <sha>. Ledger: <file> wave <n>.`;
+    `Report: <path> @ <sha>.`, followed by ` Ledger: <file> wave <n>.` where
+    a signal ledger exists;
     `### <date> — re-plan wave <n> (<item ids>)` or
     `### <date> — decisions <ids>`, each followed by one line per amendment
-    `<kind> <unit> — <one clause>`. On each unit completion, run the re-plan
-    step before starting its dependants.>
+    `<kind> <unit> — <one clause>`; outside the workflow, also one line
+    `check <unit> — <outcome>` per re-plan check that ran and changed
+    nothing. On each unit completion,
+    run the re-plan step before starting its dependants.>
    ```
 
-   Amendment kinds: `deferral`, `scope-reassignment`, `new-edge`, `done-condition`, `execution-order`, `unit-added`, `gate-repin` (a decision re-pins an environment gate). The workflow reads the same vocabulary.
+   Amendment kinds: `deferral`, `scope-reassignment`, `new-edge`, `done-condition`, `execution-order`, `unit-added`, `unit-removed`, `gate-added`, `gate-removed`, `gate-repin`. The workflow reads the same vocabulary. Three carry rules:
+
+   - `unit-removed` applies to an incomplete unit only; a completed unit's stub stays. Delete the entry, the block unit, and both execution-order entries. Each dependant's edge on it moves to the removed unit's own dependencies wherever ordering or a scope overlap needs it. The clause says why, where its scope and publishes went, and names any unmerged branch it leaves. Re-home or close each risk and standing obligation that names it, and re-run the quality check over its dependants.
+   - `gate-added` and `gate-removed` apply to incomplete units, entry and block together; an added gate's clause gives its kind, and its pin for an environment gate.
+   - `gate-repin`: a decision re-pins an environment gate.
+
+   A unit or gate that a decision-log `clears` entry names is not removed: the load stops on a clearance whose target is gone. Under the workflow, the re-plan's verdict on that item is `cannot`.
 
    A plan the workflow drives has a companion archive, `docs/plans/<name>-archive.md`, append-only: completed unit entries under `## Work Units`, closed risks under `## Closed risks`. Nothing in the plan is struck through or annotated as done.
 
@@ -321,7 +330,7 @@ Build the execution plan from the analysis.
 
 When a unit completes, diff its recorded deviations, deferrals, and discoveries against every downstream unit's scope, dependencies, and done condition. A deviation that adds work to a later unit, reassigns work between units, or leaves an interface unimplemented is a plan change, not an implementation note: amend the plan (entry and `## Graph` block together), re-run the Phase 2 step 4 quality check over the remaining units, and record the amendment in Plan Maintenance. Deferrals are the highest-yield case: "X is deliberately not here, it belongs to unit Y" is simultaneously a scope addition to Y, a possible new edge, and — if Y shares a file with a unit scheduled beside it — a broken parallel-stream claim.
 
-Execution signals are a trigger in their own right. A completion report showing distress — context near exhaustion, design decisions taken mid-implementation, a heavy deviation or deferral count — triggers this step even when no deviation touches downstream scope: re-run the quality check over the remaining units, examining the [size budget](#unit-size-budget) item first for units that resemble the completed one on its load factors, and record the outcome in Plan Maintenance.
+A completion report showing distress — context near exhaustion, design decisions taken mid-implementation, a heavy deviation or deferral count — triggers this step even when no deviation touches downstream scope: re-run the quality check over the remaining units, examining the [size budget](#unit-size-budget) item first for units that resemble the completed one on its load factors. Record the outcome as the re-plan's verdict on the distress item (held in the ledger) under the workflow, otherwise as a `check` line in Plan Maintenance.
 
 Invoked with an existing plan and completion reports (re-plan mode), this step is the whole workflow: apply the diff, re-run the quality check, re-present.
 

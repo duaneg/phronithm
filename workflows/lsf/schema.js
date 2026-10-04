@@ -55,8 +55,10 @@ const GATE_KINDS = Object.freeze(['environment', 'organisational', 'release', 'd
 const UNIT_TYPES = Object.freeze(['foundation', 'feature', 'integration', 'design', 'refactor', 'bug-fix', 'polish', 'meta']);
 
 // Re-plan amendment kinds, as breakdown's re-plan mode names them.
-// `gate-repin` is the workflow's own: a decision re-pins an environment gate.
-const AMENDMENT_KINDS = Object.freeze(['deferral', 'scope-reassignment', 'new-edge', 'done-condition', 'execution-order', 'unit-added', 'gate-repin']);
+// `unit-removed` deletes an incomplete unit; `gate-added` and `gate-removed`
+// change which gates a unit carries. `gate-repin` is the workflow's own: a
+// decision re-pins an environment gate.
+const AMENDMENT_KINDS = Object.freeze(['deferral', 'scope-reassignment', 'new-edge', 'done-condition', 'execution-order', 'unit-added', 'unit-removed', 'gate-added', 'gate-removed', 'gate-repin']);
 
 // The one field every agent() in the lsf-implement workflow returns beside `result`.
 const STAGE_COMMON_PROPERTIES = Object.freeze({
