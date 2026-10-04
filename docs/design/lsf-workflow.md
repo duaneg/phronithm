@@ -313,14 +313,16 @@ re-plan or termination moves it to the copy stage's report, which carries
 any `document-text` correction. A unit's own change to the document must
 not become its own baseline. When the pin moved in a wave, the gate is given
 each merged unit's change — its merge commit against the first parent, so
-the requester's commits drop out — and judges it against the pre-wave text.
+the requester's commits drop out — and judges it against the text it was
+merged onto, which includes the wave's earlier merges.
 A change that records the decision a design unit was charged to settle,
 settles a question the document left open to that unit, or corrects wording
 is returned under `amendments` and recorded as an architecture amendment
 with the unit; the re-plan's `document-text` corrections are the other
 source of that record. A change that moves a decision beyond that is an
-invalidation. An empty or missing report keeps the pin; a wave that merged
-nothing still advances it, since any change is then the requester's own. A
+invalidation, its five fields filled as any other. An empty or missing
+report keeps the pin; a merge stage that ran and merged nothing still
+advances it, since any change is then the requester's own. A
 gate that returns null judges nothing: the wave stops after its re-plan,
 the relaunch pins the branch tip, and the unjudged change is the baseline
 from then on, with the stop as its only record.

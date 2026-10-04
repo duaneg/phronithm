@@ -1580,24 +1580,21 @@ ${merges.map((m) => `- ${m.unit}: branch ${m.branch} (completion report ${m.comp
 ${RETURN_FIELDS}`;
 }
 
-// The pin has already moved to the merged text; a unit's own change to the
-// document is judged against the text the wave started from, so the change
-// cannot become its own baseline. Each unit's change is its merge commit
-// against the first parent, which leaves the requester's commits out.
-// With no pre-wave pin, each unit's change is judged against its merge's
-// first parent.
+// The pin has already moved to the merged text, so a unit's own change to
+// the document is judged against the text it was merged onto and cannot
+// become its own baseline. Its merge commit against the first parent leaves
+// the requester's commits out.
 function amendedClause(ctx, merged, prevArch) {
   if (prevArch === ctx.architectureSha) return '';
   const doc = ctx.architectureDoc;
-  const base = prevArch || 'the first parent of the unit\'s merge';
   const fallback = prevArch
-    ? `\`git diff ${prevArch} ${ctx.architectureSha} -- ${doc}\` holds its change among any others, and attributing them is yours`
+    ? `\`git diff ${prevArch} ${ctx.architectureSha} -- ${doc}\` holds its change among any others, judged against the document @ ${prevArch}; attributing them is yours`
     : 'no baseline either; judge its change from its completion report';
   const diffs = merged.map((m) => `- ${m.unit} (${m.type}): ${m.mergeSha
     ? `\`git diff ${m.mergeSha}^1 ${m.mergeSha} -- ${doc}\``
     : `merge SHA not reported; ${fallback}`}`);
   return `
-The architecture document changed during this wave, from ${prevArch || 'an unrecorded pin'} to the SHA above. Each merged unit's own change to it is listed below; an empty diff means the unit did not touch it, and changes outside these diffs are the requester's own and are not judged. Judge each unit's change against the document @ ${base}, the text the wave started from, reading that unit's completion report first. A change that records the decision a design unit was charged to settle, that settles a question the document left open to the unit that made it, or that corrects wording, goes under \`amendments\`: the unit, the section, and one clause on what changed. A change that alters what a section decided @ ${base} beyond that is an invalidation: \`decision\` is the text @ ${base}, \`evidence\` the merge SHA, \`amendment\` the text the unit wrote. Report each change once: an invalidation for a unit's change is not reported again as a premise invalidation of the amended text.
+The architecture document changed during this wave, from ${prevArch || 'an unrecorded pin'} to the SHA above. Each merged unit's own change to it is listed below; an empty diff means the unit did not touch it, and changes outside these diffs are the requester's own and are not judged. Judge each unit's change against the text it was merged onto (the diff's first commit), which includes changes merged before it this wave, reading that unit's completion report first. A change that records the decision a design unit was charged to settle, that settles a question the document left open to the unit that made it, or that corrects wording, goes under \`amendments\`: the unit, the section, and one clause on what changed. A change that alters what a section decided beyond that is an invalidation, all five fields filled: \`section\`; \`decision\`, what the section decided before the change; \`premise\`, what that decision rested on; \`evidence\`, the merge SHA and the lines of the diff; \`amendment\`, the text the unit wrote. Report each change once: an invalidation for a unit's change is not reported again as a premise invalidation of the amended text.
 ${diffs.join('\n')}
 `;
 }

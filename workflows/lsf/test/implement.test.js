@@ -1221,8 +1221,8 @@ test('a unit that amends the architecture document: the gate reads the amended t
   assert.ok(!gate.includes(archHeader('arch1')));
   assert.match(gate, /changed during this wave, from arch1 to the SHA above/);
   assert.ok(gate.includes(`- A (foundation): \`git diff m-A^1 m-A -- ${DOC}\``));
-  assert.match(gate, /Judge each unit's change against the document @ arch1/);
-  assert.match(gate, /alters what a section decided @ arch1 beyond that is an invalidation: `decision` is the text @ arch1, `evidence` the merge SHA, `amendment` the text the unit wrote/);
+  assert.match(gate, /Judge each unit's change against the text it was merged onto \(the diff's first commit\), which includes changes merged before it this wave/);
+  assert.match(gate, /alters what a section decided beyond that is an invalidation, all five fields filled: `section`; `decision`, what the section decided before the change; `premise`, what that decision rested on; `evidence`, the merge SHA and the lines of the diff; `amendment`, the text the unit wrote/);
   assert.match(gate, /goes under `amendments`/);
   for (const label of ['plan:B', 'critique-plan:r1:B', 'implement:B', 'critique-code:r1:B', 'review-gate:w2']) {
     const p = promptOf(calls, label);
@@ -1296,7 +1296,7 @@ test('a merge with no SHA for a unit falls back to the whole-wave diff; args.arc
   assert.ok(promptOf(calls, 'plan:A').includes(archHeader('argpin')));
   const gate = promptOf(calls, 'review-gate:w1');
   assert.match(gate, /from argpin to the SHA above/);
-  assert.ok(gate.includes(`- A (foundation): merge SHA not reported; \`git diff argpin arch2 -- ${DOC}\``));
+  assert.ok(gate.includes(`- A (foundation): merge SHA not reported; \`git diff argpin arch2 -- ${DOC}\` holds its change among any others, judged against the document @ argpin`));
 });
 
 test('the merge stage reports the architecture SHA after its last commit, and the gate returns amendments', async () => {
@@ -1329,7 +1329,6 @@ test('the pin stays on a null merge and advances, ungated, when nothing merged; 
   assert.equal((await run(unpinned.rt)).status, 'complete');
   const gate = promptOf(unpinned.calls, 'review-gate:w1');
   assert.match(gate, /from an unrecorded pin to the SHA above/);
-  assert.match(gate, /against the document @ the first parent of the unit's merge/);
   assert.ok(gate.includes(`- A (foundation): \`git diff m-A^1 m-A -- ${DOC}\``));
 });
 
