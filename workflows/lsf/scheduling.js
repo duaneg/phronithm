@@ -309,6 +309,11 @@ function signalsFromGate(result, { wave }) {
   for (const n of result.notes ?? []) {
     out.push(signal({ ...base, kind: 'architecture-note', statement: n.statement, referent: n.referent }));
   }
+  // A merged unit's own change to the architecture document that moves no
+  // decision: recorded, so the digest shows the document moved.
+  for (const a of result.amendments ?? []) {
+    out.push(signal({ ...base, kind: 'architecture-amendment', unit: a.unit, statement: `${a.unit}: ${a.statement}`, referent: a.section }));
+  }
   return out;
 }
 

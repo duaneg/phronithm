@@ -232,6 +232,24 @@ test('signalsFromGate: a complete invalidation stops; an incomplete one and ever
   assert.deepEqual(ev.records.map((s) => s.disposition), ['recorded', 'recorded']);
 });
 
+test('signalsFromGate: a unit\'s amendment to the architecture document is a record carrying the unit, listed in the digest', () => {
+  const sigs = signalsFromGate({
+    invalidations: [inv()],
+    notes: [{ statement: 'N3 trigger fired, no owner', referent: 'architecture §6 N3' }],
+    amendments: [{ unit: 'abi-design', section: '§7.2', statement: 'records the ABI disclosure decision the unit settled' }],
+  }, { wave: 2 });
+  assert.deepEqual(sigs.map((s) => s.kind), ['architecture-invalidated', 'architecture-note', 'architecture-amendment']);
+  const a = sigs[2];
+  assert.equal(a.source, 'gate');
+  assert.equal(a.stage, 'review-gate');
+  assert.equal(a.unit, 'abi-design');
+  assert.equal(a.referent, '§7.2');
+  assert.equal(a.statement, 'abi-design: records the ABI disclosure decision the unit settled');
+  const ev = evaluateWave(sigs);
+  assert.deepEqual(ev.stops.map((s) => s.kind), ['architecture-invalidated']);
+  assert.deepEqual(digest(ev.all).attention.architectureAmendments, ['abi-design: records the ABI disclosure decision the unit settled']);
+});
+
 test('nullReturnSignal is a structural STOP', () => {
   const s = nullReturnSignal({ stage: 'review', unit: 'C', wave: 1 });
   assert.equal(s.kind, 'agent-null');

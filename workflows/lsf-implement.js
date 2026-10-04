@@ -58,7 +58,7 @@ const RECORD_KINDS = Object.freeze([
   'claimed-disjoint-conflict', // merge: conflict between units the plan called disjoint, resolved mechanically
   'amendment', // re-plan: a plan amendment
   'verdict', // re-plan: amended / no-change / document-text verdict on a re-plan item
-  'architecture-amendment', // re-plan: a wording-only correction to the architecture document, no decision moved
+  'architecture-amendment', // re-plan: a wording-only correction to the architecture document, no decision moved; gate: a merged unit's own change to it that moves no decision
   'over-budget-repaired', // re-plan: a preceding design unit extracted
   'over-budget-flagged', // re-plan: excess is wall-clock, not context; flagged with rationale
   'standing-obligation-carried', // obligations: discharge lies outside this plan by the obligation's own terms, and the referent names where it is now recorded
@@ -899,6 +899,11 @@ function signalsFromGate(result, { wave }) {
   }
   for (const n of result.notes ?? []) {
     out.push(signal({ ...base, kind: 'architecture-note', statement: n.statement, referent: n.referent }));
+  }
+  // A merged unit's own change to the architecture document that moves no
+  // decision: recorded, so the digest shows the document moved.
+  for (const a of result.amendments ?? []) {
+    out.push(signal({ ...base, kind: 'architecture-amendment', unit: a.unit, statement: `${a.unit}: ${a.statement}`, referent: a.section }));
   }
   return out;
 }

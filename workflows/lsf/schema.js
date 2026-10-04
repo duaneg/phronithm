@@ -38,7 +38,7 @@ const RECORD_KINDS = Object.freeze([
   'claimed-disjoint-conflict', // merge: conflict between units the plan called disjoint, resolved mechanically
   'amendment', // re-plan: a plan amendment
   'verdict', // re-plan: amended / no-change / document-text verdict on a re-plan item
-  'architecture-amendment', // re-plan: a wording-only correction to the architecture document, no decision moved
+  'architecture-amendment', // re-plan: a wording-only correction to the architecture document, no decision moved; gate: a merged unit's own change to it that moves no decision
   'over-budget-repaired', // re-plan: a preceding design unit extracted
   'over-budget-flagged', // re-plan: excess is wall-clock, not context; flagged with rationale
   'standing-obligation-carried', // obligations: discharge lies outside this plan by the obligation's own terms, and the referent names where it is now recorded
