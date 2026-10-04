@@ -2,7 +2,7 @@
 
 ## Summary
 
-A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 27 units; critical path 11 units through the substrate decision and the serialised script stream. Base commit `b3dac6a`.
+A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 28 units, one complete; critical path 11 units through the substrate decision and the serialised script stream. Base commit `b3dac6a`.
 
 The postmortem's problems are taken as accurate for archipeligo. The proposals in [lsf-improvements](../design/lsf-improvements.md) are candidate options, not designs: every decision unit states its problem without a solution, checks whether the problem holds outside archipeligo, and weighs the proposal against alternatives that include doing nothing.
 
@@ -14,18 +14,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 
 ## Work Units
 
-### problem-register
-- **Type**: foundation
-- **Risk**: medium — the generality classes rest on one comparison project
-- **Clarity**: specified
-- **Iteration**: write-once
-- **Effort**: medium
-- **Scope**: `docs/design/lsf-problem-register.md`
-- **Publishes**: problem ids; each problem's solution-free statement and generality class
-- **Depends on**: none
-- **External gates**: `archipeligo-records` (data, `~/src/archipeligo-evolved` @ `c220c62`); `cartomancer-records` (data, `~/src/cartomancer-v2` `docs/plans/quality-bar-interiors-signals.md` and 41 session transcripts from 2026-09-10, retained 92 days)
-- **Done condition**: The register is committed with one row per friction item in postmortem §A–§G and improvements §1, and an appendix mapping every postmortem bullet and table row to a register id. Each row has a statement that names no remedy, a cost citation, a generality class (`context-free defect`, `recurs on cartomancer-v2` with a citation, `archipeligo only so far`, or `harness-imposed`), and an empty disposition. The postmortem §D "Retained data" row states the problem as records that call regenerable data (about 8 h to regenerate) must-keep, and the disk that retention costs. It does not state the problem as cleanup destroying data. A further row records that resuming a run resets an interrupted implement attempt's worktree (`implement.js:295`), discarding its commits and untracked files; it is classed `context-free defect` and has no cost citation. `phronithm:critique` (critique-design) passes at the gate bar.
-- **Description**: Separate each problem from the remedy the notes attach to it, and test each against cartomancer-v2's 41-unit stream. Later units cite register ids, not improvements-note section numbers.
+### problem-register — complete at `f10f9d5`; entry at `f3a395a`; report `docs/plans/problem-register-completion.md`
 
 ### relay-probe
 - **Type**: design
@@ -50,7 +39,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: the option selected for the spike; the interim policy for the Workflow script while any replacement is built
 - **Depends on**: problem-register (knowledge, problem ids and generality classes); relay-probe (knowledge, relay behaviour)
 - **External gates**: `requester-verdict` (organisational)
-- **Done condition**: `docs/design/lsf-substrate.md` is committed with at least three options including the status quo. Each is assessed against every register row classed as mechanical-stage, long-running work, relay, or driving mechanics: what it removes, what it costs, and what it gives up (journal resume, the `/workflows` view, the per-agent floor). One option is selected for the spike and the requester's verdict is recorded.
+- **Done condition**: `docs/design/lsf-substrate.md` is committed with at least three options including the status quo. Each is assessed against every register row whose Topic is `mechanical-stage`, `long-running`, `relay` or `driving`, with that row's Appendix B instances: what it removes, what it costs, and what it gives up (journal resume, the `/workflows` view, the per-agent floor). One option is selected for the spike and the requester's verdict is recorded.
 - **Description**: Postmortem §C, and the parts of §A, §D, §E and §F that follow from the script having no filesystem, shell or clock. Options to cover at minimum: harden the script's mechanical stages; have mechanical agents run committed deterministic tools instead of transcribing; a host-side driver (the improvements note's suggestion, exemplar `~/src/maths-proofs/tools/campaign/`); and a split in which only some stages move.
 
 ### substrate-spike
@@ -127,7 +116,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Scope**: `docs/design/lsf-empirical-work.md::criteria`
 - **Publishes**: the decided requirements on measured success criteria, cited evidence, and the criterion-against-vision check
 - **Depends on**: problem-register (knowledge, problem ids and generality classes)
-- **External gates**: `requester-verdict` (organisational)
+- **External gates**: `archipeligo-records` (data, `~/src/archipeligo-evolved` @ `c220c62`); `cartomancer-records` (data, `~/src/cartomancer-v2` quality-bar-interiors brief and plans); `requester-verdict` (organisational)
 - **Done condition**: The Criteria section is committed. It decides what Phases 1–2 require of a success criterion judged by measurement and of evidence cited for an architecture claim, and how a criterion is checked against the vision it stands for. It is walked against archipeligo's three cases (the 3-seed gate, the 41-seed gate, the undefined "persists") and against cartomancer-v2's `quality-bar-interiors`, stating the burden it adds to a programme with no measured criterion. The requester's verdict is recorded.
 - **Description**: Postmortem §A (gate designs, evidence from another system, an undefined criterion, a criterion that did not test the vision) and §G.
 
@@ -137,12 +126,25 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Clarity**: exploratory
 - **Iteration**: write-once
 - **Effort**: medium
-- **Scope**: `docs/design/lsf-empirical-work.md`
+- **Scope**: `docs/design/lsf-empirical-work.md::units`
 - **Publishes**: the decided plan-level shape of empirical work
 - **Depends on**: problem-register (knowledge, problem ids and generality classes); empirical-criteria-design (design, the criteria form a unit's registration cites)
-- **External gates**: `requester-verdict` (organisational)
-- **Done condition**: The Units section is committed. It decides how a plan represents work whose outcome is a measurement, comparing at least a new unit type, added entry fields, and routing the work to `phronithm:investigate`. It covers fail branches, sizing under outcome uncertainty, retained artefacts, and a measurement that supersedes cited evidence without moving a decision. For retained artefacts, it weighs regeneration cost against storage cost, compares a record citing a regeneration recipe (commit plus command) with one citing a path in a checkout, and holds on a substrate that offers no storage outside the worktree (exemplar `~/src/maths-proofs/tools/campaign/`). It is walked against `stage1-gate` at `arch@dc88280` and `stage2-horizon-confirm`. The requester's verdict is recorded.
-- **Description**: Postmortem §A's unit-level bullets: campaigns typed `feature` or `integration`, units sized by context and not by outcome uncertainty, measured values accumulating in the architecture document. Also postmortem §D "Retained data": three records cite an unmerged worktree path as must-keep for data regenerable in about 8 h.
+- **External gates**: `archipeligo-records` (data, `~/src/archipeligo-evolved` @ `c220c62`); `requester-verdict` (organisational)
+- **Done condition**: The Units section is committed. It decides how a plan represents work whose outcome is a measurement, comparing at least a new unit type, added entry fields, and routing the work to `phronithm:investigate`. It covers fail branches (P-A4), the risk and clarity rating of sampled work (P-A5), companion tuning units (P-A6), sizing under outcome uncertainty (P-A9), and a measurement that supersedes cited evidence without moving a decision (P-A10). It is walked against `stage1-gate` at `arch@dc88280` and `stage2-horizon-confirm`. The requester's verdict is recorded.
+- **Description**: Postmortem §A's unit-level bullets: campaigns typed `feature` or `integration`, units sized by context and not by outcome uncertainty, measured values accumulating in the architecture document.
+
+### retained-artefacts-design
+- **Type**: design
+- **Risk**: medium — what a record may cite as must-keep binds every unit that produces data
+- **Clarity**: exploratory — one open decision: what a record may cite as must-keep
+- **Iteration**: write-once
+- **Effort**: medium
+- **Scope**: `docs/design/lsf-empirical-work.md::retained-artefacts`
+- **Publishes**: the decided retained-artefact policy
+- **Depends on**: problem-register (knowledge, P-D5)
+- **External gates**: `archipeligo-records` (data, `~/src/archipeligo-evolved` @ `c220c62`); `archipeligo-runs` (data, `~/src/archipeligo-runs`, 80 GB on 2026-10-04); `requester-verdict` (organisational)
+- **Done condition**: The Retained artefacts section is committed. It decides what a record may cite as must-keep: it weighs regeneration cost against storage cost, compares a record citing a regeneration recipe (commit plus command) with one citing a retained path (a run directory outside the checkout, or a worktree), and holds on a substrate that offers no storage outside the worktree (exemplar `~/src/maths-proofs/tools/campaign/`). It is walked against P-D5's three records (`horizon.md`, `bid-era.md`, `trigger.md`) and the 80 GB and 372 MB worktree they keep. The requester's verdict is recorded.
+- **Description**: P-D5. The re-plan after it names the units that carry the policy; `empirical-unit-impl` and `long-running-design` consume it by default.
 
 ### findings-consumer-design
 - **Type**: design
@@ -167,7 +169,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: the decided session role at a stop
 - **Depends on**: problem-register (knowledge, problem ids and generality classes); substrate-options (design, the session's duties differ by substrate)
 - **External gates**: `requester-verdict` (organisational)
-- **Done condition**: `docs/design/lsf-session-role.md` is committed. It decides what analysis precedes a question to the requester, when a recommendation may be made and what it must state, the model tier, the route from repeated stops to an investigation, and whether gates may be cleared ahead of the stop. It is replayed against postmortem §E's four cases (the 41-seed question, "Keep baseline", the three stage-1 stops, the three pre-clearable gates). The requester's verdict is recorded.
+- **Done condition**: `docs/design/lsf-session-role.md` is committed. It decides what analysis precedes a question to the requester, when a recommendation may be made and what it must state, the model tier, the route from repeated stops to an investigation, and whether gates may be cleared ahead of the stop. It is replayed against postmortem §E's four cases (the 41-seed question, "Keep baseline", the three stage-1 stops, the three pre-clearable gates). Since P-E1, P-E3 to P-E7 and P-E9 also occurred on cartomancer-v2 in sessions driven without `phronithm:lsf-drive`, it states whether the decided role binds only `phronithm:lsf-drive` or any session driving a run. The requester's verdict is recorded.
 - **Description**: Postmortem §E "Compressed decisions", "A recommendation without its basis", "Options inside a failing frame" and "Pre-clearable gates".
 
 ### mechanical-stage-integrity
@@ -180,7 +182,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: none
 - **Depends on**: substrate-spike (design, confirmed substrate); gate-results-integrity (logical, serialises the script files)
 - **External gates**: `node` (environment, v26.9.0)
-- **Done condition**: For each of the load, ledger-append, completion-report-copy and decision-log stages, a test injects the transcription faults postmortem §C records for it (placeholder, truncation, overwritten or deleted rows, dropped line, invented entry) and shows none is committed or accepted silently. The tests pass and the built script is not stale.
+- **Done condition**: For each of the load, ledger-append, completion-report-copy and decision-log stages, a test injects the transcription faults that P-C1 to P-C4 and their Appendix B probes record for it, and shows none is committed or accepted silently. The faults are a placeholder, truncation, overwritten or deleted rows, an append's own new rows altered or a heading dropped, a dropped line, a dropped closing fence, and an invented entry. Tests also show that a returned SHA that does not resolve to a commit is rejected (P-C8's fabricated tails), and that a ledger append is not given a wave heading that disagrees with its rows. The tests pass and the built script is not stale.
 - **Description**: **Provisional.** Postmortem §C: at least 14 faults in 218 haiku invocations; cartomancer-v2's review found 8 wrong SHAs in 367 returns. If the substrate decision moves these stages out of agents, this unit is replaced by the units that build that.
 
 ### stage-failure-handling
@@ -243,7 +245,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Effort**: large
 - **Scope**: `docs/design/lsf-long-running.md`
 - **Publishes**: the decision on work that outlasts a stage
-- **Depends on**: substrate-spike (design, confirmed substrate); empirical-unit-design (design, plan-level shape)
+- **Depends on**: substrate-spike (design, confirmed substrate); empirical-unit-design (design, plan-level shape); retained-artefacts-design (design, retained-artefact policy for a job's outputs)
 - **External gates**: none
 - **Done condition**: `docs/design/lsf-long-running.md` is committed. It decides how work that outlasts one agent stage runs, and states the behaviour of the wave barrier, a re-plan while the work is in flight, resume, liveness, and a process left behind by a stopped run. On resume it distinguishes an interrupted attempt from one a re-plan or decision superseded, and states what happens to the interrupted attempt's commits and untracked outputs. `phronithm:critique` (critique-design) passes at the gate bar.
 - **Description**: Postmortem §A: 18 campaign stages took 39.7 of 62.1 implement agent-hours; one campaign outlived its stage and left an orphan process.
@@ -258,7 +260,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: none
 - **Depends on**: long-running-design (design, the decision); relay-mitigation (logical, serialises the script files)
 - **External gates**: `node` (environment, v26.9.0)
-- **Done condition**: A test shows a unit whose job outlasts its launching stage completes with its results reviewed, and that a stopped run leaves no process the run has no record of. The tests pass and the built script is not stale.
+- **Done condition**: A test shows a unit whose job outlasts its launching stage completes with its results reviewed, and that a stopped run leaves no process the run has no record of. A test shows that resuming a run treats an interrupted implement attempt's commits and untracked outputs as `long-running-design` decided (P-D6). The tests pass and the built script is not stale.
 - **Description**: **Provisional.** The re-plan after `long-running-design` splits this unit if the decision spans more than the script.
 
 ### empirical-criteria-impl
@@ -295,9 +297,9 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Effort**: medium
 - **Scope**: `skills/breakdown/SKILL.md`, `docs/plan-graph.md`
 - **Publishes**: none
-- **Depends on**: empirical-unit-design (design, plan-level shape); empirical-script-support (testing, the parser must accept what the skill emits); plan-preflight-check (logical, serialises `skills/breakdown/SKILL.md`)
+- **Depends on**: empirical-unit-design (design, plan-level shape); retained-artefacts-design (design, retained-artefact policy); empirical-script-support (testing, the parser must accept what the skill emits); plan-preflight-check (logical, serialises `skills/breakdown/SKILL.md`)
 - **External gates**: none
-- **Done condition**: `skills/breakdown/SKILL.md` and `docs/plan-graph.md` carry the decided shape. A fixture plan written to it passes the pre-flight command. `phronithm:critique` (critique-skill) passes at the gate bar and a `phronithm:edit` pass has been applied.
+- **Done condition**: `skills/breakdown/SKILL.md` and `docs/plan-graph.md` carry the decided shape, and the retained-artefact policy wherever that decision places it in them. A fixture plan written to it passes the pre-flight command. `phronithm:critique` (critique-skill) passes at the gate bar and a `phronithm:edit` pass has been applied.
 - **Description**: **Provisional.**
 
 ### programme-close-out
@@ -309,7 +311,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Scope**: `skills/large-scale-feature/SKILL.md::termination`, `skills/lsf-drive/SKILL.md::termination`
 - **Publishes**: none
 - **Depends on**: findings-consumer-design (design, what an unfixed finding is at close); empirical-criteria-design (design, the criterion-against-vision check)
-- **External gates**: none
+- **External gates**: `archipeligo-records` (data, `~/src/archipeligo-evolved` @ `c220c62`)
 - **Done condition**: Both Termination sections define a programme-level close: a review of what was delivered against the request record and the vision, and an audit of unfixed findings over every unit. Walked against archipeligo's close-out, the step as written covers the 26 review-stage rows that audit missed and prompts the vision review the requester had to ask for. `phronithm:critique` (critique-skill) passes at the gate bar.
 - **Description**: Postmortem §B's last two paragraphs.
 
@@ -334,9 +336,9 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Effort**: medium
 - **Scope**: `skills/lsf-drive/SKILL.md`
 - **Publishes**: none
-- **Depends on**: substrate-spike (design, confirmed substrate); drive-presentation-impl, relay-mitigation, plan-preflight-check, programme-close-out (logical, each serialises a section of `skills/lsf-drive/SKILL.md`)
+- **Depends on**: substrate-spike (design, confirmed substrate); drive-decision-design (design, whether driving rules bind only `phronithm:lsf-drive`); drive-presentation-impl, relay-mitigation, plan-preflight-check, programme-close-out (logical, each serialises a section of `skills/lsf-drive/SKILL.md`)
 - **External gates**: none
-- **Done condition**: For each of postmortem §E's "Handoff" and "Launch-argument decisions" items, §C's cleanup-permission row, and improvements §1 (out-of-plan commits while a run is live), `phronithm:lsf-drive` carries a rule or the unit's completion report gives the register row a `declined` disposition with the reason. The skill's byte size before and after is reported. `phronithm:critique` (critique-skill) passes at the gate bar and a `phronithm:edit` pass has been applied.
+- **Done condition**: For each of P-C9, P-E1, P-E6, P-E7, P-E8, P-E9 and P-I1, `phronithm:lsf-drive` carries a rule or the unit's completion report gives the register row a `declined` disposition with the reason. The skill's byte size before and after is reported. `phronithm:critique` (critique-skill) passes at the gate bar and a `phronithm:edit` pass has been applied.
 - **Description**: About 60% of requester inputs in the first week were mechanics. The unit first asks which duties the confirmed substrate removes, and adds rules only for those that remain. **Flag:** up to seven items exceeds the planned-steps bound; each is a few lines of skill text in one file, so the excess is not context.
 
 ### shakedown-fixture
@@ -371,10 +373,10 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 units:
   - id: problem-register
     type: foundation
-    complete: false
+    complete: true
     dependencies: []
     scope: [docs/design/lsf-problem-register.md]
-    publishes: [problem ids, generality classes]
+    publishes: [problem ids, generality classes, topic tags]
     gates:
       - name: archipeligo-records
         kind: data
@@ -464,15 +466,39 @@ units:
     scope: [docs/design/lsf-empirical-work.md::criteria]
     publishes: [criteria requirements]
     gates:
+      - name: archipeligo-records
+        kind: data
+        pin: "archipeligo-evolved c220c62"
+      - name: cartomancer-records
+        kind: data
+        pin: "quality-bar-interiors brief and plans"
       - name: requester-verdict
         kind: organisational
   - id: empirical-unit-design
     type: design
     complete: false
     dependencies: [problem-register, empirical-criteria-design]
-    scope: [docs/design/lsf-empirical-work.md]
+    scope: [docs/design/lsf-empirical-work.md::units]
     publishes: [empirical work plan shape]
     gates:
+      - name: archipeligo-records
+        kind: data
+        pin: "archipeligo-evolved c220c62"
+      - name: requester-verdict
+        kind: organisational
+  - id: retained-artefacts-design
+    type: design
+    complete: false
+    dependencies: [problem-register]
+    scope: [docs/design/lsf-empirical-work.md::retained-artefacts]
+    publishes: [retained-artefact policy]
+    gates:
+      - name: archipeligo-records
+        kind: data
+        pin: "archipeligo-evolved c220c62"
+      - name: archipeligo-runs
+        kind: data
+        pin: "~/src/archipeligo-runs, 80 GB on 2026-10-04"
       - name: requester-verdict
         kind: organisational
   - id: findings-consumer-design
@@ -549,7 +575,7 @@ units:
   - id: long-running-design
     type: design
     complete: false
-    dependencies: [substrate-spike, empirical-unit-design]
+    dependencies: [substrate-spike, empirical-unit-design, retained-artefacts-design]
     scope: [docs/design/lsf-long-running.md]
     publishes: [long-running work decision]
     gates: []
@@ -582,7 +608,7 @@ units:
   - id: empirical-unit-impl
     type: feature
     complete: false
-    dependencies: [empirical-unit-design, empirical-script-support, plan-preflight-check]
+    dependencies: [empirical-unit-design, retained-artefacts-design, empirical-script-support, plan-preflight-check]
     scope: [skills/breakdown/SKILL.md, docs/plan-graph.md]
     publishes: []
     gates: []
@@ -592,7 +618,10 @@ units:
     dependencies: [findings-consumer-design, empirical-criteria-design]
     scope: [skills/large-scale-feature/SKILL.md::termination, skills/lsf-drive/SKILL.md::termination]
     publishes: []
-    gates: []
+    gates:
+      - name: archipeligo-records
+        kind: data
+        pin: "archipeligo-evolved c220c62"
   - id: drive-presentation-impl
     type: feature
     complete: false
@@ -603,7 +632,7 @@ units:
   - id: drive-mechanics
     type: feature
     complete: false
-    dependencies: [substrate-spike, drive-presentation-impl, relay-mitigation, plan-preflight-check, programme-close-out]
+    dependencies: [substrate-spike, drive-decision-design, drive-presentation-impl, relay-mitigation, plan-preflight-check, programme-close-out]
     scope: [skills/lsf-drive/SKILL.md]
     publishes: []
     gates: []
@@ -624,7 +653,7 @@ units:
     scope: [docs/design/lsf-problem-register.md, docs/design/lsf-improvements.md, docs/design/lsf-workflow.md::status, CLAUDE.md]
     publishes: []
     gates: []
-execution_order: [problem-register, relay-probe, substrate-options, significant-precision-sample, arch-pin-refresh, empirical-criteria-design, substrate-spike, gate-results-integrity, empirical-unit-design, findings-consumer-design, drive-decision-design, plan-preflight-check, mechanical-stage-integrity, stage-failure-handling, empirical-script-support, findings-consumer-impl, relay-mitigation, long-running-design, long-running-impl, empirical-criteria-impl, phase2-gate-discipline, empirical-unit-impl, programme-close-out, drive-presentation-impl, drive-mechanics, shakedown-fixture, programme-close]
+execution_order: [problem-register, relay-probe, substrate-options, significant-precision-sample, arch-pin-refresh, empirical-criteria-design, retained-artefacts-design, substrate-spike, gate-results-integrity, empirical-unit-design, findings-consumer-design, drive-decision-design, plan-preflight-check, mechanical-stage-integrity, stage-failure-handling, empirical-script-support, findings-consumer-impl, relay-mitigation, long-running-design, long-running-impl, empirical-criteria-impl, phase2-gate-discipline, empirical-unit-impl, programme-close-out, drive-presentation-impl, drive-mechanics, shakedown-fixture, programme-close]
 ```
 
 ## Dependency Graph
@@ -636,7 +665,7 @@ graph TD
   RV([requester-verdict])
   CC([claude-code-workflow-tool 2.1.289])
 
-  PR[problem-register]
+  PR[problem-register: complete]
   RP[relay-probe]
   SO[substrate-options]
   SS[substrate-spike]
@@ -646,6 +675,7 @@ graph TD
   SPS[significant-precision-sample]
   ECD[empirical-criteria-design]
   EUD[empirical-unit-design]
+  RAD[retained-artefacts-design]
   FCD[findings-consumer-design]
   DDD[drive-decision-design]
   MSI[mechanical-stage-integrity]
@@ -683,6 +713,9 @@ graph TD
   EUD -.-> ESS
   EUD -.-> LRD
   EUD -.-> EUI
+  PR -.-> RAD
+  RAD -.-> LRD
+  RAD -.-> EUI
   FCD -.-> FCI
   LRD -.-> LRI
   ECD -.-> ECI --> P2G
@@ -692,6 +725,7 @@ graph TD
   FCD -.-> PCO
   ECD -.-> PCO
   DDD -.-> DPI --> DM
+  DDD -.-> DM
   RM --> DM
   PPC --> DM
   PCO --> DM
@@ -706,6 +740,7 @@ graph TD
   RV --> SO
   RV --> ECD
   RV --> EUD
+  RV --> RAD
   RV --> FCD
   RV --> DDD
   RV --> P2G
@@ -719,7 +754,7 @@ graph TD
 
 1. `problem-register`, `relay-probe`. The register is the foundation. The probe is small and feeds the substrate decision.
 2. `substrate-options`, `significant-precision-sample`, `arch-pin-refresh`. The highest-risk decision is taken as early as its inputs allow. The precision sample has no dependencies and gates the findings decision.
-3. `empirical-criteria-design`, `substrate-spike`, `gate-results-integrity`.
+3. `empirical-criteria-design`, `retained-artefacts-design`, `substrate-spike`, `gate-results-integrity`.
 4. `empirical-unit-design`, `findings-consumer-design`, `drive-decision-design`, `plan-preflight-check`. All four design decisions land before any provisional unit they govern starts.
 5. `mechanical-stage-integrity`, `stage-failure-handling`, `empirical-script-support`, `findings-consumer-impl`, `relay-mitigation`. The script stream, serial because every unit writes `implement.js`, its test file and the generated script.
 6. `long-running-design`, `long-running-impl`. Last in the script stream: the least certain unit, and the one most likely to be re-planned.
@@ -732,31 +767,31 @@ graph TD
 
 ### 2 workers
 
-- **Worker 1, decisions and skill text.** `problem-register` → `substrate-options` → `empirical-criteria-design` → `empirical-unit-design` → `findings-consumer-design` → `drive-decision-design` → the skill-text units of step 7. Writes `docs/design/` decision records and `skills/`.
+- **Worker 1, decisions and skill text.** `empirical-criteria-design` → `retained-artefacts-design` → `substrate-options` → `empirical-unit-design` → `findings-consumer-design` → `drive-decision-design` → the skill-text units of step 7. Writes `docs/design/` decision records and `skills/`.
 - **Worker 2, script.** `relay-probe` → `arch-pin-refresh` → `gate-results-integrity` → `significant-precision-sample` → `plan-preflight-check` → `substrate-spike` → the script stream of steps 5–6. Writes `workflows/lsf/`, `workflows/lsf-implement.js` and sections of `docs/design/lsf-workflow.md`.
 
 Synchronisation points: `relay-probe` before `substrate-options`; `substrate-options` before `substrate-spike`; each design unit before the script unit it governs; both workers before `shakedown-fixture`.
 
-Shared files are split by section. `docs/design/lsf-workflow.md`, `skills/lsf-drive/SKILL.md`, `skills/large-scale-feature/SKILL.md` and `skills/breakdown/SKILL.md` are each owned per section, written in Scope as `file::section`. A unit that writes a whole shared file (`drive-mechanics`, `empirical-unit-impl`, `empirical-unit-design`) has an edge from every unit that writes a section of it.
+Shared files are split by section. `docs/design/lsf-workflow.md`, `skills/lsf-drive/SKILL.md`, `skills/large-scale-feature/SKILL.md` and `skills/breakdown/SKILL.md` are each owned per section, written in Scope as `file::section`. `docs/design/lsf-empirical-work.md` is owned per section by its three design units. A unit that writes a whole shared file (`drive-mechanics`, `empirical-unit-impl`) has an edge from every unit that writes a section of it.
 
 ### N workers
 
 | Phase | Concurrent units |
 |---|---|
-| 1 | problem-register, relay-probe, significant-precision-sample, plan-preflight-check, arch-pin-refresh |
-| 2 | substrate-options, empirical-criteria-design, gate-results-integrity |
-| 3 | substrate-spike, empirical-unit-design, findings-consumer-design, drive-decision-design, empirical-criteria-impl |
-| 4 | mechanical-stage-integrity, long-running-design, phase2-gate-discipline, programme-close-out, drive-presentation-impl |
+| 1 | relay-probe, significant-precision-sample, plan-preflight-check, arch-pin-refresh, empirical-criteria-design, retained-artefacts-design |
+| 2 | substrate-options, gate-results-integrity, empirical-unit-design, findings-consumer-design, empirical-criteria-impl |
+| 3 | substrate-spike, drive-decision-design, phase2-gate-discipline, programme-close-out |
+| 4 | mechanical-stage-integrity, long-running-design, drive-presentation-impl |
 | 5 onward | the script stream, one unit at a time, with empirical-unit-impl and drive-mechanics as their edges clear |
 | last | shakedown-fixture, programme-close |
 
-Phases 2 and 3 each need requester verdicts on up to four design units at once. More than two workers gains little: the script stream is serial and the design units wait on one requester.
+Phases 1–3 each need requester verdicts on two or three design units at once. More than two workers gains little: the script stream is serial and the design units wait on one requester.
 
 ## Critical Path
 
-`problem-register` → `substrate-options` → `substrate-spike` → `mechanical-stage-integrity` → `stage-failure-handling` → `empirical-script-support` → `findings-consumer-impl` → `relay-mitigation` → `long-running-impl` → `shakedown-fixture` → `programme-close`.
+`relay-probe` → `substrate-options` → `substrate-spike` → `mechanical-stage-integrity` → `stage-failure-handling` → `empirical-script-support` → `findings-consumer-impl` → `relay-mitigation` → `long-running-impl` → `shakedown-fixture` → `programme-close`.
 
-11 units: four large, five medium, two small. The estimate holds only if the substrate decision keeps the Workflow script. A host-side driver replaces the middle six units with a programme of its own, planned by the re-plan after `substrate-spike`.
+11 units: four large, four medium, three small. The estimate holds only if the substrate decision keeps the Workflow script. A host-side driver replaces the middle six units with a programme of its own, planned by the re-plan after `substrate-spike`.
 
 ## Meta-Tasks
 
@@ -766,15 +801,36 @@ Phases 2 and 3 each need requester verdicts on up to four design units at once. 
 
 ## Standing Obligations
 
-- **Register dispositions.** Every unit's completion report names the register rows it disposes of and the disposition (`fixed`, `declined`, `deferred`). `programme-close` writes them into the register and owns the criterion that none is empty. Carried by every unit after `problem-register`.
-- **Generality stated.** Every design unit's record states, for the option it chooses, the evidence that the problem holds outside archipeligo, or that it does not and the change is scoped to programmes like it. Carried by `substrate-options`, `empirical-criteria-design`, `empirical-unit-design`, `findings-consumer-design`, `drive-decision-design`, `long-running-design`.
+- **Register dispositions.** Every unit's completion report names the register rows it disposes of and the disposition (`fixed`, `declined`, `deferred`). `programme-close` writes them into the register and owns the criterion that none is empty. Carried by every unit after `problem-register`. Each row's disposing unit:
+
+  | Unit | Rows |
+  |---|---|
+  | `arch-pin-refresh` | P-D1 |
+  | `gate-results-integrity` | P-D2, P-D3 |
+  | `plan-preflight-check` | P-D4 |
+  | `empirical-criteria-design` | P-A1, P-A2, P-A3, P-A11 |
+  | `empirical-unit-design` | P-A4, P-A5, P-A6, P-A9, P-A10 |
+  | `retained-artefacts-design` | P-D5 |
+  | `findings-consumer-design` | P-B1, P-B3 |
+  | `programme-close-out` | P-B2, P-B4 |
+  | `drive-decision-design` | P-E2, P-E3, P-E4, P-E5 |
+  | `mechanical-stage-integrity` | P-C1, P-C2, P-C3, P-C4 |
+  | `stage-failure-handling` | P-C5, P-C6, P-C7, P-C8 |
+  | `relay-mitigation` | P-F1 |
+  | `long-running-design` | P-A7, P-A8, P-A13, P-D6 |
+  | `phase2-gate-discipline` | P-A12, P-G1, P-G2, P-G4 |
+  | `drive-mechanics` | P-C9, P-E1, P-E6, P-E7, P-E8, P-E9, P-I1 |
+  | `shakedown-fixture` | P-G3 |
+
+  A design unit's row passes to its implementing unit when the design decides to act. A provisional unit the substrate decision retires passes its rows to the units that replace it.
+- **Generality stated.** Every design unit's record states, for the option it chooses, the evidence that the problem holds outside archipeligo, or that it does not and the change is scoped to programmes like it. For a row qualified `not testable`, the record says no second project could show it and states whether the change is adopted generally or scoped. A record citing P-A1, P-A2, P-E4 or P-E9 as generality evidence carries the row's analogue or partial qualifier. Carried by `substrate-options`, `empirical-criteria-design`, `empirical-unit-design`, `retained-artefacts-design`, `findings-consumer-design`, `drive-decision-design`, `long-running-design`, `phase2-gate-discipline`.
 - **Design of record.** A unit that changes behaviour the design describes amends its own section of `docs/design/lsf-workflow.md` in the same commit. Carried by every unit with a `lsf-workflow.md::` Scope entry.
 
 ## Risk Registry
 
 - R1 substrate-options — a host-side driver retires or rewrites `mechanical-stage-integrity`, `stage-failure-handling`, `relay-mitigation`, `long-running-impl` and `drive-mechanics`, and is too large for this plan; the re-plan after the spike would open a successor programme.
 - R2 cross-cutting — six design units wait on one requester; the schedule is bounded by verdicts, not by work.
-- R3 problem-register — generality rests on cartomancer-v2 alone, a stream of code units; a problem classed `archipeligo only so far` may be common to any measurement-heavy programme.
+- R3 cross-cutting — generality rests on cartomancer-v2 alone, a stream of code units; 11 rows are `not testable` there (P-A3, P-A4, P-A5, P-A7, P-A8, P-A12, P-A13, P-C3, P-G1, P-G3, P-G4), and a problem classed `archipeligo only so far` may be common to any measurement-heavy programme.
 - R4 significant-precision-sample — a hand classification by the model whose reviews produced the findings; the rubric is fixed first, and the requester may want a second rater.
 - R5 phase2-gate-discipline — the opus-tier adversary re-run that `critique-gate.md` waits on belongs to the critique-upgrade backlog and is left out of this programme by requester decision (2026-10-04); the unit sets an interim policy without it.
 - R6 shakedown-fixture — a fixture run shows the workflow completes, not that judgement stages catch defects; the signal-layer measurement in the design's Testing section stays uncommitted.
@@ -793,3 +849,15 @@ done-condition problem-register — §D "Retained data" row restated; interrupte
 done-condition empirical-unit-design — retained artefacts weighs storage cost, a recipe against a path, and substrates with no storage outside the worktree
 done-condition long-running-design — resume distinguishes interrupted from superseded attempts
 execution-order arch-pin-refresh — dependency on cleanup-data-safety dropped; heads the script stream
+
+### 2026-10-04 — problem-register complete
+Report: docs/plans/problem-register-completion.md @ f10f9d5.
+unit-added retained-artefacts-design — P-D5 extracted from empirical-unit-design, which carried two open decisions; feeds long-running-design and empirical-unit-impl
+done-condition empirical-unit-design — retained-artefact clauses moved out; covers P-A4, P-A5, P-A6, P-A9, P-A10; scope narrowed to `::units`; archipeligo-records gate
+done-condition substrate-options — rows selected by the register's Topic column, with Appendix B instances
+done-condition mechanical-stage-integrity — cartomancer faults from Appendix B: altered new rows, dropped heading, dropped fence, unresolvable SHAs, mismatched script heading
+done-condition drive-decision-design — states whether the role binds only lsf-drive, given §E rows recurring under hand driving
+done-condition drive-mechanics — items cited by register id
+new-edge drive-decision-design → drive-mechanics — scope of driving rules
+done-condition long-running-impl — resume test for P-D6
+gate-added empirical-criteria-design, programme-close-out — data gates for the archipeligo and cartomancer records their walks read (kind outside the vocabulary)
