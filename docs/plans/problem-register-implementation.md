@@ -37,7 +37,9 @@
    - Its lexicon flags were `rule` in P-A1 and P-B1 and `retry` in P-E1. Each describes an event, not a remedy, so each was resolved.
    - A matching bug in the check (`regenerat`) was fixed.
    - The P-D5 terms were updated as the row's cost changed.
-6. **Critique gate.** Three rounds ran; see the next section. The fixes were committed at `fc2e010` and `497cd5b`.
+6. **Critique gate.** Rounds 1 and 2 ran here, and round 3 ran over the full diff in Phase 5; see the next section. The fixes were committed at `fc2e010`, `497cd5b` and the Phase 5 commit.
+
+   Deviation from plan step 5: the plan's P-D5 check term `83 GB` and its inventory framing ("citing an unmerged worktree path; keeping it costs 83 GB") were replaced. In round 2 the retained series were measured at 80 GB in `~/src/archipeligo-runs/`, and 83 GB is the different set cleanup removed (P-C9). The check now requires `GB of disk`.
 
 ## Critique findings
 
@@ -63,14 +65,24 @@ Round 2 (`fc2e010`) converged with no Critical.
 | P-A9 cartomancer evidence inverts the mechanism | Significant | addressed: archipeligo only so far, with the analogue in Appendix B |
 | P-E4 D11 citation; P-C8 script-heading analogue; Appendix A rows 21, 27, 28; P-A10 D5; code-line SHA | Minor | addressed |
 
-Round 3 and the editor pass: see Phase 5.
+Round 3 (full diff, Phase 5, `6b44157`) converged with no Critical.
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| P-D5's "three records" not traceable to its Cost cites | Significant | addressed: P-D5 now cites `horizon.md:258`, `bid-era.md:51` and `trigger.md:54-55`, quoting the must-keep language |
+| P-D5 80 GB vs 83 GB relation; 8 h scope | Significant | addressed: the retained set is stated as different from the removed one, and the 8 h is attributed to the postmortem's figure for that set |
+| Plan/summary drift on the P-D5 check term | Significant | addressed: deviation recorded under step 6 |
+| Step 6 and S1 wording; S2 overstatement; script output not recorded | Minor | addressed below |
+| P-D5 Generality null; P-D6 note line cites | Minor | no change: the probe ran, and the seven sites were verified in round 2 |
+
+Editor pass (`phronithm:editor`): 3 wording edits in the Columns intro and the P-A9 and P-E9 Generality cells. No Problem cell changed.
 
 ## Success criteria
 
 | # | Criterion | Status | Target | Achieved | Evidence |
 |---|---|---|---|---|---|
-| S1 | Done condition, verbatim | pass | evidenced | evidenced | `check-register.py` passes; the critique gate passed (round 1 and round 2 had no Critical) |
-| S2 | Every class backed by a recorded probe | pass | evidenced | evidenced | Appendix B has a row for each of the 47 ids (checked by script) |
+| S1 | Done condition, verbatim | pass | evidenced | evidenced | `check-register.py` output at the final commit: `rows=47 postmortem-items=87 mapped=87`, no ERR, three lexicon flags resolved (step 5). The critique gate passed: no Critical in rounds 1, 2 or 3 |
+| S2 | Every class below context-free backed by a recorded probe | pass | evidenced | evidenced | Appendix B has a row for each of the 47 ids (checked by script). Context-free rows P-B3 and P-D2 carry an inspection note rather than a cartomancer search |
 | S3 | Ids unique, `P-[A-GI]\d+` | pass | evidenced | evidenced | script assertion |
 
 Upgrade path to `proven`: commit `check-register.py` under `tools/` with a test. That was not done because the register is write-once and `programme-close` edits only its Disposition column.
