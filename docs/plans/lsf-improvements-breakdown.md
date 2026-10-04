@@ -2,7 +2,7 @@
 
 ## Summary
 
-A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 28 units; critical path 11 units through the substrate decision and the serialised script stream. Base commit `b3dac6a`.
+A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 27 units; critical path 11 units through the substrate decision and the serialised script stream. Base commit `b3dac6a`.
 
 The postmortem's problems are taken as accurate for archipeligo. The proposals in [lsf-improvements](../design/lsf-improvements.md) are candidate options, not designs: every decision unit states its problem without a solution, checks whether the problem holds outside archipeligo, and weighs the proposal against alternatives that include doing nothing.
 
@@ -24,21 +24,8 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: problem ids; each problem's solution-free statement and generality class
 - **Depends on**: none
 - **External gates**: `archipeligo-records` (data, `~/src/archipeligo-evolved` @ `c220c62`); `cartomancer-records` (data, `~/src/cartomancer-v2` `docs/plans/quality-bar-interiors-signals.md` and 41 session transcripts from 2026-09-10, retained 92 days)
-- **Done condition**: The register is committed with one row per friction item in postmortem §A–§G and improvements §1, and an appendix mapping every postmortem bullet and table row to a register id. Each row has a statement that names no remedy, a cost citation, a generality class (`context-free defect`, `recurs on cartomancer-v2` with a citation, `archipeligo only so far`, or `harness-imposed`), and an empty disposition. `phronithm:critique` (critique-design) passes at the gate bar.
+- **Done condition**: The register is committed with one row per friction item in postmortem §A–§G and improvements §1, and an appendix mapping every postmortem bullet and table row to a register id. Each row has a statement that names no remedy, a cost citation, a generality class (`context-free defect`, `recurs on cartomancer-v2` with a citation, `archipeligo only so far`, or `harness-imposed`), and an empty disposition. The postmortem §D "Retained data" row states the problem as records that call regenerable data (about 8 h to regenerate) must-keep, and the disk that retention costs. It does not state the problem as cleanup destroying data. A further row records that resuming a run resets an interrupted implement attempt's worktree (`implement.js:295`), discarding its commits and untracked files; it is classed `context-free defect` and has no cost citation. `phronithm:critique` (critique-design) passes at the gate bar.
 - **Description**: Separate each problem from the remedy the notes attach to it, and test each against cartomancer-v2's 41-unit stream. Later units cite register ids, not improvements-note section numbers.
-
-### cleanup-data-safety
-- **Type**: bug-fix
-- **Risk**: medium — changes a premise the design records ("a failure leaves residue, not risk")
-- **Clarity**: exploratory — one open decision: what cleanup does with a worktree that holds data git does not track
-- **Iteration**: write-once
-- **Effort**: small
-- **Scope**: `workflows/lsf/implement.js`, `workflows/lsf/test/implement.test.js`, `workflows/lsf-implement.js`, `docs/design/lsf-workflow.md::wave-loop`
-- **Publishes**: the cleanup stage's return shape for kept worktrees
-- **Depends on**: none
-- **External gates**: `node` (environment, v26.9.0)
-- **Done condition**: A stubbed-runtime test shows no worktree holding untracked or ignored files is removed without being named in the cleanup return and the digest. `cd workflows/lsf && node --test test/` passes and the built script is not stale. The design's cleanup paragraph states the premise as it now stands.
-- **Description**: Postmortem §D "Retained data": cleanup force-removed merged worktrees and 83 GB of run series with them. Scheduled first because it is the only finding that destroyed data and it holds on any project with untracked outputs.
 
 ### relay-probe
 - **Type**: design
@@ -87,7 +74,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Effort**: medium
 - **Scope**: `workflows/lsf/implement.js`, `workflows/lsf/test/implement.test.js`, `workflows/lsf-implement.js`, `docs/design/lsf-workflow.md::wave-loop`
 - **Publishes**: none
-- **Depends on**: cleanup-data-safety (logical, serialises the script files)
+- **Depends on**: none
 - **External gates**: `node` (environment, v26.9.0)
 - **Done condition**: A test shows that after a wave merges a unit that amends the architecture document, later stages are judged against the amended text, and that a unit-carried change to a decision still reaches the wave gate as a candidate invalidation. The tests pass, the built script is not stale, and phronithm#2 is closed by the commit.
 - **Description**: Postmortem §D "Architecture pin". A context-free script defect: the pin is set once at load.
@@ -154,8 +141,8 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: the decided plan-level shape of empirical work
 - **Depends on**: problem-register (knowledge, problem ids and generality classes); empirical-criteria-design (design, the criteria form a unit's registration cites)
 - **External gates**: `requester-verdict` (organisational)
-- **Done condition**: The Units section is committed. It decides how a plan represents work whose outcome is a measurement, comparing at least a new unit type, added entry fields, and routing the work to `phronithm:investigate`. It covers fail branches, sizing under outcome uncertainty, retained artefacts, and a measurement that supersedes cited evidence without moving a decision. It is walked against `stage1-gate` at `arch@dc88280` and `stage2-horizon-confirm`. The requester's verdict is recorded.
-- **Description**: Postmortem §A's unit-level bullets: campaigns typed `feature` or `integration`, units sized by context and not by outcome uncertainty, measured values accumulating in the architecture document.
+- **Done condition**: The Units section is committed. It decides how a plan represents work whose outcome is a measurement, comparing at least a new unit type, added entry fields, and routing the work to `phronithm:investigate`. It covers fail branches, sizing under outcome uncertainty, retained artefacts, and a measurement that supersedes cited evidence without moving a decision. For retained artefacts, it weighs regeneration cost against storage cost, compares a record citing a regeneration recipe (commit plus command) with one citing a path in a checkout, and holds on a substrate that offers no storage outside the worktree (exemplar `~/src/maths-proofs/tools/campaign/`). It is walked against `stage1-gate` at `arch@dc88280` and `stage2-horizon-confirm`. The requester's verdict is recorded.
+- **Description**: Postmortem §A's unit-level bullets: campaigns typed `feature` or `integration`, units sized by context and not by outcome uncertainty, measured values accumulating in the architecture document. Also postmortem §D "Retained data": three records cite an unmerged worktree path as must-keep for data regenerable in about 8 h.
 
 ### findings-consumer-design
 - **Type**: design
@@ -258,7 +245,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: the decision on work that outlasts a stage
 - **Depends on**: substrate-spike (design, confirmed substrate); empirical-unit-design (design, plan-level shape)
 - **External gates**: none
-- **Done condition**: `docs/design/lsf-long-running.md` is committed. It decides how work that outlasts one agent stage runs, and states the behaviour of the wave barrier, a re-plan while the work is in flight, resume, liveness, and a process left behind by a stopped run. `phronithm:critique` (critique-design) passes at the gate bar.
+- **Done condition**: `docs/design/lsf-long-running.md` is committed. It decides how work that outlasts one agent stage runs, and states the behaviour of the wave barrier, a re-plan while the work is in flight, resume, liveness, and a process left behind by a stopped run. On resume it distinguishes an interrupted attempt from one a re-plan or decision superseded, and states what happens to the interrupted attempt's commits and untracked outputs. `phronithm:critique` (critique-design) passes at the gate bar.
 - **Description**: Postmortem §A: 18 campaign stages took 39.7 of 62.1 implement agent-hours; one campaign outlived its stage and left an orphan process.
 
 ### long-running-impl
@@ -395,16 +382,6 @@ units:
       - name: cartomancer-records
         kind: data
         pin: "quality-bar-interiors-signals.md; transcripts from 2026-09-10"
-  - id: cleanup-data-safety
-    type: bug-fix
-    complete: false
-    dependencies: []
-    scope: [workflows/lsf/implement.js, workflows/lsf/test/implement.test.js, workflows/lsf-implement.js, docs/design/lsf-workflow.md::wave-loop]
-    publishes: [cleanup return shape]
-    gates:
-      - name: node
-        kind: environment
-        pin: "v26.9.0"
   - id: relay-probe
     type: design
     complete: false
@@ -440,7 +417,7 @@ units:
   - id: arch-pin-refresh
     type: bug-fix
     complete: false
-    dependencies: [cleanup-data-safety]
+    dependencies: []
     scope: [workflows/lsf/implement.js, workflows/lsf/test/implement.test.js, workflows/lsf-implement.js, docs/design/lsf-workflow.md::wave-loop]
     publishes: []
     gates:
@@ -647,7 +624,7 @@ units:
     scope: [docs/design/lsf-problem-register.md, docs/design/lsf-improvements.md, docs/design/lsf-workflow.md::status, CLAUDE.md]
     publishes: []
     gates: []
-execution_order: [problem-register, cleanup-data-safety, relay-probe, substrate-options, significant-precision-sample, arch-pin-refresh, empirical-criteria-design, substrate-spike, gate-results-integrity, empirical-unit-design, findings-consumer-design, drive-decision-design, plan-preflight-check, mechanical-stage-integrity, stage-failure-handling, empirical-script-support, findings-consumer-impl, relay-mitigation, long-running-design, long-running-impl, empirical-criteria-impl, phase2-gate-discipline, empirical-unit-impl, programme-close-out, drive-presentation-impl, drive-mechanics, shakedown-fixture, programme-close]
+execution_order: [problem-register, relay-probe, substrate-options, significant-precision-sample, arch-pin-refresh, empirical-criteria-design, substrate-spike, gate-results-integrity, empirical-unit-design, findings-consumer-design, drive-decision-design, plan-preflight-check, mechanical-stage-integrity, stage-failure-handling, empirical-script-support, findings-consumer-impl, relay-mitigation, long-running-design, long-running-impl, empirical-criteria-impl, phase2-gate-discipline, empirical-unit-impl, programme-close-out, drive-presentation-impl, drive-mechanics, shakedown-fixture, programme-close]
 ```
 
 ## Dependency Graph
@@ -660,7 +637,6 @@ graph TD
   CC([claude-code-workflow-tool 2.1.289])
 
   PR[problem-register]
-  CDS[cleanup-data-safety]
   RP[relay-probe]
   SO[substrate-options]
   SS[substrate-spike]
@@ -691,7 +667,7 @@ graph TD
   PR -.-> SO
   RP -.-> SO
   SO -.-> SS
-  CDS --> APR --> GRI --> MSI --> SFH --> ESS --> FCI --> RM --> LRI
+  APR --> GRI --> MSI --> SFH --> ESS --> FCI --> RM --> LRI
   SS -.-> MSI
   SS -.-> SFH
   SS -.-> RM
@@ -741,7 +717,7 @@ graph TD
 
 ## Execution Order
 
-1. `problem-register`, `cleanup-data-safety`, `relay-probe`. The register is the foundation. The cleanup fix goes first because it is the one finding that destroyed data and it needs no decision from the others. The probe is small and feeds the substrate decision.
+1. `problem-register`, `relay-probe`. The register is the foundation. The probe is small and feeds the substrate decision.
 2. `substrate-options`, `significant-precision-sample`, `arch-pin-refresh`. The highest-risk decision is taken as early as its inputs allow. The precision sample has no dependencies and gates the findings decision.
 3. `empirical-criteria-design`, `substrate-spike`, `gate-results-integrity`.
 4. `empirical-unit-design`, `findings-consumer-design`, `drive-decision-design`, `plan-preflight-check`. All four design decisions land before any provisional unit they govern starts.
@@ -757,7 +733,7 @@ graph TD
 ### 2 workers
 
 - **Worker 1, decisions and skill text.** `problem-register` → `substrate-options` → `empirical-criteria-design` → `empirical-unit-design` → `findings-consumer-design` → `drive-decision-design` → the skill-text units of step 7. Writes `docs/design/` decision records and `skills/`.
-- **Worker 2, script.** `relay-probe` → `cleanup-data-safety` → `arch-pin-refresh` → `gate-results-integrity` → `significant-precision-sample` → `plan-preflight-check` → `substrate-spike` → the script stream of steps 5–6. Writes `workflows/lsf/`, `workflows/lsf-implement.js` and sections of `docs/design/lsf-workflow.md`.
+- **Worker 2, script.** `relay-probe` → `arch-pin-refresh` → `gate-results-integrity` → `significant-precision-sample` → `plan-preflight-check` → `substrate-spike` → the script stream of steps 5–6. Writes `workflows/lsf/`, `workflows/lsf-implement.js` and sections of `docs/design/lsf-workflow.md`.
 
 Synchronisation points: `relay-probe` before `substrate-options`; `substrate-options` before `substrate-spike`; each design unit before the script unit it governs; both workers before `shakedown-fixture`.
 
@@ -767,9 +743,9 @@ Shared files are split by section. `docs/design/lsf-workflow.md`, `skills/lsf-dr
 
 | Phase | Concurrent units |
 |---|---|
-| 1 | problem-register, cleanup-data-safety, relay-probe, significant-precision-sample, plan-preflight-check |
-| 2 | substrate-options, empirical-criteria-design, arch-pin-refresh |
-| 3 | substrate-spike, empirical-unit-design, findings-consumer-design, drive-decision-design, gate-results-integrity, empirical-criteria-impl |
+| 1 | problem-register, relay-probe, significant-precision-sample, plan-preflight-check, arch-pin-refresh |
+| 2 | substrate-options, empirical-criteria-design, gate-results-integrity |
+| 3 | substrate-spike, empirical-unit-design, findings-consumer-design, drive-decision-design, empirical-criteria-impl |
 | 4 | mechanical-stage-integrity, long-running-design, phase2-gate-discipline, programme-close-out, drive-presentation-impl |
 | 5 onward | the script stream, one unit at a time, with empirical-unit-impl and drive-mechanics as their edges clear |
 | last | shakedown-fixture, programme-close |
@@ -808,4 +784,12 @@ Phases 2 and 3 each need requester verdicts on up to four design units at once. 
 
 ## Plan Maintenance
 
-No amendments. On each unit completion, run the re-plan step before starting its dependants.
+On each unit completion, run the re-plan step before starting its dependants.
+
+### 2026-10-04 — cleanup-data-safety returned
+Report: docs/plans/cleanup-data-safety-completion.md @ d2172e1.
+retired cleanup-data-safety — requester disputes the premise: the data was regenerable, and the defect is that records call it must-keep (kind outside the vocabulary; nothing was implemented)
+done-condition problem-register — §D "Retained data" row restated; interrupted-attempt reset row added
+done-condition empirical-unit-design — retained artefacts weighs storage cost, a recipe against a path, and substrates with no storage outside the worktree
+done-condition long-running-design — resume distinguishes interrupted from superseded attempts
+execution-order arch-pin-refresh — dependency on cleanup-data-safety dropped; heads the script stream
