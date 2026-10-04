@@ -2,7 +2,7 @@
 
 ## Summary
 
-A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 28 units, one complete; critical path 11 units through the substrate decision and the serialised script stream. Base commit `b3dac6a`.
+A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 28 units, two complete; critical path 11 units through the substrate decision and the serialised script stream. Base commit `b3dac6a`.
 
 The postmortem's problems are taken as accurate for archipeligo. The proposals in [lsf-improvements](../design/lsf-improvements.md) are candidate options, not designs: every decision unit states its problem without a solution, checks whether the problem holds outside archipeligo, and weighs the proposal against alternatives that include doing nothing.
 
@@ -55,18 +55,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Done condition**: The selected option is exercised through one end-to-end path (load, one unit's stages, merge, ledger append) on a fixture plan, with the fault kinds of postmortem §C's table injected at each stage the option claims to protect. The record states `confirmed` or `overturned` with the evidence, and the provisional units' entries in this plan are rewritten to match.
 - **Description**: Spike code is throwaway unless the record adopts it; its path moves if the option is not a Workflow script. An `overturned` result returns to `substrate-options`.
 
-### arch-pin-refresh
-- **Type**: bug-fix
-- **Risk**: medium — touches what the wave gate judges against
-- **Clarity**: exploratory — one open decision: how a unit-carried architecture change reaches the gate without becoming its baseline
-- **Iteration**: write-once
-- **Effort**: medium
-- **Scope**: `workflows/lsf/implement.js`, `workflows/lsf/test/implement.test.js`, `workflows/lsf-implement.js`, `docs/design/lsf-workflow.md::wave-loop`
-- **Publishes**: none
-- **Depends on**: none
-- **External gates**: `node` (environment, v26.9.0)
-- **Done condition**: A test shows that after a wave merges a unit that amends the architecture document, later stages are judged against the amended text, and that a unit-carried change to a decision still reaches the wave gate as a candidate invalidation. The tests pass, the built script is not stale, and phronithm#2 is closed by the commit.
-- **Description**: Postmortem §D "Architecture pin". A context-free script defect: the pin is set once at load.
+### arch-pin-refresh — complete at `382b5e2`; entry at `0cacac9`; report `docs/plans/arch-pin-refresh-completion.md`
 
 ### gate-results-integrity
 - **Type**: bug-fix
@@ -175,15 +164,15 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 ### mechanical-stage-integrity
 - **Type**: bug-fix
 - **Risk**: medium — provisional on the substrate
-- **Clarity**: exploratory
+- **Clarity**: exploratory — one open decision: whether a clean or resolved merge returned without its `merges[].sha` is rejected or signalled
 - **Iteration**: write-once
 - **Effort**: large
 - **Scope**: `workflows/lsf/implement.js`, `workflows/lsf/test/implement.test.js`, `workflows/lsf-implement.js`, `docs/design/lsf-workflow.md::model-tiers`
 - **Publishes**: none
-- **Depends on**: substrate-spike (design, confirmed substrate); gate-results-integrity (logical, serialises the script files)
+- **Depends on**: substrate-spike (design, confirmed substrate); arch-pin-refresh (logical, the merge stage's `architectureSha` and `merges[].sha`); gate-results-integrity (logical, serialises the script files)
 - **External gates**: `node` (environment, v26.9.0)
-- **Done condition**: For each of the load, ledger-append, completion-report-copy and decision-log stages, a test injects the transcription faults that P-C1 to P-C4 and their Appendix B probes record for it, and shows none is committed or accepted silently. The faults are a placeholder, truncation, overwritten or deleted rows, an append's own new rows altered or a heading dropped, a dropped line, a dropped closing fence, and an invented entry. Tests also show that a returned SHA that does not resolve to a commit is rejected (P-C8's fabricated tails), and that a ledger append is not given a wave heading that disagrees with its rows. The tests pass and the built script is not stale.
-- **Description**: **Provisional.** Postmortem §C: at least 14 faults in 218 haiku invocations; cartomancer-v2's review found 8 wrong SHAs in 367 returns. If the substrate decision moves these stages out of agents, this unit is replaced by the units that build that.
+- **Done condition**: For each of the load, ledger-append, completion-report-copy and decision-log stages, a test injects the transcription faults that P-C1 to P-C4 and their Appendix B probes record for it, and shows none is committed or accepted silently. The faults are a placeholder, truncation, overwritten or deleted rows, an append's own new rows altered or a heading dropped, a dropped line, a dropped closing fence, and an invented entry. Tests also show that a returned SHA that does not resolve to a commit is rejected (P-C8's fabricated tails), including the merge stage's `architectureSha`, which sets the architecture pin, and each `merges[].sha`, which attributes a unit's architecture change; that a clean or resolved merge without its `merges[].sha` is not silently attributed to the whole wave; and that a ledger append is not given a wave heading that disagrees with its rows. The tests pass and the built script is not stale.
+- **Description**: **Provisional.** Postmortem §C: at least 14 faults in 218 haiku invocations; cartomancer-v2's review found 8 wrong SHAs in 367 returns. If the substrate decision moves these stages out of agents, this unit is replaced by the units that build that, and the merge-stage SHA checks carry to them.
 
 ### stage-failure-handling
 - **Type**: bug-fix
@@ -351,8 +340,8 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: a fixture plan covering the unit kinds the workflow claims to run
 - **Depends on**: long-running-impl (testing, the last script unit); empirical-unit-impl (testing, the plan form); drive-mechanics (testing, the launch path)
 - **External gates**: `claude-code-workflow-tool` (environment, Claude Code 2.1.289)
-- **Done condition**: The workflow, launched through `phronithm:lsf-drive` on a fixture plan with at least one code unit, one unit that amends the architecture document and one empirical unit whose job outlasts the tool timeout, returns `complete`. The design's Status section cites the run id and lists the unit kinds the workflow has run on.
-- **Description**: Postmortem §G: the workflow was shaken down on code units and met measurement units first on a live programme. **Flag:** the scope path moves if the fixture lives in the bench repository.
+- **Done condition**: The workflow, launched through `phronithm:lsf-drive` on a fixture plan with at least one code unit, one design unit that settles a decision the architecture document left open, and one empirical unit whose job outlasts the tool timeout, returns `complete`, with the design unit's change recorded as an architecture amendment. A second run, on a variant whose unit moves a decision the document made, stops with `architecture-invalidated`. The design's Status section cites both run ids and lists the unit kinds the workflow has run on.
+- **Description**: Postmortem §G: the workflow was shaken down on code units and met measurement units first on a live programme. The two architecture cases are the upgrade path for the gate half of `arch-pin-refresh`'s done condition, `conjectured` at completion. **Flag:** the scope path moves if the fixture lives in the bench repository.
 
 ### programme-close
 - **Type**: integration
@@ -418,10 +407,10 @@ units:
         pin: "v26.9.0"
   - id: arch-pin-refresh
     type: bug-fix
-    complete: false
+    complete: true
     dependencies: []
-    scope: [workflows/lsf/implement.js, workflows/lsf/test/implement.test.js, workflows/lsf-implement.js, docs/design/lsf-workflow.md::wave-loop]
-    publishes: []
+    scope: [workflows/lsf/implement.js, workflows/lsf/scheduling.js, workflows/lsf/schema.js, workflows/lsf/test/implement.test.js, workflows/lsf/test/scheduling.test.js, workflows/lsf-implement.js, docs/design/lsf-workflow.md::wave-loop]
+    publishes: [merge-stage architectureSha and merges sha, gate amendments]
     gates:
       - name: node
         kind: environment
@@ -522,7 +511,7 @@ units:
   - id: mechanical-stage-integrity
     type: bug-fix
     complete: false
-    dependencies: [substrate-spike, gate-results-integrity]
+    dependencies: [substrate-spike, arch-pin-refresh, gate-results-integrity]
     scope: [workflows/lsf/implement.js, workflows/lsf/test/implement.test.js, workflows/lsf-implement.js, docs/design/lsf-workflow.md::model-tiers]
     publishes: []
     gates:
@@ -669,7 +658,7 @@ graph TD
   RP[relay-probe]
   SO[substrate-options]
   SS[substrate-spike]
-  APR[arch-pin-refresh]
+  APR[arch-pin-refresh: complete]
   GRI[gate-results-integrity]
   PPC[plan-preflight-check]
   SPS[significant-precision-sample]
@@ -698,6 +687,7 @@ graph TD
   RP -.-> SO
   SO -.-> SS
   APR --> GRI --> MSI --> SFH --> ESS --> FCI --> RM --> LRI
+  APR --> MSI
   SS -.-> MSI
   SS -.-> SFH
   SS -.-> RM
@@ -768,7 +758,7 @@ graph TD
 ### 2 workers
 
 - **Worker 1, decisions and skill text.** `empirical-criteria-design` → `retained-artefacts-design` → `substrate-options` → `empirical-unit-design` → `findings-consumer-design` → `drive-decision-design` → the skill-text units of step 7. Writes `docs/design/` decision records and `skills/`.
-- **Worker 2, script.** `relay-probe` → `arch-pin-refresh` → `gate-results-integrity` → `significant-precision-sample` → `plan-preflight-check` → `substrate-spike` → the script stream of steps 5–6. Writes `workflows/lsf/`, `workflows/lsf-implement.js` and sections of `docs/design/lsf-workflow.md`.
+- **Worker 2, script.** `relay-probe` → `gate-results-integrity` → `significant-precision-sample` → `plan-preflight-check` → `substrate-spike` → the script stream of steps 5–6. Writes `workflows/lsf/`, `workflows/lsf-implement.js` and sections of `docs/design/lsf-workflow.md`.
 
 Synchronisation points: `relay-probe` before `substrate-options`; `substrate-options` before `substrate-spike`; each design unit before the script unit it governs; both workers before `shakedown-fixture`.
 
@@ -778,8 +768,8 @@ Shared files are split by section. `docs/design/lsf-workflow.md`, `skills/lsf-dr
 
 | Phase | Concurrent units |
 |---|---|
-| 1 | relay-probe, significant-precision-sample, plan-preflight-check, arch-pin-refresh, empirical-criteria-design, retained-artefacts-design |
-| 2 | substrate-options, gate-results-integrity, empirical-unit-design, findings-consumer-design, empirical-criteria-impl |
+| 1 | relay-probe, significant-precision-sample, plan-preflight-check, gate-results-integrity, empirical-criteria-design, retained-artefacts-design |
+| 2 | substrate-options, empirical-unit-design, findings-consumer-design, empirical-criteria-impl |
 | 3 | substrate-spike, drive-decision-design, phase2-gate-discipline, programme-close-out |
 | 4 | mechanical-stage-integrity, long-running-design, drive-presentation-impl |
 | 5 onward | the script stream, one unit at a time, with empirical-unit-impl and drive-mechanics as their edges clear |
@@ -814,8 +804,8 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
   | `findings-consumer-design` | P-B1, P-B3 |
   | `programme-close-out` | P-B2, P-B4 |
   | `drive-decision-design` | P-E2, P-E3, P-E4, P-E5 |
-  | `mechanical-stage-integrity` | P-C1, P-C2, P-C3, P-C4 |
-  | `stage-failure-handling` | P-C5, P-C6, P-C7, P-C8 |
+  | `mechanical-stage-integrity` | P-C1, P-C2, P-C3, P-C4, P-C8 (fabricated SHAs) |
+  | `stage-failure-handling` | P-C5, P-C6, P-C7, P-C8 (denied commits) |
   | `relay-mitigation` | P-F1 |
   | `long-running-design` | P-A7, P-A8, P-A13, P-D6 |
   | `phase2-gate-discipline` | P-A12, P-G1, P-G2, P-G4 |
@@ -837,10 +827,22 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 - R7 cross-cutting — improvements that add rules to `lsf-drive` (18 KB) and `breakdown` (32 KB) raise every agent's reading cost; `drive-mechanics` reports the size change, the others do not.
 - R8 relay-probe — the harness changes between releases; a result pinned to 2.1.289 may not hold at the next version.
 - R9 long-running-design — high risk but placed late because it needs the confirmed substrate and the empirical unit shape; if either slips, the largest single cost in the postmortem (39.7 agent-hours of campaign stages) stays unaddressed longest.
+- R10 cross-cutting — the gate can still misclassify a design unit's settled decision as a decision move, recurring run #8's false stop; per-unit diffs, unit type and the completion report narrow it, and `shakedown-fixture`'s first run is the check.
 
 ## Plan Maintenance
 
 On each unit completion, run the re-plan step before starting its dependants.
+
+### 2026-10-05 — arch-pin-refresh complete
+Report: docs/plans/arch-pin-refresh-completion.md @ 382b5e2.
+scope-reassignment arch-pin-refresh — block scope records the writes to `scheduling.js`, `schema.js` and `scheduling.test.js`; every later writer is serialised after it
+new-edge arch-pin-refresh → mechanical-stage-integrity — the merge stage's `architectureSha` and `merges[].sha`
+done-condition mechanical-stage-integrity — deferred validation of `architectureSha` and `merges[].sha`; a missing per-unit SHA is not silently attributed to the whole wave
+scope-reassignment mechanical-stage-integrity — shares P-C8 with stage-failure-handling: fabricated SHAs here, denied commits there
+done-condition shakedown-fixture — a settled open decision returns as an amendment and completes; a decision move stops in a second run
+check gate-results-integrity — size budget re-checked on two post-design decisions; one open decision, two surfaces, within budget
+check stage-failure-handling — size budget re-checked likewise; within budget
+check empirical-script-support, long-running-impl — `lsf-workflow.md::wave-loop` now holds the pin paragraph; no scope conflict
 
 ### 2026-10-04 — cleanup-data-safety returned
 Report: docs/plans/cleanup-data-safety-completion.md @ d2172e1.
