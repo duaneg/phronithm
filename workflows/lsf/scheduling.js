@@ -312,7 +312,7 @@ function signalsFromGate(result, { wave }) {
   // A merged unit's own change to the architecture document that moves no
   // decision: recorded, so the digest shows the document moved.
   for (const a of result.amendments ?? []) {
-    out.push(signal({ ...base, kind: 'architecture-amendment', unit: a.unit || undefined, statement: [a.unit, a.statement].filter(Boolean).join(': '), referent: a.section ?? '' }));
+    out.push(signal({ ...base, kind: 'architecture-amendment', unit: a.unit || undefined, statement: [a.unit, a.unit && a.statement?.startsWith(`${a.unit}: `) ? a.statement.slice(a.unit.length + 2) : a.statement].filter(Boolean).join(': '), referent: a.section ?? '' }));
   }
   return out;
 }

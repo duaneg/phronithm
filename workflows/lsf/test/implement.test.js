@@ -1307,5 +1307,38 @@ test('the merge stage reports the architecture SHA after its last commit, and th
   assert.ok(merge.opts.schema.properties.result.required.includes('architectureSha'));
   const gate = calls.find((c) => c.label === 'review-gate:w1');
   assert.ok(gate.opts.schema.properties.result.required.includes('amendments'));
-  assert.match(gate.prompt, /Return `amendments` as above, an empty array when the document did not move/);
+  assert.match(gate.prompt, /Return `amendments`: a merged unit's own change to the architecture document that moves no decision, as described above when the document moved; an empty array when it did not\./);
+});
+
+test('the pin stays on a null merge and advances, ungated, when nothing merged; with no load-time pin each unit is judged against its merge\'s first parent', async () => {
+  const nullMerge = runtime(twoWaves(), { merge: () => null });
+  assert.equal((await run(nullMerge.rt)).status, 'stopped');
+  assert.ok(!nullMerge.labels().some((l) => l.startsWith('review-gate')));
+
+  const refused = runtime(twoWaves(), {
+    merge: (p, o, u, state) => ret({ integrationBranch: 'integration', merges: state.mergeOrder.map((id) => ({ unit: id, status: 'unresolvable', files: ['x'] })), planSha: state.plan.sha, architectureSha: 'arch2' }),
+  });
+  const out = await run(refused.rt);
+  assert.equal(out.status, 'stopped');
+  assert.ok(!refused.labels().some((l) => l.startsWith('review-gate')), 'nothing merged, no gate');
+
+  const unpinned = runtime(twoWaves(), {
+    load: (p, o, u, state) => copied(state.plan, { architectureSha: '' }),
+    merge: mergeMoving({ 1: 'arch2' }),
+  });
+  assert.equal((await run(unpinned.rt)).status, 'complete');
+  const gate = promptOf(unpinned.calls, 'review-gate:w1');
+  assert.match(gate, /from an unrecorded pin to the SHA above/);
+  assert.match(gate, /against the document @ the first parent of the unit's merge/);
+  assert.ok(gate.includes(`- A (foundation): \`git diff m-A^1 m-A -- ${DOC}\``));
+});
+
+test('a gate amendment already prefixed with its unit is not prefixed twice', async () => {
+  const { rt } = runtime(twoWaves(), {
+    merge: mergeMoving({ 1: 'arch2' }),
+    'review-gate': (p) => ret({ invalidations: [], notes: [], amendments: p.includes('changed during this wave') ? [{ unit: 'A', section: '§7.2', statement: 'A: settled §7.2' }] : [] }),
+    ledger: () => null,
+  });
+  const out = await run(rt);
+  assert.deepEqual(out.digest.attention.architectureAmendments, ['A: settled §7.2']);
 });

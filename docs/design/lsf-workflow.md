@@ -319,9 +319,11 @@ settles a question the document left open to that unit, or corrects wording
 is returned under `amendments` and recorded as an architecture amendment
 with the unit; the re-plan's `document-text` corrections are the other
 source of that record. A change that moves a decision beyond that is an
-invalidation. A gate that returns null stops the run before judging; the
-relaunch pins the branch tip, so the unjudged change is the baseline from
-then on and the stop is its only record.
+invalidation. An empty or missing report keeps the pin; a wave that merged
+nothing still advances it, since any change is then the requester's own. A
+gate that returns null judges nothing: the wave stops after its re-plan,
+the relaunch pins the branch tip, and the unjudged change is the baseline
+from then on, with the stop as its only record.
 
 **Decisions are applied before any unit starts.** A relaunch that carries
 requester decisions commits them to the decision log, then runs a re-plan

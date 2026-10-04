@@ -526,7 +526,7 @@ Then, for every unit merged clean or resolved, in one commit on ${ctx.integratio
 - Leave in the entry's place the one-line stub \`### <unit id> — complete at <merge SHA>; entry archived to ${ctx.archivePath}; report <completion report path>\`.
 - Append to the plan's \`## Plan Maintenance\` the entry \`### <date, date -I> — <unit id> complete\` with the single line \`Report: <completion report path> @ <merge SHA>. Ledger: ${ctx.ledgerPath} wave ${wave}.\` and nothing else: no restated report content.
 - Set \`complete: true\` on the unit in the \`\`\`yaml lsf-plan block; the block is otherwise untouched.
-${ownFilesOnly(`${plan.path} and ${ctx.archivePath}`)} Return the new plan SHA, and after that commit the commit SHA of ${ctx.architectureDoc} on ${ctx.integrationBranch} (\`git rev-list -1 ${ctx.integrationBranch} -- ${ctx.architectureDoc}\`) as \`architectureSha\`. Do not amend anything else in the plan; the re-plan stage does that. ${pauseClause(ctx)}
+${ownFilesOnly(`${plan.path} and ${ctx.archivePath}`)} Return the new plan SHA, and, after your last commit (or at the current tip if you made none), the commit SHA of ${ctx.architectureDoc} on ${ctx.integrationBranch} (\`git rev-list -1 ${ctx.integrationBranch} -- ${ctx.architectureDoc}\`) as \`architectureSha\`. Do not amend anything else in the plan; the re-plan stage does that. ${pauseClause(ctx)}
 
 Wave ${wave} merge order:
 ${merges.map((m) => `- ${m.unit}: branch ${m.branch} (completion report ${m.completionPath})`).join('\n')}
@@ -537,14 +537,20 @@ ${RETURN_FIELDS}`;
 // document is judged against the text the wave started from, so the change
 // cannot become its own baseline. Each unit's change is its merge commit
 // against the first parent, which leaves the requester's commits out.
+// With no pre-wave pin, each unit's change is judged against its merge's
+// first parent.
 function amendedClause(ctx, merged, prevArch) {
-  if (!prevArch || prevArch === ctx.architectureSha) return '';
+  if (prevArch === ctx.architectureSha) return '';
   const doc = ctx.architectureDoc;
+  const base = prevArch || 'the first parent of the unit\'s merge';
+  const fallback = prevArch
+    ? `\`git diff ${prevArch} ${ctx.architectureSha} -- ${doc}\` holds its change among any others, and attributing them is yours`
+    : 'no baseline either; judge its change from its completion report';
   const diffs = merged.map((m) => `- ${m.unit} (${m.type}): ${m.mergeSha
     ? `\`git diff ${m.mergeSha}^1 ${m.mergeSha} -- ${doc}\``
-    : `merge SHA not reported; \`git diff ${prevArch} ${ctx.architectureSha} -- ${doc}\` holds its change among any others, and attributing them is yours`}`);
+    : `merge SHA not reported; ${fallback}`}`);
   return `
-The architecture document changed during this wave, from ${prevArch} to the SHA above. Each merged unit's own change to it is listed below; an empty diff means the unit did not touch it, and changes outside these diffs are the requester's own and are not judged. Judge each unit's change against the document @ ${prevArch}, the text the wave started from, reading that unit's completion report first. A change that records the decision a design unit was charged to settle, that settles a question the document left open to the unit that made it, or that corrects wording, goes under \`amendments\`: the unit, the section, and one clause on what changed. A change that alters what a section decided @ ${prevArch} beyond that is an invalidation: \`decision\` is the text @ ${prevArch}, \`evidence\` the merge SHA, \`amendment\` the text the unit wrote. Report each change once: an invalidation for a unit's change is not reported again as a premise invalidation of the amended text.
+The architecture document changed during this wave, from ${prevArch || 'an unrecorded pin'} to the SHA above. Each merged unit's own change to it is listed below; an empty diff means the unit did not touch it, and changes outside these diffs are the requester's own and are not judged. Judge each unit's change against the document @ ${base}, the text the wave started from, reading that unit's completion report first. A change that records the decision a design unit was charged to settle, that settles a question the document left open to the unit that made it, or that corrects wording, goes under \`amendments\`: the unit, the section, and one clause on what changed. A change that alters what a section decided @ ${base} beyond that is an invalidation: \`decision\` is the text @ ${base}, \`evidence\` the merge SHA, \`amendment\` the text the unit wrote. Report each change once: an invalidation for a unit's change is not reported again as a premise invalidation of the amended text.
 ${diffs.join('\n')}
 `;
 }
@@ -558,7 +564,7 @@ Answer one question: do this wave's results invalidate the architecture document
 ${amendedClause(ctx, merged, prevArch)}
 For each such case return an invalidation with all five fields: \`section\` (the heading), \`decision\` (what the section decides, quoted or closely paraphrased), \`premise\` (what the decision rests on), \`evidence\` (file and line, test, or report line showing the premise false), and \`amendment\` (what the section should now say). An invalidation stops the run and is put to the requester with the amendment you propose, so fill every field; a case where you cannot say what the section should now say is a note, not an invalidation. A discrepancy that changes no decision — a stale line number, a signature widened compatibly, a count that does not match — is a note at most.
 
-Return \`amendments\` as above, an empty array when the document did not move. Return under \`notes\` what the re-plan or the requester should know that is not an invalidation: an open decision whose trigger has fired and which no unit owns; a discrepancy between a document and the code; a deviation or deferral the reports disclose that bears on a unit not yet started. Each note names a referent.
+Return \`amendments\`: a merged unit's own change to the architecture document that moves no decision, as described above when the document moved; an empty array when it did not. Return under \`notes\` what the re-plan or the requester should know that is not an invalidation: an open decision whose trigger has fired and which no unit owns; a discrepancy between a document and the code; a deviation or deferral the reports disclose that bears on a unit not yet started. Each note names a referent.
 
 Do not re-evaluate the units' done conditions or review findings: the unit stages did that at the bar this workflow sets (Critical findings fixed, Significant and Minor recorded), and the completion reports carry the outcome. Do not report this workflow's own process as a defect. Do not modify anything.
 ${RETURN_FIELDS}`;
