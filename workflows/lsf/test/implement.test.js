@@ -58,7 +58,7 @@ function defaults(plan) {
     cleanup: () => ret({ removed: 0, kept: [] }),
     merge: (p, o, u, state) => {
       state.plan = { ...state.plan, sha: `merged${++sha}`, units: state.plan.units.map((x) => ({ ...x, complete: state.completed.has(x.id) || state.mergeOrder.includes(x.id) })) };
-      return ret({ integrationBranch: 'integration', merges: state.mergeOrder.map((id) => ({ unit: id, status: 'clean', files: [], sha: 'm' })), planSha: state.plan.sha });
+      return ret({ integrationBranch: 'integration', merges: state.mergeOrder.map((id) => ({ unit: id, status: 'clean', files: [], sha: 'm' })), planSha: state.plan.sha, architectureSha: 'arch1' });
     },
     'review-gate': () => ret({ invalidations: [], notes: [] }),
     replan: (p, o, u, state) => {
@@ -1194,4 +1194,118 @@ test('a seeded return\'s pause report is ignored', async () => {
   const { rt } = runtime(twoWaves(), {}, { seed: { 'merge:w1': seeded } });
   const out = await run(rt);
   assert.equal(out.status, 'complete', JSON.stringify(out.escalation?.signals));
+});
+
+// ---------------------------------------------------------------- architecture pin
+
+const DOC = 'docs/architecture/f.md';
+const archHeader = (sha) => `Architecture document: ${DOC} @ ${sha}`;
+// A merge stub reporting the architecture SHA after the wave, and per-unit merge SHAs.
+const mergeMoving = (archByWave, shaOf = (id) => `m-${id}`) => {
+  let n = 0;
+  return (p, o, u, state) => {
+    n += 1;
+    state.plan = { ...state.plan, sha: `merged${n}`, units: state.plan.units.map((x) => ({ ...x, complete: state.completed.has(x.id) || state.mergeOrder.includes(x.id) })) };
+    const merges = state.mergeOrder.map((id) => ({ unit: id, status: 'clean', files: [], ...(shaOf(id) ? { sha: shaOf(id) } : {}) }));
+    return ret({ integrationBranch: 'integration', merges, planSha: state.plan.sha, ...(n in archByWave ? { architectureSha: archByWave[n] } : {}) });
+  };
+};
+const promptOf = (calls, label) => calls.find((c) => c.label === label).prompt;
+
+test('a unit that amends the architecture document: the gate reads the amended text and judges the unit\'s own diff against the pre-wave text; later stages read the amended text', async () => {
+  const { rt, calls } = runtime(twoWaves(), { merge: mergeMoving({ 1: 'arch2', 2: 'arch2' }) });
+  const out = await run(rt);
+  assert.equal(out.status, 'complete');
+  const gate = promptOf(calls, 'review-gate:w1');
+  assert.ok(gate.includes(archHeader('arch2')), 'the gate header names the amended text');
+  assert.ok(!gate.includes(archHeader('arch1')));
+  assert.match(gate, /changed during this wave, from arch1 to the SHA above/);
+  assert.ok(gate.includes(`- A (foundation): \`git diff m-A^1 m-A -- ${DOC}\``));
+  assert.match(gate, /Judge each unit's change against the document @ arch1/);
+  assert.match(gate, /alters what a section decided @ arch1 beyond that is an invalidation: `decision` is the text @ arch1, `evidence` the merge SHA, `amendment` the text the unit wrote/);
+  assert.match(gate, /goes under `amendments`/);
+  for (const label of ['plan:B', 'critique-plan:r1:B', 'implement:B', 'critique-code:r1:B', 'review-gate:w2']) {
+    const p = promptOf(calls, label);
+    assert.ok(p.includes(archHeader('arch2')), `${label} reads the amended text`);
+    assert.ok(!p.includes('@ arch1'), `${label} names no stale pin`);
+  }
+  assert.ok(!promptOf(calls, 'review-gate:w2').includes('changed during this wave'), 'wave 2 left the document where wave 1 put it');
+  assert.ok(promptOf(calls, 'plan:A').includes(archHeader('arch1')), 'wave 1 ran against the load-time pin');
+});
+
+test('a unit-carried change to a decision reaches the gate as a candidate invalidation and stops the run', async () => {
+  const { rt, calls } = runtime(twoWaves(), {
+    merge: mergeMoving({ 1: 'arch2' }),
+    'review-gate': (p) => ret({
+      invalidations: p.includes('git diff m-A^1 m-A') ? [{ section: '§5', decision: 'ABI is undisclosed', premise: 'no consumer needs it', evidence: 'm-A', amendment: 'ABI is disclosed per §7.2' }] : [],
+      notes: [], amendments: [],
+    }),
+  });
+  const out = await run(rt);
+  assert.equal(out.status, 'stopped');
+  assert.equal(out.escalation.plan_sha, 'merged1');
+  assert.deepEqual(out.escalation.signals.map((s) => [s.kind, s.referent]), [['architecture-invalidated', '§5']]);
+  assert.match(out.escalation.decision_needed[0].question, /evidence: m-A; amendment: ABI is disclosed per §7\.2/);
+  assert.ok(!calls.some((c) => c.label === 'plan:B'));
+});
+
+test('a unit\'s amendment that moves no decision is recorded with its unit, listed in the digest, and stops nothing', async () => {
+  const { rt } = runtime(twoWaves(), {
+    merge: mergeMoving({ 1: 'arch2' }),
+    'review-gate': (p) => ret({ invalidations: [], notes: [], amendments: p.includes('changed during this wave') ? [{ unit: 'A', section: '§7.2', statement: 'records the decision A settled' }] : [] }),
+    ledger: () => null,
+  });
+  const out = await run(rt);
+  assert.equal(out.status, 'complete');
+  const rows = out.unscribed.filter((s) => s.kind === 'architecture-amendment');
+  assert.deepEqual(rows.map((s) => [s.unit, s.source, s.referent, s.disposition, s.wave]), [['A', 'gate', '§7.2', 'recorded', 1]]);
+  assert.deepEqual(out.digest.attention.architectureAmendments, ['A: records the decision A settled']);
+});
+
+test('a document that did not move leaves the gate prompt as before; an empty or missing report keeps the pin', async () => {
+  for (const archByWave of [{ 1: 'arch1', 2: 'arch1' }, { 1: '', 2: '  ' }, {}, { 1: 42 }]) {
+    const { rt, calls } = runtime(twoWaves(), { merge: mergeMoving(archByWave) });
+    const out = await run(rt);
+    assert.equal(out.status, 'complete');
+    for (const label of ['review-gate:w1', 'plan:B', 'review-gate:w2']) {
+      const p = promptOf(calls, label);
+      assert.ok(p.includes(archHeader('arch1')), `${JSON.stringify(archByWave)}: ${label} keeps arch1`);
+      assert.ok(!p.includes('changed during this wave'));
+    }
+  }
+});
+
+test('a re-plan reload and the termination reload refresh the pin from the copy stage', async () => {
+  const { rt, calls } = runtime(twoWaves(), {
+    ...discovering,
+    load: (p, o, u, state) => copied(state.plan, { architectureSha: { 'load:w1': 'arch3', 'load:termination': 'arch4' }[o.label] ?? 'arch1' }),
+    merge: mergeMoving({ 1: 'arch1', 2: 'arch3' }),
+  });
+  const out = await run(rt);
+  assert.equal(out.status, 'complete');
+  assert.ok(promptOf(calls, 'replan:w1').includes(archHeader('arch1')));
+  assert.ok(promptOf(calls, 'plan:B').includes(archHeader('arch3')), 'the re-plan\'s document-text correction reaches wave 2');
+  assert.ok(!promptOf(calls, 'review-gate:w2').includes('changed during this wave'));
+  assert.ok(promptOf(calls, 'obligations').includes(archHeader('arch4')));
+});
+
+test('a merge with no SHA for a unit falls back to the whole-wave diff; args.architectureSha is the load-time pin and the baseline', async () => {
+  const { rt, calls } = runtime(twoWaves(), { merge: mergeMoving({ 1: 'arch2' }, () => undefined) }, { architectureSha: 'argpin' });
+  const out = await run(rt);
+  assert.equal(out.status, 'complete');
+  assert.ok(promptOf(calls, 'plan:A').includes(archHeader('argpin')));
+  const gate = promptOf(calls, 'review-gate:w1');
+  assert.match(gate, /from argpin to the SHA above/);
+  assert.ok(gate.includes(`- A (foundation): merge SHA not reported; \`git diff argpin arch2 -- ${DOC}\``));
+});
+
+test('the merge stage reports the architecture SHA after its last commit, and the gate returns amendments', async () => {
+  const { rt, calls } = runtime(twoWaves());
+  await run(rt);
+  const merge = calls.find((c) => c.label === 'merge:w1');
+  assert.ok(merge.prompt.includes(`\`git rev-list -1 integration -- ${DOC}\`) as \`architectureSha\``));
+  assert.ok(merge.opts.schema.properties.result.required.includes('architectureSha'));
+  const gate = calls.find((c) => c.label === 'review-gate:w1');
+  assert.ok(gate.opts.schema.properties.result.required.includes('amendments'));
+  assert.match(gate.prompt, /Return `amendments` as above, an empty array when the document did not move/);
 });

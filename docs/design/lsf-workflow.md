@@ -206,7 +206,7 @@ loop:
   if ready is empty: break
   results = parallel(ready.map(unit => runUnit(unit, plan.sha)))   // barrier
   merged  = merge(results, in plan execution order)               // agent, sequential
-  gate    = invalidations and notes from the wave gate             // agent, one question
+  gate    = invalidations, notes, amendments from the wave gate    // agent, one question; units' own architecture diffs vs the pre-wave pin
   signals = structural(results, merged) ∪ gate
   if any signal is STOP and (nothing merged or the stop supersedes the plan): return escalation(signals, plan.sha)
   if no item and no claimed-disjoint conflict: if STOP return escalation(signals, plan.sha); continue   // re-plan skipped
@@ -303,6 +303,25 @@ fields are present; an invalidation missing a field, and every note the gate
 returns besides, is recorded and handed to the re-plan. The gate is told not
 to re-evaluate done conditions or review findings (the unit stages did, at
 the bar this workflow sets) and not to report the workflow's own process.
+
+**The architecture pin follows the integration branch.** The pin is the
+architecture SHA every prompt names. Load sets it from `args.architectureSha`
+or the copy stage's report. The merge stage reports the document's SHA after
+its last commit, and the pin moves there before the gate, so the gate, the
+re-plan and every later stage read the merged text. A reload after the
+re-plan or termination moves it to the copy stage's report, which carries
+any `document-text` correction. A unit's own change to the document must
+not become its own baseline. When the pin moved in a wave, the gate is given
+each merged unit's change — its merge commit against the first parent, so
+the requester's commits drop out — and judges it against the pre-wave text.
+A change that records the decision a design unit was charged to settle,
+settles a question the document left open to that unit, or corrects wording
+is returned under `amendments` and recorded as an architecture amendment
+with the unit; the re-plan's `document-text` corrections are the other
+source of that record. A change that moves a decision beyond that is an
+invalidation. A gate that returns null stops the run before judging; the
+relaunch pins the branch tip, so the unjudged change is the baseline from
+then on and the stop is its only record.
 
 **Decisions are applied before any unit starts.** A relaunch that carries
 requester decisions commits them to the decision log, then runs a re-plan

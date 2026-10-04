@@ -22,7 +22,11 @@
 //   name                feature name; default paths derive from it
 //   planSha             commit SHA of the decomposition plan to load (required)
 //   planPath            default docs/plans/<name>-breakdown.md
-//   architectureDoc     path (required); architectureSha its commit SHA
+//   architectureDoc     path (required)
+//   architectureSha     the load-time pin; default the document's last commit
+//                       on the integration branch. It advances to the
+//                       merge stage's report after each wave's merge and to
+//                       the copy stage's on each reload
 //   requestRecord       the architecture brief; default docs/architecture/<name>-brief.md.
 //                       Its requirements and success criteria are the request
 //                       record the prompts name
@@ -215,11 +219,16 @@ const MERGE_SCHEMA = stageSchema(obj({
   ...MERGE_RESULT_SCHEMA.properties,
   ...PAUSE_FIELD,
   planSha: { ...str, description: 'Plan SHA after completion entries were recorded' },
-}, [...MERGE_RESULT_SCHEMA.required, 'planSha', 'pauseRequested']));
+  architectureSha: { ...str, description: 'Commit SHA of the architecture document on the integration branch after this stage\'s last commit' },
+}, [...MERGE_RESULT_SCHEMA.required, 'planSha', 'pauseRequested', 'architectureSha']));
 
 const GATE_SCHEMA = stageSchema(obj({
   invalidations: arr(INVALIDATION_SCHEMA),
   notes: arr(obj({ statement: str, referent: { ...str, description: 'A document section, unit, symbol, or file' } })),
+  amendments: {
+    ...arr(obj({ unit: str, section: str, statement: { ...str, description: 'One clause: what the unit changed' } })),
+    description: 'A merged unit\'s own change to the architecture document that moves no decision; an empty array when the document did not move',
+  },
 }));
 
 const REPLAN_SCHEMA = stageSchema(obj({
@@ -517,23 +526,39 @@ Then, for every unit merged clean or resolved, in one commit on ${ctx.integratio
 - Leave in the entry's place the one-line stub \`### <unit id> — complete at <merge SHA>; entry archived to ${ctx.archivePath}; report <completion report path>\`.
 - Append to the plan's \`## Plan Maintenance\` the entry \`### <date, date -I> — <unit id> complete\` with the single line \`Report: <completion report path> @ <merge SHA>. Ledger: ${ctx.ledgerPath} wave ${wave}.\` and nothing else: no restated report content.
 - Set \`complete: true\` on the unit in the \`\`\`yaml lsf-plan block; the block is otherwise untouched.
-${ownFilesOnly(`${plan.path} and ${ctx.archivePath}`)} Return the new plan SHA. Do not amend anything else in the plan; the re-plan stage does that. ${pauseClause(ctx)}
+${ownFilesOnly(`${plan.path} and ${ctx.archivePath}`)} Return the new plan SHA, and after that commit the commit SHA of ${ctx.architectureDoc} on ${ctx.integrationBranch} (\`git rev-list -1 ${ctx.integrationBranch} -- ${ctx.architectureDoc}\`) as \`architectureSha\`. Do not amend anything else in the plan; the re-plan stage does that. ${pauseClause(ctx)}
 
 Wave ${wave} merge order:
 ${merges.map((m) => `- ${m.unit}: branch ${m.branch} (completion report ${m.completionPath})`).join('\n')}
 ${RETURN_FIELDS}`;
 }
 
-function gatePrompt(ctx, plan, wave, merged) {
+// The pin has already moved to the merged text; a unit's own change to the
+// document is judged against the text the wave started from, so the change
+// cannot become its own baseline. Each unit's change is its merge commit
+// against the first parent, which leaves the requester's commits out.
+function amendedClause(ctx, merged, prevArch) {
+  if (!prevArch || prevArch === ctx.architectureSha) return '';
+  const doc = ctx.architectureDoc;
+  const diffs = merged.map((m) => `- ${m.unit} (${m.type}): ${m.mergeSha
+    ? `\`git diff ${m.mergeSha}^1 ${m.mergeSha} -- ${doc}\``
+    : `merge SHA not reported; \`git diff ${prevArch} ${ctx.architectureSha} -- ${doc}\` holds its change among any others, and attributing them is yours`}`);
+  return `
+The architecture document changed during this wave, from ${prevArch} to the SHA above. Each merged unit's own change to it is listed below; an empty diff means the unit did not touch it, and changes outside these diffs are the requester's own and are not judged. Judge each unit's change against the document @ ${prevArch}, the text the wave started from, reading that unit's completion report first. A change that records the decision a design unit was charged to settle, that settles a question the document left open to the unit that made it, or that corrects wording, goes under \`amendments\`: the unit, the section, and one clause on what changed. A change that alters what a section decided @ ${prevArch} beyond that is an invalidation: \`decision\` is the text @ ${prevArch}, \`evidence\` the merge SHA, \`amendment\` the text the unit wrote. Report each change once: an invalidation for a unit's change is not reported again as a premise invalidation of the amended text.
+${diffs.join('\n')}
+`;
+}
+
+function gatePrompt(ctx, plan, wave, merged, prevArch) {
   return `${header(ctx, plan)}
 
 Wave ${wave} of Phase 3 has merged these units into ${ctx.integrationBranch}: ${merged.map((m) => m.unit).join(', ')}. Their completion reports are at ${merged.map((m) => m.completionPath).join(', ')}.
 
 Answer one question: do this wave's results invalidate the architecture document at ${ctx.architectureDoc} @ ${ctx.architectureSha ?? 'HEAD'} — does any decision the document makes rest on a premise the merged code or the completion reports show to be false? Read the reports, then the merged code the reports and the document point at.
-
+${amendedClause(ctx, merged, prevArch)}
 For each such case return an invalidation with all five fields: \`section\` (the heading), \`decision\` (what the section decides, quoted or closely paraphrased), \`premise\` (what the decision rests on), \`evidence\` (file and line, test, or report line showing the premise false), and \`amendment\` (what the section should now say). An invalidation stops the run and is put to the requester with the amendment you propose, so fill every field; a case where you cannot say what the section should now say is a note, not an invalidation. A discrepancy that changes no decision — a stale line number, a signature widened compatibly, a count that does not match — is a note at most.
 
-Return under \`notes\` what the re-plan or the requester should know that is not an invalidation: an open decision whose trigger has fired and which no unit owns; a discrepancy between a document and the code; a deviation or deferral the reports disclose that bears on a unit not yet started. Each note names a referent.
+Return \`amendments\` as above, an empty array when the document did not move. Return under \`notes\` what the re-plan or the requester should know that is not an invalidation: an open decision whose trigger has fired and which no unit owns; a discrepancy between a document and the code; a deviation or deferral the reports disclose that bears on a unit not yet started. Each note names a referent.
 
 Do not re-evaluate the units' done conditions or review findings: the unit stages did that at the bar this workflow sets (Critical findings fixed, Significant and Minor recorded), and the completion reports carry the outcome. Do not report this workflow's own process as a defect. Do not modify anything.
 ${RETURN_FIELDS}`;
@@ -1013,6 +1038,13 @@ async function run(runtime) {
     return { plan: loadedPlan, copy, stops };
   };
 
+  // The pin follows the integration branch: a reload's copy stage reports
+  // the document's SHA after any document-text correction.
+  const refreshPin = (copy) => {
+    const reported = copy?.result.architectureSha;
+    if (typeof reported === 'string' && reported.trim()) ctx.architectureSha = reported.trim();
+  };
+
   // Load.
   const first = await loadPlan(ctx.planSha, 'load');
   if (!first.copy) return stopOn('load', first.stops);
@@ -1061,6 +1093,7 @@ async function run(runtime) {
       const term = await agent(terminationPrompt(ctx, plan), { label: 'termination', ...tier(ctx, 'planning'), phase: 'Termination', schema: TERMINATION_SCHEMA });
       if (!term) return stopOn('termination', [nullReturnSignal({ stage: 'termination' })]);
       const re = await loadPlan(term.result.planSha, 'load:termination', wave);
+      refreshPin(re.copy);
       const termEval = evaluateWave(re.stops);
       ledger.push(...termEval.all);
       if (termEval.stop) return stopped('termination', termEval.stops);
@@ -1089,7 +1122,9 @@ async function run(runtime) {
     const byUnit = new Map(mergeable.map((r) => [r.unit, r]));
     const order = mergeOrder(plan, mergeable.map((r) => r.unit)).map((id) => byUnit.get(id));
 
-    // Merge, in plan execution order.
+    // Merge, in plan execution order. The pin moves to the merged text before
+    // the gate; the gate judges the units' own changes against prevArch.
+    const prevArch = ctx.architectureSha;
     let merged = [];
     let conflicts = [];
     if (order.length) {
@@ -1100,10 +1135,11 @@ async function run(runtime) {
         notePause(m, `merge:w${wave}`);
         waveSignals.push(...signalsFromMerge(m.result, { wave }));
         for (const x of m.result.merges) {
-          if (x.status === 'clean' || x.status === 'resolved') { completed.add(x.unit); merged.push(byUnit.get(x.unit)); }
+          if (x.status === 'clean' || x.status === 'resolved') { completed.add(x.unit); merged.push({ ...byUnit.get(x.unit), mergeSha: x.sha }); }
           if (x.status === 'resolved') conflicts.push(x);
         }
         plan = { ...plan, sha: m.result.planSha, units: plan.units.map((u) => (completed.has(u.id) ? { ...u, complete: true } : u)) };
+        refreshPin(m);
       }
     }
 
@@ -1112,7 +1148,7 @@ async function run(runtime) {
     // checkout only. Cleanup never signals: a failure leaves residue, not risk.
     if (merged.length) {
       const [g, c] = await parallel([
-        () => agent(gatePrompt(ctx, plan, wave, merged), { label: `review-gate:w${wave}`, ...tier(ctx, 'gate'), phase: 'Gate', schema: GATE_SCHEMA }),
+        () => agent(gatePrompt(ctx, plan, wave, merged, prevArch), { label: `review-gate:w${wave}`, ...tier(ctx, 'gate'), phase: 'Gate', schema: GATE_SCHEMA }),
         () => agent(cleanupPrompt(ctx, plan, wave), { label: `cleanup:w${wave}`, ...tier(ctx, 'mechanical'), phase: 'Merge', schema: CLEANUP_SCHEMA }),
       ]);
       if (!g) waveSignals.push(nullReturnSignal({ stage: 'review-gate', wave }));
@@ -1157,6 +1193,7 @@ async function run(runtime) {
       // lost with the stop.
       replanSigs.push(...await applyDirectEdits({ ...plan, sha: rp.result.planSha }, rp.result.directEdits, `wave ${wave} re-plan`, { stage: 'replan', wave, phase: 'Re-plan' }));
       const re = await loadPlan(rp.result.planSha, `load:w${wave}`, wave);
+      refreshPin(re.copy);
       replanSigs.push(...re.stops);
       if (re.plan) nextPlan = re.plan;
     }
