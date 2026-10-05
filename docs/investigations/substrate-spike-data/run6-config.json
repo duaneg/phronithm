@@ -1,0 +1,7 @@
+{ "repo": "<scratchpad>/fx6", "concurrency": 4, "gateCommands": ["node --test", "node scripts/lint.js"],
+  "args": { "name": "stats", "planSha": "d5a57876ad6773da7270222dac65f59bc2ad2956", "architectureDoc": "docs/architecture/stats.md", "requestRecord": "docs/architecture/stats-brief.md", "integrationBranch": "main" },
+  "faults": [
+    { "at": "implement:", "kind": "kill-mid-stage", "once": true, "afterMs": 12000 },
+    { "at": "ledger:w1", "kind": "kill-after-commit", "once": true },
+    { "at": "cleanup:", "kind": "plant-untracked", "once": true, "files": ["plan_add-mean/node_modules/cache.bin"] }
+  ] }

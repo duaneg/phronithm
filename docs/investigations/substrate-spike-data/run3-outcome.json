@@ -1,0 +1,174 @@
+{
+  "status": "stopped",
+  "workflow": "lsf-implement",
+  "escalation": {
+    "workflow": "lsf-implement",
+    "stage": "ledger",
+    "signals": [
+      {
+        "kind": "agent-null",
+        "source": "structural",
+        "stage": "ledger",
+        "statement": "ledger returned no commit SHA; docs/plans/stats-signals/27f5b3d7fa8051a3b3ea1ecad8954082cc8f0fee.md may hold an uncommitted change in the main checkout",
+        "referent": "docs/plans/stats-signals/27f5b3d7fa8051a3b3ea1ecad8954082cc8f0fee.md",
+        "raisedBy": "ledger",
+        "wave": 1,
+        "disposition": "stopped"
+      }
+    ],
+    "decision_needed": [
+      {
+        "id": "d1",
+        "question": "agent-null (structural, ledger): ledger returned no commit SHA; docs/plans/stats-signals/27f5b3d7fa8051a3b3ea1ecad8954082cc8f0fee.md may hold an uncommitted change in the main checkout",
+        "affects": [
+          "ledger"
+        ]
+      }
+    ],
+    "plan_sha": "43c6aaf571c1",
+    "wave": 1
+  },
+  "digest": {
+    "waves": 1,
+    "byKind": {
+      "reading": 1,
+      "finding": 2,
+      "architecture-note": 3,
+      "verdict": 3,
+      "agent-null": 1
+    },
+    "bySource": {
+      "reported": 4,
+      "gate": 5,
+      "structural": 1
+    },
+    "byDisposition": {
+      "recorded": 9,
+      "stopped": 1
+    },
+    "attention": {
+      "architectureNotes": [
+        "The add-mean completion report and the breakdown's Plan Maintenance entry both say the 4 unfixed Minor review findings are recorded in this ledger (wave 1), but the file is not in main (`git ls-tree -r main` has no stats-signals path). Those findings are not recorded anywhere in the repository.",
+        "add-mean read the obligation and the brief's 'each function is tested, including its error case' as not applying to `sum`, because `sum` is defined on the empty array (src/stats.js:3-8 returns 0) and Errors only covers functions undefined on their input. This is consistent with the document and no decision moves. Later units should apply the same reading: functions that are defined on all inputs get no invented error test.",
+        "`mean` does not validate elements (add-mean-plan Design 3), so non-finite input, e.g. mean([Infinity, -Infinity]), returns NaN. The Module domain is 'arrays of finite numbers', so this does not break 'never returns NaN'. Still, the document does not say whether input outside the domain is the caller's responsibility or should be validated. Later functions will meet the same question."
+      ],
+      "architectureAmendments": [],
+      "unfixedSignificant": {},
+      "minorFindings": {
+        "add-mean": 6
+      },
+      "distressedUnits": [],
+      "directEdits": []
+    },
+    "note": "Silence is not evidence: reported-signal recall on premise-level defects is near zero."
+  },
+  "planSha": "43c6aaf571c1",
+  "integrationBranch": "main",
+  "waves": 1,
+  "ledgerPath": "docs/plans/stats-signals/27f5b3d7fa8051a3b3ea1ecad8954082cc8f0fee.md",
+  "unscribed": [
+    {
+      "kind": "reading",
+      "source": "reported",
+      "stage": "plan",
+      "statement": "2 reading(s); see docs/plans/add-mean-plan.md Readings",
+      "referent": "docs/plans/add-mean-plan.md",
+      "raisedBy": "plan",
+      "unit": "add-mean",
+      "wave": 1,
+      "disposition": "recorded"
+    },
+    {
+      "kind": "finding",
+      "source": "gate",
+      "stage": "critique-plan",
+      "statement": "2 Minor finding(s)",
+      "referent": "docs/plans/add-mean-plan.md § Design 5; § Verification row 'throws a RangeError for an empty array', docs/plans/add-mean-plan.md § Steps 3",
+      "raisedBy": "critique-plan",
+      "unit": "add-mean",
+      "wave": 1,
+      "disposition": "recorded"
+    },
+    {
+      "kind": "finding",
+      "source": "gate",
+      "stage": "review",
+      "statement": "4 Minor finding(s)",
+      "referent": "src/stats.js:13, docs/plans/add-mean-plan.md (Verification, last paragraph), test/stats.test.js:10-15, src/stats.js:13 mean",
+      "raisedBy": "review",
+      "unit": "add-mean",
+      "wave": 1,
+      "disposition": "recorded"
+    },
+    {
+      "kind": "architecture-note",
+      "source": "gate",
+      "stage": "review-gate",
+      "statement": "The add-mean completion report and the breakdown's Plan Maintenance entry both say the 4 unfixed Minor review findings are recorded in this ledger (wave 1), but the file is not in main (`git ls-tree -r main` has no stats-signals path). Those findings are not recorded anywhere in the repository.",
+      "referent": "docs/plans/stats-signals/27f5b3d7fa8051a3b3ea1ecad8954082cc8f0fee.md",
+      "raisedBy": "review-gate",
+      "wave": 1,
+      "disposition": "recorded"
+    },
+    {
+      "kind": "architecture-note",
+      "source": "gate",
+      "stage": "review-gate",
+      "statement": "add-mean read the obligation and the brief's 'each function is tested, including its error case' as not applying to `sum`, because `sum` is defined on the empty array (src/stats.js:3-8 returns 0) and Errors only covers functions undefined on their input. This is consistent with the document and no decision moves. Later units should apply the same reading: functions that are defined on all inputs get no invented error test.",
+      "referent": "docs/architecture/stats.md § Errors; standing obligation 'Every exported function has a test of its error case'",
+      "raisedBy": "review-gate",
+      "wave": 1,
+      "disposition": "recorded"
+    },
+    {
+      "kind": "architecture-note",
+      "source": "gate",
+      "stage": "review-gate",
+      "statement": "`mean` does not validate elements (add-mean-plan Design 3), so non-finite input, e.g. mean([Infinity, -Infinity]), returns NaN. The Module domain is 'arrays of finite numbers', so this does not break 'never returns NaN'. Still, the document does not say whether input outside the domain is the caller's responsibility or should be validated. Later functions will meet the same question.",
+      "referent": "docs/architecture/stats.md § Module / § Errors",
+      "raisedBy": "review-gate",
+      "wave": 1,
+      "disposition": "recorded"
+    },
+    {
+      "kind": "verdict",
+      "source": "reported",
+      "stage": "replan",
+      "statement": "rp-1 no-change: The plan already handles this. Its add-mean completion entry names the ledger path and wave 1, which is the path the workflow uses for this launch (ledgerPath defaults to docs/plans/<name>-signals/<planSha>.md). The workflow's ledger stage (scribeOrStop) writes the wave's rows, including the 4 Minor review findings, after this re-plan. The gate ran before that stage, so it saw no file. The plan and the completion report point at the right place. Committing the rows is the ledger scribe's job, so no plan amendment applies.",
+      "referent": "docs/plans/stats-signals/27f5b3d7fa8051a3b3ea1ecad8954082cc8f0fee.md",
+      "raisedBy": "replan",
+      "wave": 1,
+      "disposition": "recorded"
+    },
+    {
+      "kind": "verdict",
+      "source": "reported",
+      "stage": "replan",
+      "statement": "rp-2 no-change: The only unit carrying the obligation is add-mean, which is complete and applied this reading (add-mean-plan Readings; completion report Standing obligations). The plan has no remaining unit, so no later unit needs the reading. It agrees with stats.md § Errors ('A function undefined on its input ... throws'), so the architecture document needs no change. Any unit added later inherits the obligation alongside that § Errors definition.",
+      "referent": "docs/architecture/stats.md § Errors; standing obligation 'Every exported function has a test of its error case'",
+      "raisedBy": "replan",
+      "wave": 1,
+      "disposition": "recorded"
+    },
+    {
+      "kind": "verdict",
+      "source": "reported",
+      "stage": "replan",
+      "statement": "rp-3 no-change: The plan has no remaining unit, so no planned function faces the question of input outside the domain. add-mean's behaviour treats the § Module domain ('arrays of finite numbers') as a precondition (add-mean-plan Design 3), and the gate found that consistent with 'never returns NaN'. Deciding whether later functions validate out-of-domain input would add a decision to § Module / § Errors, which is not a wording fix. A future decomposition that adds functions should raise it with the requester. Nothing in this plan depends on the answer.",
+      "referent": "docs/architecture/stats.md § Module / § Errors",
+      "raisedBy": "replan",
+      "wave": 1,
+      "disposition": "recorded"
+    },
+    {
+      "kind": "agent-null",
+      "source": "structural",
+      "stage": "ledger",
+      "statement": "ledger returned no commit SHA; docs/plans/stats-signals/27f5b3d7fa8051a3b3ea1ecad8954082cc8f0fee.md may hold an uncommitted change in the main checkout",
+      "referent": "docs/plans/stats-signals/27f5b3d7fa8051a3b3ea1ecad8954082cc8f0fee.md",
+      "raisedBy": "ledger",
+      "wave": 1,
+      "disposition": "stopped"
+    }
+  ]
+}

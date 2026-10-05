@@ -1,0 +1,2 @@
+{ "repo": "<scratchpad>/fx1", "concurrency": 4, "gateCommands": ["node --test", "node scripts/lint.js"],
+  "args": { "name": "stats", "planSha": "9689ac8e60921cc2e2a0e0c7989be1d78250b017", "architectureDoc": "docs/architecture/stats.md", "requestRecord": "docs/architecture/stats-brief.md", "integrationBranch": "main" } }

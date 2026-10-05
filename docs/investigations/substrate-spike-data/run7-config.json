@@ -1,0 +1,3 @@
+{ "repo": "<scratchpad>/fx7", "concurrency": 4, "gateCommands": ["node --test", "node scripts/lint.js"],
+  "args": { "name": "stats", "planSha": "4e72ebfd6f78cda384b1f8f849a3b530265b7cfd", "architectureDoc": "docs/architecture/stats.md", "requestRecord": "docs/architecture/stats-brief.md", "integrationBranch": "main",
+    "decisions": [ { "id": "D1", "question": "May add-mean start? Note: the verdict # is \"go\" or \\stop", "decision": "Go: start add-mean as planned.", "clears": ["add-mean/requester-verdict"] } ] } }

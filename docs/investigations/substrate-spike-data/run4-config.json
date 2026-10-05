@@ -1,0 +1,6 @@
+{ "repo": "<scratchpad>/fx4", "concurrency": 4, "gateCommands": ["node --test", "node scripts/lint.js"],
+  "args": { "name": "stats", "planSha": "6edf2eeda3d209f54290f126627133b5e2ed0611", "architectureDoc": "docs/architecture/stats.md", "requestRecord": "docs/architecture/stats-brief.md", "integrationBranch": "main" },
+  "faults": [
+    { "at": "implement:", "kind": "kill-mid-stage", "once": true, "afterMs": 12000 },
+    { "at": "ledger:w1", "kind": "kill-after-commit", "once": true }
+  ] }

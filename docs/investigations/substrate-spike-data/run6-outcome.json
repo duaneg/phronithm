@@ -1,0 +1,41 @@
+{
+  "status": "complete",
+  "workflow": "lsf-implement",
+  "digest": {
+    "waves": 1,
+    "byKind": {
+      "reading": 1,
+      "finding": 2,
+      "architecture-note": 1,
+      "verdict": 1,
+      "direct-edit": 1
+    },
+    "bySource": {
+      "reported": 3,
+      "gate": 3
+    },
+    "byDisposition": {
+      "recorded": 6
+    },
+    "attention": {
+      "architectureNotes": [
+        "The merged code agrees with both decisions. mean is a named export in src/stats.js. It throws RangeError('mean: empty array') on empty input and never returns NaN for an array of finite numbers. One numerical edge case is still open: mean computes sum(xs)/xs.length, so when the sum overflows it returns Infinity even though the true mean is finite (for example mean([Number.MAX_VALUE, Number.MAX_VALUE])). This does not break the 'never NaN' rule. Any later unit that builds on mean or sum (variance, standard deviation) should know about it."
+      ],
+      "architectureAmendments": [],
+      "unfixedSignificant": {},
+      "minorFindings": {
+        "add-mean": 5
+      },
+      "distressedUnits": [],
+      "directEdits": [
+        "src/stats.js — Extend the one-line comment above `mean` (line 10) to note the overflow edge case, e.g. `// Arithmetic mean of xs; throws RangeError for an empty array. Computed as sum(xs) / xs.length, so it returns ±Infinity when the sum overflows even if the true mean is finite (e.g. [Number.MAX_VALUE, Number.MAX_VALUE]).` Comment only; no code or test change."
+      ]
+    },
+    "note": "Silence is not evidence: reported-signal recall on premise-level defects is near zero."
+  },
+  "planSha": "b471499",
+  "integrationBranch": "main",
+  "waves": 1,
+  "ledgerPath": "docs/plans/stats-signals/d5a57876ad6773da7270222dac65f59bc2ad2956.md",
+  "unscribed": []
+}

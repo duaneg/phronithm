@@ -1,0 +1,16 @@
+{"name":"COPY_SCHEMA","model":"haiku","code":0,"secs":14.64,"subtype":"success","is_error":false,"valid":true,"errors":[],"cost":0.025016,"stderr":""}
+{"name":"LEDGER_SCHEMA","model":"haiku","code":0,"secs":9.184,"subtype":"success","is_error":false,"valid":true,"errors":[],"cost":0.021856,"stderr":""}
+{"name":"DECISION_LOG_SCHEMA","model":"haiku","code":0,"secs":13.761,"subtype":"success","is_error":false,"valid":true,"errors":[],"cost":0.024092000000000002,"stderr":""}
+{"name":"COMPLETION_SCHEMA","model":"haiku","code":0,"secs":8.63,"subtype":"success","is_error":false,"valid":true,"errors":[],"cost":0.021899,"stderr":""}
+{"name":"CLEANUP_SCHEMA","model":"haiku","code":0,"secs":11.224,"subtype":"success","is_error":false,"valid":true,"errors":[],"cost":0.023422,"stderr":""}
+{"name":"UNIT_PLAN_SCHEMA","model":"opus","effort":"high","code":0,"secs":8.446,"subtype":"success","is_error":false,"valid":true,"errors":[],"cost":0.05796,"stderr":""}
+{"name":"REPLAN_SCHEMA","model":"opus","effort":"high","code":0,"secs":23.437,"subtype":"success","is_error":false,"valid":true,"errors":[],"cost":0.08546000000000001,"stderr":""}
+{"name":"TERMINATION_SCHEMA","model":"opus","effort":"high","code":0,"secs":26.547,"subtype":"success","is_error":false,"valid":true,"errors":[],"cost":0.058196,"stderr":""}
+{"name":"FINDINGS_SCHEMA","model":"opus","effort":"low","code":0,"secs":8.409,"subtype":"success","is_error":false,"valid":true,"errors":[],"cost":0.05460400000000001,"stderr":""}
+{"name":"GATE_SCHEMA","model":"opus","effort":"medium","code":0,"secs":8.041,"subtype":"success","is_error":false,"valid":true,"errors":[],"cost":0.0591,"stderr":""}
+{"name":"FIX_SCHEMA","model":"opus","effort":"low","code":0,"secs":6.666,"subtype":"success","is_error":false,"valid":true,"errors":[],"cost":0.053792,"stderr":""}
+{"name":"FIX_CODE_SCHEMA","model":"opus","effort":"low","code":0,"secs":8.002,"subtype":"success","is_error":false,"valid":true,"errors":[],"cost":0.056524000000000005,"stderr":""}
+{"name":"IMPLEMENT_SCHEMA","model":"opus","effort":"low","code":0,"secs":9.658,"subtype":"success","is_error":false,"valid":true,"errors":[],"cost":0.06899999999999999,"stderr":""}
+{"name":"MERGE_SCHEMA","model":"opus","effort":"low","code":0,"secs":9.975,"subtype":"success","is_error":false,"valid":true,"errors":[],"cost":0.059843999999999994,"stderr":""}
+{"name":"OBLIGATIONS_SCHEMA","model":"opus","effort":"low","code":0,"secs":8.241,"subtype":"success","is_error":false,"valid":true,"errors":[],"cost":0.055908,"stderr":""}
+{"name":"SCRIBE_SCHEMA","model":"opus","effort":"low","code":0,"secs":6.055,"subtype":"success","is_error":false,"valid":true,"errors":[],"cost":0.050988,"stderr":""}

@@ -2,7 +2,7 @@
 
 Unit `substrate-options`, [LSF improvements programme](../plans/lsf-improvements-breakdown.md) @ `5d5842f`. It assesses where Phase 3's loop runs, against every [problem register](lsf-problem-register.md) row whose Topic is `mechanical-stage`, `long-running`, `relay` or `driving`, and against the plan's risk R11: a stage can report `green` for a gate it did not run.
 
-**Status:** S2 selected for the spike by the requester, 2026-10-05.
+**Status:** S2 selected by the requester, 2026-10-05; **confirmed** by `substrate-spike` ([results](../investigations/substrate-spike-results.md)), with three conditions recorded there.
 
 ## Problem
 
@@ -70,7 +70,7 @@ A qualified cell, such as "removed for cleanup; mitigated elsewhere", grades eac
 | P-C6 agent edits settings after a denial | none | none | mitigated: prompt rule | removed for cleanup; mitigated elsewhere, pending spike check 9 | removed for cleanup; as S0 elsewhere |
 | P-C7 transient 529 stops the run | 17 session-limit errors, no 529 | none | mitigated: immediate retry only; the script has no clock, so a backoff is an agent call; a burst can outlast it | removed for transients: the driver sleeps between retries and can wait out a session limit | mitigated, as S1 |
 | P-C8 denied commit reported as success; fabricated SHA tails | 3 fabricated SHA tails accepted; 8 wrong SHAs in 367 returns | none: the empty-SHA stop turns the fault into a spurious stop | mitigated: the tool binds SHA and checksum for mechanical stages; agent SHAs elsewhere are unchecked | removed for ledger and reports (code reads `rev-parse`); mitigated for implement and merge SHAs, which the driver checks with `git cat-file` before use | removed for ledger and reports; merge and implement SHAs unchecked |
-| P-C9 `--force` allowed, 83 GB deleted | none: both ran undenied | none | mitigated: permission pre-flight; the agent still chooses the command | removed: cleanup is code, never `--force`, keeps worktrees holding ignored files | removed: host tool, as S2 |
+| P-C9 `--force` allowed, 83 GB deleted | none: both ran undenied | none | mitigated: permission pre-flight; the agent still chooses the command | mitigated: cleanup is code and never `--force`, but `git worktree remove` without it still deletes ignored files (spike run 3); removed only with a cleanup policy for ignored files | mitigated: host tool, as S2 |
 | P-A7 campaigns in one single-shot stage | none (no campaign units) | none | none | conditional: a registered job can run as a driver-supervised process; the shape is `long-running-design`'s | none |
 | P-A8 work outlives its stage | none | none | none: only an agent can poll | conditional, as P-A7: a job an implement agent backgrounds itself is outside the driver's supervision | none |
 | P-A13 orphan process | none | none | none | conditional, as P-A7 | none |

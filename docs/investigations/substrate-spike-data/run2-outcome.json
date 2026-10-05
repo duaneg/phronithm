@@ -1,0 +1,41 @@
+{
+  "status": "complete",
+  "workflow": "lsf-implement",
+  "digest": {
+    "waves": 1,
+    "byKind": {
+      "reading": 1,
+      "finding": 2,
+      "architecture-note": 1,
+      "verdict": 1,
+      "architecture-amendment": 1
+    },
+    "bySource": {
+      "reported": 3,
+      "gate": 3
+    },
+    "byDisposition": {
+      "recorded": 6
+    },
+    "attention": {
+      "architectureNotes": [
+        "The document says functions operate on \"arrays of finite numbers\". Neither sum nor mean (src/stats.js:4-14) checks that its input is finite or numeric, so the condition is a caller precondition, not an enforced one. For example, mean([NaN]) returns NaN, so the § Errors guarantee that a function \"never returns NaN\" holds only for valid input. This changes no decision. Later units should follow the same precondition reading unless the requester wants input validation."
+      ],
+      "architectureAmendments": [
+        "Corrected wording in docs/architecture/stats.md (commit 0040e6b), with no decision moved. § Module now reads: \"All functions live in `src/stats.js` as named exports over arrays of finite numbers. That input is a caller precondition: functions do not check that elements are numeric or finite. No classes, no dependencies.\" § Errors now reads: \"... throws a `RangeError` naming the function. On input meeting the § Module precondition it never returns `NaN`.\" The plan has no remaining units, so no unit needed a change."
+      ],
+      "unfixedSignificant": {},
+      "minorFindings": {
+        "add-mean": 5
+      },
+      "distressedUnits": [],
+      "directEdits": []
+    },
+    "note": "Silence is not evidence: reported-signal recall on premise-level defects is near zero."
+  },
+  "planSha": "7c0372d",
+  "integrationBranch": "main",
+  "waves": 1,
+  "ledgerPath": "docs/plans/stats-signals/7ba9ae2df562b32bfe268e293e1187be4e89fa9c.md",
+  "unscribed": []
+}

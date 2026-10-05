@@ -1,0 +1,39 @@
+{
+  "status": "complete",
+  "workflow": "lsf-implement",
+  "digest": {
+    "waves": 1,
+    "byKind": {
+      "verdict": 2,
+      "reading": 1,
+      "finding": 2,
+      "architecture-note": 1,
+      "amendment": 1
+    },
+    "bySource": {
+      "reported": 4,
+      "gate": 3
+    },
+    "byDisposition": {
+      "recorded": 7
+    },
+    "attention": {
+      "architectureNotes": [
+        "The obligation \"every exported function has a test of its error case\" reads as if every function has an error case, but `sum` has none: the Errors section only requires a throw where a function is undefined on its input, and `sum([])` returns 0 (test/stats.test.js:6). The add-mean report treats the obligation as not applying to `sum`. If future units add more functions defined on all inputs, the re-plan should word the obligation as conditional so they don't trip over it."
+      ],
+      "architectureAmendments": [],
+      "unfixedSignificant": {},
+      "minorFindings": {
+        "add-mean": 5
+      },
+      "distressedUnits": [],
+      "directEdits": []
+    },
+    "note": "Silence is not evidence: reported-signal recall on premise-level defects is near zero."
+  },
+  "planSha": "ee2b66a",
+  "integrationBranch": "main",
+  "waves": 1,
+  "ledgerPath": "docs/plans/stats-signals/4e72ebfd6f78cda384b1f8f849a3b530265b7cfd.md",
+  "unscribed": []
+}

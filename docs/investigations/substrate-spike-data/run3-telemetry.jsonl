@@ -1,0 +1,31 @@
+{"at":"2026-10-05T10:31:20.477Z","kind":"code","label":"load","secs":0.015}
+{"at":"2026-10-05T10:31:20.495Z","kind":"spawn","label":"plan:add-mean","pid":99437,"sessionId":"5ec32898-1e27-4412-ad4a-78d892c38d82","cwd":"<scratchpad>/run3/wt/plan_add-mean"}
+{"at":"2026-10-05T10:32:01.137Z","kind":"call","label":"plan:add-mean","attempt":0,"code":0,"secs":40.647,"sessionId":"5ec32898-1e27-4412-ad4a-78d892c38d82","model":"opus","effort":"high","subtype":"success","is_error":false,"api_error_status":null,"cost":0.2963516,"usage":{"in":10,"cc":23340,"cr":142658,"out":4053},"denials":[],"valid":true,"errors":[]}
+{"at":"2026-10-05T10:32:01.159Z","kind":"spawn","label":"critique-plan:r1:add-mean","pid":100501,"sessionId":"1ba3e448-f15a-42b5-9c56-ceee391f9a06","cwd":"<scratchpad>/fx3"}
+{"at":"2026-10-05T10:32:24.317Z","kind":"call","label":"critique-plan:r1:add-mean","attempt":0,"code":0,"secs":23.161,"sessionId":"1ba3e448-f15a-42b5-9c56-ceee391f9a06","model":"opus","effort":"low","subtype":"success","is_error":false,"api_error_status":null,"cost":0.23358059999999997,"usage":{"in":8,"cc":22702,"cr":82063,"out":1776},"denials":[],"valid":true,"errors":[]}
+{"at":"2026-10-05T10:32:24.332Z","kind":"spawn","label":"implement:add-mean","pid":100836,"sessionId":"9175ec86-1902-496b-a35e-2a0d5a361ee6","cwd":"<scratchpad>/run3/wt/implement_add-mean"}
+{"at":"2026-10-05T10:32:43.474Z","kind":"call","label":"implement:add-mean","attempt":0,"code":0,"secs":19.144,"sessionId":"9175ec86-1902-496b-a35e-2a0d5a361ee6","model":"opus","effort":"low","subtype":"success","is_error":false,"api_error_status":null,"cost":0.2487828,"usage":{"in":10,"cc":22957,"cr":151934,"out":1735},"denials":[],"valid":true,"errors":[]}
+{"at":"implement:","kind":"fault-injected","fault":"fabricate-sha"}
+{"at":"implement:","kind":"fault-injected","fault":"drop-gate"}
+{"at":"2026-10-05T10:32:43.483Z","kind":"sha-check","label":"implement:add-mean","verdict":"corrected","claimed":"12ddfff","actual":"12ddffa4c860"}
+{"at":"2026-10-05T10:32:43.490Z","kind":"sha-check","label":"implement:add-mean","verdict":"commits-dropped","dropped":["deadbeefcafe"]}
+{"at":"2026-10-05T10:32:43.699Z","kind":"gates","label":"implement:add-mean","reported":["node --test=green"],"driver":["node --test=green","node scripts/lint.js=green"]}
+{"at":"critique-code:","kind":"fault-injected","fault":"fail-call"}
+{"at":"2026-10-05T10:32:43.720Z","kind":"spawn","label":"lens-review:r1:add-mean","pid":101277,"sessionId":"e7218fec-eefe-4d70-8779-f03737042a09","cwd":"<scratchpad>/run3/wt/lens-review_r1_add-mean"}
+{"at":"2026-10-05T10:32:43.721Z","kind":"call","label":"critique-code:r1:add-mean","attempt":0,"code":1,"secs":0.012,"sessionId":"89038912-87db-4f19-a3c1-64e9e2788046","model":"opus","effort":"low","subtype":"error_injected","is_error":true,"api_error_status":529,"denials":[],"valid":false,"errors":["no structured_output"]}
+{"at":"2026-10-05T10:32:48.723Z","kind":"spawn","label":"critique-code:r1:add-mean","pid":101523,"sessionId":"8fda511e-30c3-4731-afc9-c4e767221ae7","cwd":"<scratchpad>/run3/wt/critique-code_r1_add-mean"}
+{"at":"2026-10-05T10:32:56.947Z","kind":"call","label":"lens-review:r1:add-mean","attempt":0,"code":0,"secs":13.228,"sessionId":"e7218fec-eefe-4d70-8779-f03737042a09","model":"opus","effort":"low","subtype":"success","is_error":false,"api_error_status":null,"cost":0.1926542,"usage":{"in":4,"cc":20595,"cr":30791,"out":1086},"denials":[],"valid":true,"errors":[]}
+{"at":"2026-10-05T10:33:04.917Z","kind":"call","label":"critique-code:r1:add-mean","attempt":1,"code":0,"secs":16.196,"sessionId":"8fda511e-30c3-4731-afc9-c4e767221ae7","model":"opus","effort":"low","subtype":"success","is_error":false,"api_error_status":null,"cost":0.2166818,"usage":{"in":4,"cc":22983,"cr":31209,"out":1328},"denials":[],"valid":true,"errors":[]}
+{"at":"2026-10-05T10:33:04.977Z","kind":"code","label":"completion-report:add-mean","secs":0.059,"sha":"455b63d98285"}
+{"at":"merge:","kind":"fault-injected","fault":"requester-edit"}
+{"at":"2026-10-05T10:33:05.216Z","kind":"code","label":"merge:w1","secs":0.238,"sha":"43c6aaf571c1"}
+{"at":"cleanup:","kind":"fault-injected","fault":"plant-untracked"}
+{"at":"2026-10-05T10:33:05.251Z","kind":"cleanup-kept","branch":"lsf/27f5b3d7/implement_add-mean","why":"fatal: '<scratchpad>/run3/wt/implement_add-mean' contains modified or untracked files, use --force to delete it\n"}
+{"at":"2026-10-05T10:33:05.273Z","kind":"code","label":"cleanup:w1","secs":0.056}
+{"at":"2026-10-05T10:33:05.274Z","kind":"spawn","label":"review-gate:w1","pid":101867,"sessionId":"f774efad-fa90-4ae1-9d33-5a570aa8303d","cwd":"<scratchpad>/fx3"}
+{"at":"2026-10-05T10:33:25.692Z","kind":"call","label":"review-gate:w1","attempt":0,"code":0,"secs":20.419,"sessionId":"f774efad-fa90-4ae1-9d33-5a570aa8303d","model":"opus","effort":"medium","subtype":"success","is_error":false,"api_error_status":null,"cost":0.19095600000000001,"usage":{"in":8,"cc":18642,"cr":66340,"out":1426},"denials":[],"valid":true,"errors":[]}
+{"at":"2026-10-05T10:33:25.696Z","kind":"spawn","label":"replan:w1","pid":102632,"sessionId":"54326091-ef8d-43df-a5f4-b2de2890eb41","cwd":"<scratchpad>/fx3"}
+{"at":"2026-10-05T10:34:47.489Z","kind":"call","label":"replan:w1","attempt":0,"code":0,"secs":81.795,"sessionId":"54326091-ef8d-43df-a5f4-b2de2890eb41","model":"opus","effort":"high","subtype":"success","is_error":false,"api_error_status":null,"cost":0.707914,"usage":{"in":22,"cc":55519,"cr":575170,"out":7432},"denials":[],"valid":true,"errors":[]}
+{"at":"2026-10-05T10:34:47.517Z","kind":"code","label":"load:w1","secs":0.018}
+{"at":"2026-10-05T10:34:47.549Z","kind":"commit-failed","paths":["docs/plans/stats-signals/27f5b3d7fa8051a3b3ea1ecad8954082cc8f0fee.md"],"out":"pre-commit: ledger commits rejected (injected fault)\n"}
+{"at":"2026-10-05T10:34:47.555Z","kind":"code","label":"ledger:w1","secs":0.036,"sha":""}

@@ -154,9 +154,9 @@ const ROLE_TOOLS = {
 const roleOf = (opts) => (opts.agentType === 'phronithm:critic' || /^(critique-|lens-review|review-gate)/.test(opts.label) ? 'critique' : 'worker');
 
 // A prompt that names a skill is sent as that skill's slash command, which
-// loads the skill body deterministically. Headless calls given the prompt
+// puts the skill body in the prompt before the model runs. Headless calls given the prompt
 // alone ran the skill in 2 of 4 critique-code calls (run 2 and replays);
-// Workflow agents in 395 of 397.
+// Workflow agents in 354 of 356.
 const SKILL_BY_LABEL = [[/^(critique-plan|critique-code|critique-design)/, 'phronithm:critique'], [/^lens-review/, 'phronithm:review'], [/^(replan|decision-replan)/, 'phronithm:breakdown']];
 const withSkill = (label, prompt) => {
   const skill = SKILL_BY_LABEL.find(([re]) => re.test(label))?.[1];

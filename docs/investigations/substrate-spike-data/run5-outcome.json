@@ -1,0 +1,65 @@
+{
+  "status": "stopped",
+  "workflow": "lsf-implement",
+  "escalation": {
+    "workflow": "lsf-implement",
+    "stage": "wave",
+    "signals": [
+      {
+        "kind": "gate-non-convergence",
+        "source": "gate",
+        "stage": "lens-review",
+        "statement": "systemic problem reported in round 1: Branch lsf/e30a4a74/lens-review_r1_add-mean @ be3c284. The diff against main contains only the implementation plan. The add-mean feature code and tests are missing, so the unit's done condition and its standing obligation are both unmet. The reviewed plan itself is sound under the general and error-handling lenses. It guards against an empty array before dividing, throws a RangeError whose message names `mean`, reuses `sum`, and the error-case test is designed so it can fail. The implement stage must be re-run; another review round will not fix this.",
+        "referent": "add-mean",
+        "raisedBy": "lens-review",
+        "unit": "add-mean",
+        "wave": 1,
+        "disposition": "stopped"
+      }
+    ],
+    "decision_needed": [
+      {
+        "id": "d1",
+        "question": "gate-non-convergence (gate, lens-review, add-mean): systemic problem reported in round 1: Branch lsf/e30a4a74/lens-review_r1_add-mean @ be3c284. The diff against main contains only the implementation plan. The add-mean feature code and tests are missing, so the unit's done condition and its standing obligation are both unmet. The reviewed plan itself is sound under the general and error-handling lenses. It guards against an empty array before dividing, throws a RangeError whose message names `mean`, reuses `sum`, and the error-case test is designed so it can fail. The implement stage must be re-run; another review round will not fix this.",
+        "affects": [
+          "add-mean"
+        ]
+      }
+    ],
+    "plan_sha": "e30a4a74dd6c89f23d110a27153400fce90ae09d",
+    "wave": 1
+  },
+  "digest": {
+    "waves": 1,
+    "byKind": {
+      "reading": 1,
+      "finding": 2,
+      "deviation": 1,
+      "gate-non-convergence": 1
+    },
+    "bySource": {
+      "reported": 2,
+      "gate": 3
+    },
+    "byDisposition": {
+      "recorded": 4,
+      "stopped": 1
+    },
+    "attention": {
+      "architectureNotes": [],
+      "architectureAmendments": [],
+      "unfixedSignificant": {},
+      "minorFindings": {
+        "add-mean": 4
+      },
+      "distressedUnits": [],
+      "directEdits": []
+    },
+    "note": "Silence is not evidence: reported-signal recall on premise-level defects is near zero."
+  },
+  "planSha": "e30a4a74dd6c89f23d110a27153400fce90ae09d",
+  "integrationBranch": "main",
+  "waves": 1,
+  "ledgerPath": "docs/plans/stats-signals/e30a4a74dd6c89f23d110a27153400fce90ae09d.md",
+  "unscribed": []
+}

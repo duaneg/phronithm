@@ -1,0 +1,58 @@
+{
+  "status": "stopped",
+  "workflow": "lsf-implement",
+  "escalation": {
+    "workflow": "lsf-implement",
+    "stage": "wave",
+    "signals": [
+      {
+        "kind": "agent-null",
+        "source": "structural",
+        "stage": "unit",
+        "statement": "unit returned null (skipped or terminal error)",
+        "referent": "add-mean",
+        "raisedBy": "unit",
+        "unit": "add-mean",
+        "wave": 1,
+        "disposition": "stopped"
+      }
+    ],
+    "decision_needed": [
+      {
+        "id": "d1",
+        "question": "agent-null (structural, unit, add-mean): unit returned null (skipped or terminal error)",
+        "affects": [
+          "add-mean"
+        ]
+      }
+    ],
+    "plan_sha": "6edf2eeda3d209f54290f126627133b5e2ed0611",
+    "wave": 1
+  },
+  "digest": {
+    "waves": 1,
+    "byKind": {
+      "agent-null": 1
+    },
+    "bySource": {
+      "structural": 1
+    },
+    "byDisposition": {
+      "stopped": 1
+    },
+    "attention": {
+      "architectureNotes": [],
+      "architectureAmendments": [],
+      "unfixedSignificant": {},
+      "minorFindings": {},
+      "distressedUnits": [],
+      "directEdits": []
+    },
+    "note": "Silence is not evidence: reported-signal recall on premise-level defects is near zero."
+  },
+  "planSha": "6edf2eeda3d209f54290f126627133b5e2ed0611",
+  "integrationBranch": "main",
+  "waves": 1,
+  "ledgerPath": "docs/plans/stats-signals/6edf2eeda3d209f54290f126627133b5e2ed0611.md",
+  "unscribed": []
+}

@@ -1,0 +1,33 @@
+{"at":"2026-10-05T10:31:33.976Z","kind":"code","label":"load","secs":0.012}
+{"at":"2026-10-05T10:31:33.993Z","kind":"spawn","label":"plan:add-mean","pid":99763,"sessionId":"a8a8b480-e954-41ec-8437-2552e426ebe3","cwd":"<scratchpad>/run4/wt/plan_add-mean"}
+{"at":"2026-10-05T10:32:16.784Z","kind":"call","label":"plan:add-mean","attempt":0,"code":0,"secs":42.795,"sessionId":"a8a8b480-e954-41ec-8437-2552e426ebe3","model":"opus","effort":"high","subtype":"success","is_error":false,"api_error_status":null,"cost":0.2961488,"usage":{"in":10,"cc":23284,"cr":142484,"out":4067},"denials":[],"valid":true,"errors":[]}
+{"at":"2026-10-05T10:32:16.796Z","kind":"spawn","label":"critique-plan:r1:add-mean","pid":100666,"sessionId":"8de4c1b1-db1f-4961-b894-e372926e7c7a","cwd":"<scratchpad>/fx4"}
+{"at":"2026-10-05T10:32:36.345Z","kind":"call","label":"critique-plan:r1:add-mean","attempt":0,"code":0,"secs":19.55,"sessionId":"8de4c1b1-db1f-4961-b894-e372926e7c7a","model":"opus","effort":"low","subtype":"success","is_error":false,"api_error_status":null,"cost":0.22176479999999996,"usage":{"in":6,"cc":22063,"cr":55184,"out":1710},"denials":[],"valid":true,"errors":[]}
+{"at":"2026-10-05T10:32:36.357Z","kind":"spawn","label":"implement:add-mean","pid":101054,"sessionId":"391e7d62-8857-455d-8a78-59b9d0f55ec6","cwd":"<scratchpad>/run4/wt/implement_add-mean"}
+{"at":"implement:","kind":"fault-injected","fault":"kill-mid-stage"}
+{"at":"2026-10-05T10:32:48.502Z","kind":"code","label":"load","secs":0.013}
+{"at":"2026-10-05T10:32:48.506Z","kind":"cache-hit","label":"plan:add-mean"}
+{"at":"2026-10-05T10:32:48.507Z","kind":"cache-hit","label":"critique-plan:r1:add-mean"}
+{"at":"2026-10-05T10:32:48.512Z","kind":"spawn","label":"implement:add-mean","pid":101509,"sessionId":"dcd60e41-3d9f-440b-8237-3832730ef0d2","cwd":"<scratchpad>/run4/wt/implement_add-mean"}
+{"at":"2026-10-05T10:33:06.251Z","kind":"call","label":"implement:add-mean","attempt":0,"code":0,"secs":17.743,"sessionId":"dcd60e41-3d9f-440b-8237-3832730ef0d2","model":"opus","effort":"low","subtype":"success","is_error":false,"api_error_status":null,"cost":0.2253304,"usage":{"in":8,"cc":20977,"cr":117612,"out":1698},"denials":[],"valid":true,"errors":[]}
+{"at":"2026-10-05T10:33:06.467Z","kind":"gates","label":"implement:add-mean","reported":["node --test=green","node scripts/lint.js=green"],"driver":["node --test=green","node scripts/lint.js=green"]}
+{"at":"2026-10-05T10:33:06.479Z","kind":"spawn","label":"critique-code:r1:add-mean","pid":101953,"sessionId":"0c7e79b8-c2c7-450a-b011-fb60ab68c438","cwd":"<scratchpad>/run4/wt/critique-code_r1_add-mean"}
+{"at":"2026-10-05T10:33:06.490Z","kind":"spawn","label":"lens-review:r1:add-mean","pid":101959,"sessionId":"d9a3b89d-25d5-47f1-bc86-03b83db4d1b7","cwd":"<scratchpad>/run4/wt/lens-review_r1_add-mean"}
+{"at":"2026-10-05T10:33:19.798Z","kind":"call","label":"lens-review:r1:add-mean","attempt":0,"code":0,"secs":13.31,"sessionId":"d9a3b89d-25d5-47f1-bc86-03b83db4d1b7","model":"opus","effort":"low","subtype":"success","is_error":false,"api_error_status":null,"cost":0.1931576,"usage":{"in":4,"cc":20592,"cr":30728,"out":1113},"denials":[],"valid":true,"errors":[]}
+{"at":"2026-10-05T10:33:23.678Z","kind":"call","label":"critique-code:r1:add-mean","attempt":0,"code":0,"secs":17.201,"sessionId":"0c7e79b8-c2c7-450a-b011-fb60ab68c438","model":"opus","effort":"low","subtype":"success","is_error":false,"api_error_status":null,"cost":0.2138852,"usage":{"in":4,"cc":23235,"cr":31146,"out":1088},"denials":[],"valid":true,"errors":[]}
+{"at":"2026-10-05T10:33:23.726Z","kind":"code","label":"completion-report:add-mean","secs":0.047,"sha":"1ad852db9edc"}
+{"at":"2026-10-05T10:33:23.984Z","kind":"code","label":"merge:w1","secs":0.257,"sha":"239a4bcfc55c"}
+{"at":"2026-10-05T10:33:24.040Z","kind":"code","label":"cleanup:w1","secs":0.055}
+{"at":"2026-10-05T10:33:24.042Z","kind":"spawn","label":"review-gate:w1","pid":102575,"sessionId":"6868fcc3-5f36-4e99-bffe-75572510cf15","cwd":"<scratchpad>/fx4"}
+{"at":"2026-10-05T10:33:44.221Z","kind":"call","label":"review-gate:w1","attempt":0,"code":0,"secs":20.181,"sessionId":"6868fcc3-5f36-4e99-bffe-75572510cf15","model":"opus","effort":"medium","subtype":"success","is_error":false,"api_error_status":null,"cost":0.20390220000000003,"usage":{"in":8,"cc":19359,"cr":68891,"out":1761},"denials":[],"valid":true,"errors":[]}
+{"at":"2026-10-05T10:33:44.227Z","kind":"spawn","label":"replan:w1","pid":102853,"sessionId":"70aa6f26-3111-4dab-b3c9-4c2e10ba4834","cwd":"<scratchpad>/fx4"}
+{"at":"2026-10-05T10:34:57.088Z","kind":"call","label":"replan:w1","attempt":0,"code":0,"secs":72.864,"sessionId":"70aa6f26-3111-4dab-b3c9-4c2e10ba4834","model":"opus","effort":"high","subtype":"success","is_error":false,"api_error_status":null,"cost":0.5890538,"usage":{"in":18,"cc":45982,"cr":434229,"out":6714},"denials":["Bash: {\"command\":\"git ls-files && git branch -a && git worktree list && git log --all --oneline -- 'docs/plans/stats-signals*' ; find / -path /proc -prune -o -name '6","Bash: {\"command\":\"git ls-files && git branch -a && git worktree list && git log --all --oneline -- docs/plans/stats-signals\",\"description\":\"List tracked files, branch"],"valid":true,"errors":[]}
+{"at":"2026-10-05T10:34:57.109Z","kind":"code","label":"load:w1","secs":0.012}
+{"at":"ledger:w1","kind":"fault-injected","fault":"kill-after-commit"}
+{"at":"2026-10-05T10:34:57.229Z","kind":"code","label":"load","secs":0.013}
+{"at":"2026-10-05T10:34:57.233Z","kind":"cache-hit","label":"plan:add-mean"}
+{"at":"2026-10-05T10:34:57.234Z","kind":"cache-hit","label":"critique-plan:r1:add-mean"}
+{"at":"2026-10-05T10:34:57.234Z","kind":"cache-hit","label":"implement:add-mean"}
+{"at":"2026-10-05T10:34:57.235Z","kind":"cache-hit","label":"critique-code:r1:add-mean"}
+{"at":"2026-10-05T10:34:57.235Z","kind":"cache-hit","label":"lens-review:r1:add-mean"}
+{"at":"2026-10-05T10:34:57.264Z","kind":"code","label":"ledger:w1","secs":0.023,"sha":"a7fc8c1e5b66"}

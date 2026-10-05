@@ -1,0 +1,65 @@
+{
+  "status": "stopped",
+  "workflow": "lsf-implement",
+  "escalation": {
+    "workflow": "lsf-implement",
+    "stage": "wave",
+    "signals": [
+      {
+        "kind": "done-condition-unevaluable",
+        "source": "structural",
+        "stage": "implement",
+        "statement": "done condition cannot be evaluated as written: Not evaluated: the Bash tool was denied, so the required `git reset --hard lsf/9689ac8e/plan_add-mean`, the unit-entry reads via `git show`, gate probes, the test suite, the linter and commits could not be run. Nothing was implemented.",
+        "referent": "add-mean",
+        "raisedBy": "implement",
+        "unit": "add-mean",
+        "wave": 1,
+        "disposition": "stopped"
+      }
+    ],
+    "decision_needed": [
+      {
+        "id": "d1",
+        "question": "done-condition-unevaluable (structural, implement, add-mean): done condition cannot be evaluated as written: Not evaluated: the Bash tool was denied, so the required `git reset --hard lsf/9689ac8e/plan_add-mean`, the unit-entry reads via `git show`, gate probes, the test suite, the linter and commits could not be run. Nothing was implemented.",
+        "affects": [
+          "add-mean"
+        ]
+      }
+    ],
+    "plan_sha": "9689ac8e60921cc2e2a0e0c7989be1d78250b017",
+    "wave": 1
+  },
+  "digest": {
+    "waves": 1,
+    "byKind": {
+      "reading": 1,
+      "finding": 1,
+      "done-condition-unevaluable": 1
+    },
+    "bySource": {
+      "reported": 1,
+      "gate": 1,
+      "structural": 1
+    },
+    "byDisposition": {
+      "recorded": 2,
+      "stopped": 1
+    },
+    "attention": {
+      "architectureNotes": [],
+      "architectureAmendments": [],
+      "unfixedSignificant": {},
+      "minorFindings": {
+        "add-mean": 2
+      },
+      "distressedUnits": [],
+      "directEdits": []
+    },
+    "note": "Silence is not evidence: reported-signal recall on premise-level defects is near zero."
+  },
+  "planSha": "9689ac8e60921cc2e2a0e0c7989be1d78250b017",
+  "integrationBranch": "main",
+  "waves": 1,
+  "ledgerPath": "docs/plans/stats-signals/9689ac8e60921cc2e2a0e0c7989be1d78250b017.md",
+  "unscribed": []
+}
