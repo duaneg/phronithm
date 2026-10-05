@@ -14,6 +14,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmS
 import { join, resolve } from 'node:path';
 import { run } from '../implement.js';
 import { ledgerHeading } from '../scheduling.js';
+import { extractBlock, parseDecisions } from '../graph.js';
 import { validate } from './validate.js';
 
 const stateDir = resolve(process.argv[2] ?? '');
@@ -67,6 +68,26 @@ function killSelf(why) {
   log(`FAULT: SIGKILL self (${why})`);
   writeFileSync(join(stateDir, 'killed-at.txt'), why);
   process.kill(process.pid, 'SIGKILL');
+}
+
+// Children of a killed driver keep running (run 4: the implement agent
+// outlived a SIGKILLed driver and raced its resumed successor in the same
+// worktree). Live children are recorded; a launch first terminates any left
+// by its predecessor, matched by pid and session id.
+const childrenPath = join(stateDir, 'children.json');
+const children = new Map();
+const saveChildren = () => writeFileSync(childrenPath, JSON.stringify([...children.entries()]));
+function reapOrphans() {
+  if (!existsSync(childrenPath)) return;
+  for (const [pid, sessionId] of JSON.parse(readFileSync(childrenPath, 'utf8'))) {
+    let cmd = '';
+    try { cmd = readFileSync(`/proc/${pid}/cmdline`, 'utf8'); } catch { continue; }
+    if (!cmd.includes(sessionId)) continue;
+    process.kill(pid, 'SIGTERM');
+    event({ kind: 'orphan-terminated', pid, sessionId });
+    log(`terminated orphaned call pid ${pid} (session ${sessionId}) left by a previous launch`);
+  }
+  writeFileSync(childrenPath, '[]');
 }
 
 class KillError extends Error {}
@@ -157,6 +178,7 @@ function headless(prompt, opts, cwd, key, attempt) {
   return new Promise((res) => {
     const p = spawn(process.env.LSF_CLAUDE_BIN ?? 'claude', a, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
     event({ kind: 'spawn', label: opts.label, pid: p.pid, sessionId, cwd });
+    children.set(p.pid, sessionId); saveChildren();
     const killMid = fire(fault(opts.label, 'kill-mid-stage'));
     if (killMid) setTimeout(() => killSelf(`mid-stage ${opts.label}, child pid ${p.pid}`), killMid.afterMs ?? 15000);
     let buf = '';
@@ -172,7 +194,7 @@ function headless(prompt, opts, cwd, key, attempt) {
       }
     });
     p.stderr.on('data', (d) => { stderr += d; });
-    p.on('close', (code) => res({ code, result, sessionId, transcript, stderr: stderr.slice(-500) }));
+    p.on('close', (code) => { children.delete(p.pid); saveChildren(); }).on('close', (code) => res({ code, result, sessionId, transcript, stderr: stderr.slice(-500) }));
   });
 }
 
@@ -270,11 +292,54 @@ function commitPaths(cwd, paths, message) {
   const add = gitOk(cwd, 'add', '--', ...paths);
   const c = add.ok && gitOk(cwd, 'commit', '-q', '-m', message, '--', ...paths);
   const after = git(cwd, 'rev-parse', 'HEAD');
-  if (!c?.ok || after === before) { event({ kind: 'commit-failed', paths, out: (c?.out ?? add.out).slice(0, 300) }); return ''; }
+  if (!c?.ok || after === before) {
+    event({ kind: 'commit-failed', paths, out: (c?.out ?? add.out).slice(0, 300) });
+    gitOk(cwd, 'reset', '-q', '--', ...paths); // unstage only what this step staged
+    return '';
+  }
   return after;
 }
 
+// The YAML subset's double-quoted scalar: escapes for `"`, `\`, newline, tab.
+const yq = (x) => `"${String(x).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\t/g, '\\t')}"`;
+const decisionKey = (d) => JSON.stringify([d.id, d.question, d.decision, d.clears ?? []]);
+
 const CODE = {
+  // Decision log: rendered from the decision objects in args, appended inside
+  // the fenced block, and parsed back before the commit: the committed log
+  // must hold exactly its prior decisions plus these (P-C4: an agent once
+  // added a `clears` entry no decision made).
+  'decision-log'(prompt) {
+    const path = ctx.decisionLogPath;
+    const fresh = args.decisions.map((d) => ({ ...d, clears: d.clears ?? [] }));
+    const prior = gitOk(repo, 'show', `HEAD:${path}`);
+    const text = prior.ok ? `${prior.out}\n` : `# Decisions: ${ctx.name}\n\n\`\`\`yaml lsf-decisions\ndecisions:\n\`\`\`\n`;
+    const before = parseDecisions(extractBlock(text, 'lsf-decisions').body);
+    if (before.problems.length) throw new Error(`decision log: existing block invalid: ${before.problems[0].statement}`);
+    const have = new Set(before.decisions.map(decisionKey));
+    const todo = fresh.filter((d) => !have.has(decisionKey(d)));
+    if (!todo.length) {
+      const sha = git(repo, 'log', '-1', '--format=%h', '--abbrev=12', '--', path);
+      return { result: { path, sha }, commits: [] };
+    }
+    const date = new Date().toISOString().slice(0, 10);
+    const entries = todo.map((d) => [`  - id: ${yq(d.id)}`, `    date: ${date}`, `    question: ${yq(d.question)}`, `    decision: ${yq(d.decision)}`,
+      ...(d.clears.length ? [`    clears: [${d.clears.map(yq).join(', ')}]`] : [])].join('\n')).join('\n');
+    const lines = text.split('\n');
+    const open = lines.findIndex((l) => l.trim() === '```yaml lsf-decisions');
+    const close = lines.findIndex((l, i) => i > open && l.trim() === '```');
+    const next = [...lines.slice(0, close), entries, ...lines.slice(close)].join('\n');
+    const after = parseDecisions(extractBlock(next, 'lsf-decisions').body);
+    const want = [...before.decisions, ...todo].map(decisionKey);
+    if (after.problems.length || JSON.stringify(after.decisions.map(decisionKey)) !== JSON.stringify(want)) {
+      throw new Error(`decision log: rendered block does not parse back to the decisions given (${after.problems[0]?.statement ?? 'content differs'})`);
+    }
+    mkdirSync(join(repo, path, '..'), { recursive: true });
+    writeFileSync(join(repo, path), next);
+    const sha = commitPaths(repo, [path], commitSubject(prompt));
+    return { result: { path, sha: sha.slice(0, 12) }, commits: sha ? [{ branch: args.integrationBranch, sha: sha.slice(0, 12) }] : [] };
+  },
+
   // Copy stage: the blocks are read from git, not transcribed.
   load(prompt) {
     const sha = prompt.match(/Copy stage\. Run `git show ([0-9a-f]+):/)[1];
@@ -416,6 +481,10 @@ const CODE = {
       const branch = w.match(/^branch refs\/heads\/(.*)$/m)?.[1];
       if (!path?.startsWith(join(stateDir, 'wt')) || !branch?.startsWith(branchPrefix)) continue;
       if (!merged.has(branch)) { kept.push(branch); continue; }
+      // `git worktree remove` without --force still deletes ignored files
+      // (run 3); a worktree holding any is kept.
+      const ignored = gitOk(path, 'status', '--porcelain', '--ignored').out.split('\n').filter((l) => l.startsWith('!!'));
+      if (ignored.length) { kept.push(branch); event({ kind: 'cleanup-kept', branch, why: `ignored files: ${ignored.slice(0, 5).join(', ')}` }); continue; }
       const r = gitOk(repo, 'worktree', 'remove', path);
       if (!r.ok) { kept.push(branch); event({ kind: 'cleanup-kept', branch, why: r.out.slice(0, 200) }); continue; }
       gitOk(repo, 'branch', '-d', branch);
@@ -436,7 +505,22 @@ async function agent(prompt, opts) {
   const label = opts.label;
   const key = slug(label);
   const stage = codeStage(label);
+  const journaled = stage && stage !== 'load'; // load is a pure read; it re-runs to see the pause ref
+  const hash = sha256(`${prompt}\n${JSON.stringify(opts.schema)}\n${opts.model}/${opts.effort}`);
+  // Code steps are journaled like calls: a completed step replays its
+  // recorded return (run 4: re-executing a completed completion-report step
+  // after a resume met a branch cleanup had deleted). An intent written
+  // before the step marks one interrupted mid-way; only that one re-executes,
+  // and its own effect check (ledger block present, report committed) keeps
+  // it from acting twice.
+  if (journaled && existsSync(cachePath(key))) {
+    const c = JSON.parse(readFileSync(cachePath(key), 'utf8'));
+    if (c.hash === hash) { event({ kind: 'code-replayed', label }); return c.ret; }
+  }
   if (stage) {
+    const intent = join(stateDir, 'calls', `${key}.intent`);
+    if (journaled && existsSync(intent) && readFileSync(intent, 'utf8') === hash) event({ kind: 'code-interrupted-rerun', label });
+    if (journaled) writeFileSync(intent, hash);
     const plant = fire(fault(label, 'plant-untracked'));
     if (plant) for (const f of plant.files) { mkdirSync(join(stateDir, 'wt', f, '..'), { recursive: true }); writeFileSync(join(stateDir, 'wt', f), 'retained artefact\n'); }
     const edit = fire(fault(label, 'requester-edit'));
@@ -444,9 +528,9 @@ async function agent(prompt, opts) {
     const t0 = Date.now();
     const ret = CODE[stage](prompt, label);
     event({ kind: 'code', label, secs: (Date.now() - t0) / 1000, sha: ret.result.sha ?? ret.result.planSha });
+    if (journaled) writeFileSync(cachePath(key), JSON.stringify({ label, hash, ret }, null, 2));
     return ret;
   }
-  const hash = sha256(`${prompt}\n${JSON.stringify(opts.schema)}\n${opts.model}/${opts.effort}`);
   if (existsSync(cachePath(key))) {
     const c = JSON.parse(readFileSync(cachePath(key), 'utf8'));
     if (c.hash === hash) { event({ kind: 'cache-hit', label }); log(`${label}: cached return`); return c.ret; }
@@ -485,6 +569,7 @@ async function parallel(thunks) {
   })));
 }
 
+reapOrphans();
 setStatus({ state: 'running' });
 log(`driver start: repo ${repo}, plan ${args.planSha}`);
 try {
