@@ -483,6 +483,27 @@ test('a code fix whose gate did not run, or that reports none, stops before the 
   }
 });
 
+test('the implement and code-fix prompts say how to wait out a long gate; the plan fix is not told', async () => {
+  let round = 0;
+  const { rt, calls } = runtime(graph('plan0', [unit('A')]), {
+    'critique-plan': () => (++round === 1 ? ret({ findings: [{ severity: 'Critical', statement: 'bad', location: 'plan' }], systemic: false, summary: 's' }) : NO_FINDINGS),
+    'critique-code': criticalOnce(),
+    'fix-code': (p, o, u) => ret({ branch: `fixed-code-${u}`, sha: 'f', applied: [{ finding: 'bad', fix: 'ok' }], notApplied: [], gates: [{ command: 'pytest -q', status: 'green', summary: '1 passed' }] }),
+  });
+  await run(rt);
+  const prompt = (label) => calls.find((c) => c.label === label).prompt;
+  for (const label of ['implement:A', 'fix-code:r1:A']) {
+    const p = prompt(label);
+    assert.match(p, /ending your turn while it runs returns this stage with the gate unrun/, label);
+    assert.match(p, /D=\$\(git rev-parse --absolute-git-dir\); rm -f "\$D"\/lsf-gate-<n>\.\*; \(<command> > "\$D\/lsf-gate-<n>\.log" 2>&1; echo \$\? > "\$D\/lsf-gate-<n>\.rc"\) &/, label);
+    // The poll's outer double quotes let the shell expand $D before sh -c runs.
+    assert.match(p, /timeout 540 sh -c "until \[ -f '\$D\/lsf-gate-<n>\.rc' \]; do sleep 15; done"/, label);
+    assert.match(p, /Bash tool's timeout set to 600000 ms/, label);
+    assert.match(p, /Report a gate `not-run`, with why in its summary, only when it could not be completed/, label);
+  }
+  assert.doesNotMatch(prompt('fix-plan:r1:A'), /lsf-gate|not-run/);
+});
+
 test('a design unit\'s fix keeps the plain fix schema and is not asked for gates', async () => {
   let round = 0;
   const { rt, calls } = runtime(graph('plan0', [unit('D', { type: 'design' })]), {
