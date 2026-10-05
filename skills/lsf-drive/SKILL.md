@@ -158,7 +158,7 @@ The relaunch starts a new ledger file, named by its `planSha`; the previous laun
 
 An `environment-gate-drift` stop is not answered by a decision: either the environment is restored to the pin the plan records, and the relaunch carries no decision, or the requester re-pins the gate, and the decision says so for the re-plan to amend the plan's gate entry (amendment kind `gate-repin`).
 
-A `gate-not-run` stop is not answered by a decision either: a relaunch re-runs the unit and meets the same gate. Either the requester changes the environment or the project so the gate completes within a stage, and the relaunch carries no decision, or the requester completes the unit by hand, and the decision says so for the re-plan to mark it complete.
+A `gate-not-run` stop is not answered by a decision either: a relaunch re-runs the unit and meets the same gate. The requester changes the environment or the project so the gate completes within a stage, and the relaunch carries no decision. The unit is not finished by hand (*What the session never does*).
 
 A `precondition` or `invalid-plan` stop names a defect the session can usually see from the shell (wrong branch, a block without its fence, a scope pair with no edge). Fix the repo state through the tool that owns it — `phronithm:breakdown` re-plan mode for the plan, a decision for the decision log, a checkout for the branch — commit, and relaunch with the new SHA and no decision.
 

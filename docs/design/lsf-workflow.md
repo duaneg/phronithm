@@ -18,8 +18,8 @@ The rules added since — the archive at merge, the ledger row shapes, the
 re-plan skip on a wave with nothing to absorb, the script-rendered completion
 report, reviewers taking the gate runs at HEAD (the implement stage's or
 the last code fix's), the `gate-not-run` stop and the long-gate recipe —
-have not run. The
-plugin loader registers it as `phronithm:lsf-implement` (confirmed 2026-09-10
+have not run. The plugin loader registers it as `phronithm:lsf-implement`
+(confirmed 2026-09-10
 against Claude Code 2.1.267: the loader reads `workflows/` non-recursively,
 so `workflows/lsf/` is ignored); the bare name below denotes the script.
 
@@ -163,19 +163,20 @@ carries its own unit plan template and stages instead:
    the Bash tool's limit without ending its turn: run it detached with its
    output, exit status and PID in per-gate files under the git directory,
    and poll in calls shorter than the limit until the gate ends or dies (no
-   status file: `not-run`). A test runs the recipe under bash. A gate reported `not-run`, or no gate reported, is a STOP
-   (`gate-not-run`) before review: the reviewers would meet the same tool
-   timeout, and a relaunch meets the same gate, so the requester changes the
-   environment or completes the unit by hand. A design unit is exempt; its
-   review reads no gates.
+   status file: `not-run`). A gate reported `not-run`, or no gate reported,
+   is a STOP (`gate-not-run`) before review: the reviewers would meet the
+   same tool timeout, and a relaunch meets the same gate, so the requester
+   changes the environment or the project until the gate completes. A design
+   unit is exempt; its review reads no gates.
 4. **review** stage over the branch diff: one critique-code gate at the
    Critical-only bar and lens review per unit type, in parallel. No separate
    static-analysis stage: the project's own gates (linters, type checks) run
    in the implement stage, whose done conditions require them green, and
    again after each merge. Both reviewers are given the gate runs at the
    branch's HEAD — the implement stage's, or after a code fix the fix
-   stage's, which re-runs every gate and returns the runs (a code fix whose
-   gate did not run stops with `gate-not-run`, as at implement) — and take
+   stage's, which re-runs every gate the implement stage ran and returns the
+   runs (a code fix whose gate did not run, or that omits one of those gates,
+   stops with `gate-not-run`, as at implement) — and take
    them as the test and lint result: no suite, CI job, or
    lint pass of their own, a single targeted test only to check a finding's
    claim (in a compiled project the two suite re-runs cost more of the

@@ -57,7 +57,7 @@ function defaults(plan) {
     implement: (p, o, u) => ret(implemented(u)),
     'critique-code': () => NO_FINDINGS,
     'lens-review': () => NO_FINDINGS,
-    'fix-code': (p, o, u) => ret({ branch: `fixed-code-${u}`, sha: 'f', applied: [], notApplied: [], gates: [{ command: 'pytest -q', status: 'green', summary: '413 passed' }] }),
+    'fix-code': (p, o, u) => ret({ branch: `fixed-code-${u}`, sha: 'f', applied: [], notApplied: [], gates: [{ command: 'pytest -q', status: 'green', summary: '413 passed' }, { command: 'ruff check .', status: 'green', summary: '' }] }),
     'completion-report': (p, o, u) => ret({ branch: `done-${u}`, sha: 'c', path: `docs/plans/${u}-completion.md` }),
     cleanup: () => ret({ removed: 0, kept: [] }),
     merge: (p, o, u, state) => {
@@ -455,7 +455,7 @@ const criticalOnce = () => {
 test('a review round after a code fix reads the fix stage\'s gate runs, not the implement stage\'s', async () => {
   const { rt, calls } = runtime(graph('plan0', [unit('A')]), {
     'critique-code': criticalOnce(),
-    'fix-code': (p, o, u) => ret({ branch: `fixed-code-${u}`, sha: 'f', applied: [{ finding: 'bad', fix: 'ok' }], notApplied: [], gates: [{ command: 'pytest -q', status: 'green', summary: '99 passed (fix)' }] }),
+    'fix-code': (p, o, u) => ret({ branch: `fixed-code-${u}`, sha: 'f', applied: [{ finding: 'bad', fix: 'ok' }], notApplied: [], gates: [{ command: 'pytest -q', status: 'green', summary: '99 passed (fix)' }, { command: 'ruff check .', status: 'green', summary: '' }] }),
   });
   const out = await run(rt);
   assert.equal(out.status, 'complete');
@@ -467,32 +467,33 @@ test('a review round after a code fix reads the fix stage\'s gate runs, not the 
     assert.doesNotMatch(p, /412 passed/, label);
   }
   const fix = calls.find((c) => c.label === 'fix-code:r1:A');
-  assert.match(fix.prompt, /every gate below, as last run on this branch, not only those the fix touches:\n- `pytest -q`\n- `ruff check \.`\nand report each under `gates`/, 'the fix is given the gate set to re-run');
+  assert.match(fix.prompt, /every gate the implement stage ran, below, with its command unchanged, not only those the fix touches:\n- `pytest -q`\n- `ruff check \.`\nand report each under `gates`/, 'the fix is given the gate set to re-run');
   assert.ok(fix.opts.schema.properties.result.required.includes('gates'), 'a code fix must return its gate runs');
   assert.match(calls.find((c) => c.label === 'completion-report:A').prompt, /Gates at HEAD:\n\n- `pytest -q` — green: 99 passed \(fix\)/);
 });
 
-test('a second fix round: review reads the round-2 fix\'s runs, the round-2 fix is given round 1\'s set, and a red fix gate still reaches review', async () => {
+test('a second fix round: review reads the round-2 fix\'s runs, each fix is given the implement stage\'s set, and a red fix gate still reaches review', async () => {
   let round = 0;
   const { rt, calls } = runtime(graph('plan0', [unit('A')]), {
     'critique-code': () => (++round <= 2 ? ret({ findings: [{ severity: 'Critical', statement: 'bad', location: 'a.py' }], systemic: false, summary: 's' }) : NO_FINDINGS),
     'fix-code': (p, o, u) => {
       const n = o.label.split(':')[1];
       return ret({ branch: `fixed-${n}-${u}`, sha: 'f', applied: [{ finding: 'bad', fix: 'ok' }], notApplied: [],
-        gates: n === 'r1' ? [{ command: 'pytest -q', status: 'red', summary: '1 failed (r1)' }, { command: 'mypy .', status: 'green', summary: '' }] : [{ command: 'pytest -q', status: 'green', summary: '5 passed (r2)' }, { command: 'mypy .', status: 'green', summary: '' }] });
+        gates: n === 'r1' ? [{ command: 'pytest -q', status: 'red', summary: '1 failed (r1)' }, { command: 'ruff check .', status: 'green', summary: '' }] : [{ command: 'pytest -q', status: 'green', summary: '5 passed (r2)' }, { command: 'ruff check .', status: 'green', summary: '' }] });
     },
   });
   const out = await run(rt);
   assert.equal(out.status, 'complete');
   const prompt = (label) => calls.find((c) => c.label === label).prompt;
   assert.match(prompt('critique-code:r2:A'), /The round-1 fix stage ran[^]*`pytest -q` — red: 1 failed \(r1\)/, 'a red fix gate is a result and reaches review');
-  assert.match(prompt('fix-code:r2:A'), /not only those the fix touches:\n- `pytest -q`\n- `mypy \.`\n/);
+  assert.match(prompt('fix-code:r2:A'), /not only those the fix touches:\n- `pytest -q`\n- `ruff check \.`\n/);
   assert.match(prompt('critique-code:r3:A'), /The round-2 fix stage ran[^]*5 passed \(r2\)/);
   assert.doesNotMatch(prompt('critique-code:r3:A'), /\(r1\)|412 passed/);
 });
 
-test('a code fix whose gate did not run, or that reports none, stops before the next review round', async () => {
-  for (const gates of [[{ command: 'xtask ci', status: 'not-run', summary: 'timed out' }], []]) {
+test('a code fix whose gate did not run, that reports none, or that drops one the implement stage ran, stops before the next review round', async () => {
+  const dropped = [{ command: 'pytest -q', status: 'green', summary: '1 passed' }];
+  for (const gates of [[{ command: 'xtask ci', status: 'not-run', summary: 'timed out' }], [], dropped]) {
     const { rt, labels } = runtime(graph('plan0', [unit('A')]), {
       'critique-code': criticalOnce(),
       'fix-code': (p, o, u) => ret({ branch: `fixed-code-${u}`, sha: 'f', applied: [{ finding: 'bad', fix: 'ok' }], notApplied: [], gates }),
@@ -501,7 +502,7 @@ test('a code fix whose gate did not run, or that reports none, stops before the 
     assert.equal(out.status, 'stopped');
     const stop = out.escalation.signals.find((s) => s.kind === 'gate-not-run');
     assert.equal(stop.stage, 'fix');
-    assert.match(stop.statement, gates.length ? /xtask ci/ : /\(no gate reported\)/);
+    assert.match(stop.statement, gates === dropped ? /not run: ruff check \.$/ : gates.length ? /xtask ci/ : /\(no gate reported\)/);
     assert.ok(!labels().includes('critique-code:r2:A'), 'no round-2 review');
   }
 });
@@ -511,7 +512,7 @@ test('the implement and code-fix prompts say how to wait out a long gate; the pl
   const { rt, calls } = runtime(graph('plan0', [unit('A')]), {
     'critique-plan': () => (++round === 1 ? ret({ findings: [{ severity: 'Critical', statement: 'bad', location: 'plan' }], systemic: false, summary: 's' }) : NO_FINDINGS),
     'critique-code': criticalOnce(),
-    'fix-code': (p, o, u) => ret({ branch: `fixed-code-${u}`, sha: 'f', applied: [{ finding: 'bad', fix: 'ok' }], notApplied: [], gates: [{ command: 'pytest -q', status: 'green', summary: '1 passed' }] }),
+    'fix-code': (p, o, u) => ret({ branch: `fixed-code-${u}`, sha: 'f', applied: [{ finding: 'bad', fix: 'ok' }], notApplied: [], gates: [{ command: 'pytest -q', status: 'green', summary: '1 passed' }, { command: 'ruff check .', status: 'green', summary: '' }] }),
   });
   await run(rt);
   const prompt = (label) => calls.find((c) => c.label === label).prompt;
@@ -536,11 +537,12 @@ test('the long-gate recipe detaches, captures a compound command\'s output and s
     sh('git init -q');
     const D = sh('git rev-parse --absolute-git-dir').trim();
     const gate = (n, command) => detach.replaceAll('<n>', n).replace('<command>', command);
-    const waitDone = (n) => { const t = Date.now(); while (!existsSync(join(D, `lsf-gate-${n}.rc`)) && Date.now() - t < 5000) sh('sleep 0.1'); };
+    const waitDone = (n) => { const t = Date.now(); while (!existsSync(join(D, `lsf-gate-${n}.rc`)) && Date.now() - t < 10000) sh('sleep 0.1'); };
 
     const t0 = Date.now();
-    sh(gate(1, 'sleep 1 && echo a && echo b >&2 && false'));
-    assert.ok(Date.now() - t0 < 900, 'the detach call does not wait for the gate');
+    sh(gate(1, 'sleep 3 && echo a && echo b >&2 && false'));
+    assert.ok(Date.now() - t0 < 2500, 'the detach call does not wait for the gate');
+    assert.ok(!existsSync(join(D, 'lsf-gate-1.rc')), 'the gate is still running after the detach returns');
     waitDone(1);
     sh(poll.replaceAll('<n>', 1));
     assert.equal(readFileSync(join(D, 'lsf-gate-1.rc'), 'utf8').trim(), '1', 'the status of the compound command');
@@ -594,7 +596,7 @@ test('renderCompletionReport renders the implement and review returns section by
     'Unit `A` (feature), wave 1, branch `impl-A`.', '',
     'Widened the predicate and pinned it.', '',
     '## Done-condition verdict', '',
-    '**Met** (implement stage). clause (i): test_a green; clause (ii): 3 of 3 fixtures.', '',
+    '**Met**. clause (i): test_a green; clause (ii): 3 of 3 fixtures.', '',
     'External gates re-verified: fontforge pinned 20230101, observed 20230101.', '',
     'Gates at HEAD:', '',
     '- `pytest -q` — green: 412 passed\n- `ruff check .` — green', '',
@@ -611,7 +613,7 @@ test('renderCompletionReport renders the implement and review returns section by
   ].join('\n'));
   assert.doesNotMatch(text, /fragile|a\.py/, 'findings are counts; the rows live in the ledger');
   const bare = renderCompletionReport(ctx, unit, 2, 'impl-A', implemented('A', { doneCondition: { evaluable: false, met: false, evidence: 'the clause names a file that does not exist' } }), { rounds: 1, findings: [] });
-  assert.match(bare, /\*\*Not met\*\* \(implement stage\) \(not evaluable as written\)\. the clause names a file that does not exist/);
+  assert.match(bare, /\*\*Not met\*\* \(not evaluable as written\)\. the clause names a file that does not exist/);
   assert.equal((bare.match(/^None\.$/gm) ?? []).length, 4, 'every empty section says so');
   assert.doesNotMatch(bare, /External gates|Written outside/);
   assert.doesNotMatch(renderCompletionReport(ctx, unit, 2, 'impl-A', implemented('A', { gates: [] }), { rounds: 1, findings: [] }), /Gates at HEAD/);
@@ -619,6 +621,7 @@ test('renderCompletionReport renders the implement and review returns section by
   const afterFix = renderCompletionReport(ctx, unit, 1, 'impl-A', impl, { rounds: 2, findings: [], gates: [{ command: 'pytest -q', status: 'green', summary: '99 passed (fix)' }] });
   assert.match(afterFix, /Gates at HEAD:\n\n- `pytest -q` — green: 99 passed \(fix\)\n/, 'after a fix, the fix\'s runs are the gates at HEAD');
   assert.doesNotMatch(afterFix, /412 passed/);
+  assert.match(afterFix, /\*\*Met\*\*, as the implement stage evaluated it; the gates below are the last fix's\. clause \(i\)/);
 });
 
 test('a plan or report past twice its size target is a document-oversize ledger row, never a stop or a re-plan item', async () => {

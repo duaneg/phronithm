@@ -405,7 +405,7 @@ ${JSON.stringify(criticals, null, 2)}
 
 Fix each finding that is repairable within the ${subject}, then commit. A finding you decline to fix — because the repair would change the unit entry, the architecture document, or the request record, or because you cannot repair it — goes under \`notApplied\` with the reason. The run stops on a declined finding and the requester decides, so decline only when the repair is genuinely outside the ${subject}. ${subject === 'plan' ? `The plan is docs/plans/${unit.id}-plan.md on this branch. Repair the findings; do not shorten the plan to length.` : unit.type === 'design'
     ? 'Run the tests the fix touches as you go, then the project\'s gates once at the end; a fix that breaks a test is not applied.'
-    : `Run the tests the fix touches as you go; a fix that breaks a test is not applied. Then run the project's gates once at your final HEAD — every gate below, as last run on this branch, not only those the fix touches:
+    : `Run the tests the fix touches as you go; a fix that breaks a test is not applied. Then run the project's gates once at your final HEAD — every gate the implement stage ran, below, with its command unchanged, not only those the fix touches:
 ${gates.map((g) => `- \`${g.command}\``).join('\n')}
 and report each under \`gates\` with its command, status, and a one-line summary; the next review round reads these, not the implement stage's. ${LONG_GATES}`}
 ${RETURN_FIELDS}`;
@@ -502,7 +502,7 @@ function renderCompletionReport(ctx, unit, wave, branch, impl, review) {
     ...(impl.summary ? [impl.summary, ''] : []),
     '## Done-condition verdict',
     '',
-    `**${dc.met ? 'Met' : 'Not met'}** (implement stage)${dc.evaluable === false ? ' (not evaluable as written)' : ''}. ${dc.evidence ?? ''}`.trimEnd(),
+    `**${dc.met ? 'Met' : 'Not met'}**${dc.evaluable === false ? ' (not evaluable as written)' : ''}${review.gates ? ', as the implement stage evaluated it; the gates below are the last fix\'s' : ''}. ${dc.evidence ?? ''}`.trimEnd(),
     ...(probes.length ? ['', `External gates re-verified: ${probes.map((g) => `${g.name} pinned ${g.pin}, observed ${g.observed}`).join('; ')}.`] : []),
     ...(headGates?.length ? ['', 'Gates at HEAD:', '', renderGates(headGates)] : []),
     '',
@@ -684,7 +684,8 @@ ${RETURN_FIELDS}`;
 // accumulate in `findings`, each stamped with its stage and round, for the
 // caller to record once per gate; a Critical the fix stage declines, a
 // systemic verdict, or the round cap is a structural stop. `onFix(fixed, n)`
-// may return STOP signals for a fix whose return cannot go to the next round.
+// may return STOP signals for a fix whose return cannot go to the next round
+// (reason `fix-stop`).
 async function critiqueLoop({ round, fix, onFix, stageCtx, signals }) {
   const findings = [];
   for (let n = 1; n <= GATE_MAX_ROUNDS; n++) {
@@ -828,12 +829,16 @@ async function runUnit(rt, ctx, plan, unit, wave) {
         rt.agent(prompt, opts(`${stage}:r${n}`, { isolation: 'worktree', schema: FINDINGS_SCHEMA, ...tier(ctx, 'critique') }))));
       return reviewers.map(([stage], i) => ({ stage, ret: rets[i] ?? null }));
     },
-    fix: (n, criticals) => rt.agent(fixPrompt(ctx, plan, unit, branch, 'code', criticals, n, gateRun.gates),
+    fix: (n, criticals) => rt.agent(fixPrompt(ctx, plan, unit, branch, 'code', criticals, n, impl.result.gates),
       opts(`fix-code:r${n}`, { isolation: 'worktree', schema: design ? FIX_SCHEMA : FIX_CODE_SCHEMA })),
     onFix: (fixed, n) => {
       branch = fixed.result.branch;
       if (design) return [];
-      const unrun = unrunGates(fixed.result.gates);
+      // A gate the implement stage ran and the fix did not report is not run:
+      // a dropped gate would otherwise leave the reviewers a shrunken result.
+      const reported = new Set((fixed.result.gates ?? []).map((g) => g.command));
+      const dropped = (impl.result.gates ?? []).map((g) => g.command).filter((c) => !reported.has(c));
+      const unrun = [...new Set([...unrunGates(fixed.result.gates), ...dropped])];
       if (unrun.length) return [gateNotRunSignal(stageCtx('fix'), unrun)];
       gateRun = { by: `The round-${n} fix stage`, gates: fixed.result.gates };
       return [];
@@ -843,7 +848,7 @@ async function runUnit(rt, ctx, plan, unit, wave) {
   if (!reviewGate.ok) return abort('review');
 
   // 5. completion report: rendered here, committed by a copy stage
-  const review = { rounds: reviewGate.rounds, findings: reviewGate.findings, gates: gateRun.gates };
+  const review = { rounds: reviewGate.rounds, findings: reviewGate.findings, ...(gateRun.gates !== impl.result.gates ? { gates: gateRun.gates } : {}) };
   const text = renderCompletionReport(ctx, unit, wave, branch, impl.result, review);
   signals.push(...signalsFromDocumentSize(byteLength(text), { ...stageCtx('completion-report'), path: completionPath(unit), targetKb: COMPLETION_REPORT_TARGET_KB }));
   const report = await rt.agent(completionScribePrompt(ctx, plan, unit, branch, text), opts('completion-report', { isolation: 'worktree', schema: COMPLETION_SCHEMA, ...tier(ctx, 'mechanical') }));
