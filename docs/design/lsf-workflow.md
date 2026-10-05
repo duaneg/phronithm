@@ -64,6 +64,20 @@ Documented behaviour this design relies on:
   is unchanged (same probe). Decisions handed back must therefore appear in
   the prompts of the calls they affect — the plan or decision-log SHA does
   this — not merely in `args`.
+- **The human message that started the launch turn is relayed to the run's
+  agents**, under a frame stating it outranks their task. Probed at Claude
+  Code 2.1.289 (2026-10-05, one single-agent run per condition,
+  [results](../investigations/relay-probe-results.md)): the agent's first
+  user turn is a `[Workflow harness — user request]` block quoting that
+  message, indented. It is relayed whether the launch is the turn's first tool
+  call (typed `wf_8286cecd-21c`; collapsed paste `wf_a00b2346-6b4`, relayed in
+  full, not as its placeholder) or follows a tool result (`Bash`
+  `wf_119eb6c3-fab`; AskUserQuestion answer `wf_a61f647b-bc6`, which relays
+  the turn's message, not the answer). In one turn started by a task
+  notification, two runs carried no relay, the second after an AskUserQuestion
+  answer (`wf_90db02e7-63b`, `wf_956ed621-4cd`). Unprobed: a slash-command or
+  skill-expanded launch prompt, a human message queued mid-turn, and runs
+  with several agents.
 - **Plugins ship workflows** from a `workflows/` directory, namespaced
   `phronithm:<meta.name>`.
 - **Every agent pays a floor before its first read**: the harness prompt
