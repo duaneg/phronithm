@@ -2,13 +2,15 @@
 
 ## Summary
 
-A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 28 units, five complete; critical path 11 units through the substrate decision and the serialised script stream. Base commit `b3dac6a`.
+A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 32 units, six complete; critical path 11 units through the S2 build and the serialised orchestrator stream. Base commit `b3dac6a`.
 
 The postmortem's problems are taken as accurate for archipeligo. The proposals in [lsf-improvements](../design/lsf-improvements.md) are candidate options, not designs: every decision unit states its problem without a solution, checks whether the problem holds outside archipeligo, and weighs the proposal against alternatives that include doing nothing.
 
 The programme is complete when every row of the problem register has a disposition (fixed, with the commit; declined, with the reason; or deferred to a named successor), the `workflows/lsf` tests pass, and the shakedown fixture runs to `complete`.
 
-Key risks: the substrate decision (Workflow script, host-side driver, or a hybrid) can rewrite or retire nine later units; six design units wait on a requester verdict, so requester attention, not agent time, bounds the schedule; and the evidence for generality is one other project (cartomancer-v2), all code units.
+The substrate is S2, a host runtime running the orchestrator through headless `claude -p` calls, confirmed by `substrate-spike`. The Workflow script stays the supported Phase 3 path, under `lsf-substrate.md`'s interim policy, until `script-retirement`.
+
+Key risks: the S2 build is a conjectured estimate and leads the critical path; seven design units wait on a requester verdict, so requester attention, not agent time, bounds the schedule; and the evidence for generality is one other project (cartomancer-v2), all code units.
 
 Units marked **provisional** have entries the re-plan rewrites when the design unit they depend on completes. A design that declines to act retires its provisional units, with the reason in the register.
 
@@ -20,18 +22,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 
 ### substrate-options — complete at `8d22932`; entry at `5d5842f`; report `docs/design/lsf-substrate.md`
 
-### substrate-spike
-- **Type**: design
-- **Risk**: high — may overturn the selected option
-- **Clarity**: exploratory
-- **Iteration**: iterative (structural)
-- **Effort**: large
-- **Scope**: `docs/design/lsf-substrate.md`, `workflows/lsf/spike/`
-- **Publishes**: the confirmed substrate decision; rewritten entries for the provisional units
-- **Depends on**: substrate-options (design, selected option)
-- **External gates**: `claude-code-workflow-tool` (environment, Claude Code 2.1.289); `claude-code-headless` (environment, Claude Code 2.1.289); `node` (environment, v26.9.0)
-- **Done condition**: The selected option is exercised through one end-to-end path (load, one unit's stages, merge, ledger append) on a fixture plan, with the fault kinds of postmortem §C's table injected at each stage the option claims to protect, plus a failed headless call, a permission denial and a kill mid-stage. The record states each of `lsf-substrate.md`'s ten spike checks' outcome and an estimate of the host runtime's build, and states `confirmed` or `overturned` with the evidence; a failed overturn check is `overturned`. The provisional units' entries in this plan are rewritten to match.
-- **Description**: Spike code is throwaway unless the record adopts it; its path moves if the option is not a Workflow script. An `overturned` result returns to `substrate-options`.
+### substrate-spike — complete at `23b38d4`; entry at `e2db84f`; report `docs/investigations/substrate-spike-results.md`
 
 ### arch-pin-refresh — complete at `382b5e2`; entry at `0cacac9`; report `docs/plans/arch-pin-refresh-completion.md`
 
@@ -128,31 +119,96 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Done condition**: `docs/design/lsf-session-role.md` is committed. It decides what analysis precedes a question to the requester, when a recommendation may be made and what it must state, the model tier, the route from repeated stops to an investigation, and whether gates may be cleared ahead of the stop. It is replayed against postmortem §E's four cases (the 41-seed question, "Keep baseline", the three stage-1 stops, the three pre-clearable gates). Since P-E1, P-E3 to P-E7 and P-E9 also occurred on cartomancer-v2 in sessions driven without `phronithm:lsf-drive`, it states whether the decided role binds only `phronithm:lsf-drive` or any session driving a run. The requester's verdict is recorded.
 - **Description**: Postmortem §E "Compressed decisions", "A recommendation without its basis", "Options inside a failing frame" and "Pre-clearable gates".
 
-### mechanical-stage-integrity
-- **Type**: bug-fix
-- **Risk**: medium — provisional on the substrate
-- **Clarity**: exploratory — one open decision: whether a clean or resolved merge returned without its `merges[].sha` is rejected or signalled
-- **Iteration**: write-once
-- **Effort**: large
-- **Scope**: `workflows/lsf/implement.js`, `workflows/lsf/test/implement.test.js`, `workflows/lsf-implement.js`, `docs/design/lsf-workflow.md::model-tiers`
-- **Publishes**: none
-- **Depends on**: substrate-spike (design, confirmed substrate); arch-pin-refresh (logical, the merge stage's `architectureSha` and `merges[].sha`); gate-results-integrity (logical, serialises the script files)
-- **External gates**: `node` (environment, v26.9.0)
-- **Done condition**: For each of the load, ledger-append, completion-report-copy and decision-log stages, a test injects the transcription faults that P-C1 to P-C4 and their Appendix B probes record for it, and shows none is committed or accepted silently. The faults are a placeholder, truncation, overwritten or deleted rows, an append's own new rows altered or a heading dropped, a dropped line, a dropped closing fence, and an invented entry. Tests also show that a returned SHA that does not resolve to a commit is rejected (P-C8's fabricated tails), including the merge stage's `architectureSha`, which sets the architecture pin, and each `merges[].sha`, which attributes a unit's architecture change; that a clean or resolved merge without its `merges[].sha` is not silently attributed to the whole wave; and that a ledger append is not given a wave heading that disagrees with its rows. The tests pass and the built script is not stale.
-- **Description**: **Provisional.** Postmortem §C: at least 14 faults in 218 haiku invocations; cartomancer-v2's review found 8 wrong SHAs in 367 returns. If the substrate decision moves these stages out of agents, this unit is replaced by the units that build that, and the merge-stage SHA checks carry to them.
-
-### stage-failure-handling
-- **Type**: bug-fix
-- **Risk**: medium — provisional on the substrate
-- **Clarity**: exploratory — one open decision: which stage failures stop the run and which are retried
+### s2-permissions-design
+- **Type**: design
+- **Risk**: medium — the spike's deny list is bypassable, and the alternatives are untested or edit the orchestrator
+- **Clarity**: exploratory — one open decision: the per-stage permission configuration
 - **Iteration**: write-once
 - **Effort**: medium
-- **Scope**: `workflows/lsf/implement.js`, `workflows/lsf/scheduling.js`, `workflows/lsf/test/implement.test.js`, `workflows/lsf-implement.js`, `docs/design/lsf-workflow.md::escalation`
-- **Publishes**: none
-- **Depends on**: substrate-spike (design, confirmed substrate); mechanical-stage-integrity (logical, serialises the script files)
+- **Scope**: `docs/design/lsf-runtime.md::permissions`
+- **Publishes**: the per-stage permission configuration
+- **Depends on**: substrate-spike (knowledge, run 1's prefix-rule failure and the deny list of runs 2–7)
+- **External gates**: `claude-code-headless` (environment, Claude Code 2.1.289); `requester-verdict` (organisational)
+- **Done condition**: The Permissions section is committed. It decides each stage role's permission configuration, comparing at least a deny list with Bash granted, prompts rewritten to single commands, and `--permission-mode auto`. Each option is run on the spike fixture: whether an implement stage completes, and whether a probe agent told to edit `.claude/settings.json` and delete a branch by shell is stopped, recorded per option. It states what a reviewer role may write. The requester's verdict is recorded.
+- **Description**: Spike condition 3; P-C5, P-C6. The spike's deny list held on agent restraint, not enforcement (results, check 9).
+
+### runtime-core
+- **Type**: foundation
+- **Risk**: high — every later script unit runs on it
+- **Clarity**: specified
+- **Iteration**: write-once
+- **Effort**: large
+- **Scope**: `workflows/lsf/runtime/`, `workflows/lsf/test/runtime.test.js`, `docs/design/lsf-runtime.md::runtime`
+- **Publishes**: the host runtime `{ agent, parallel, log, args }` for `run(runtime)`; the journal; stage roles as configuration
+- **Depends on**: substrate-spike (knowledge, the spike driver and its adapter requirements)
+- **External gates**: `node` (environment, v26.9.0); `claude-code-headless` (environment, Claude Code 2.1.289)
+- **Done condition**: Tests against a stub `claude` binary show that: a missing or schema-invalid `structured_output` after a clean exit is retried once, then null; a transient error is retried with backoff, a session-limit error waits for its reset, and a permanent one (`unrecognized_model`) is not retried; a prompt naming a skill is sent as its slash command, and a call whose stream shows no skill load is retried or flagged; `--strict-mcp-config` and the role's toolset are passed; a resume replays completed calls and journaled code steps without re-running them; and children left by a SIGKILL during concurrent calls are terminated by the next launch. Role permissions are an input, not constants. The tests pass.
+- **Description**: The spike's adapter (`workflows/lsf/spike/driver.js`; results, Adapter requirements), rebuilt with tests. The code stages are `code-stage-interface`'s.
+
+### code-stage-interface
+- **Type**: refactor
+- **Risk**: high — moves six stages out of agents; P-C1 to P-C4, P-C8 and P-C9 rest on it
+- **Clarity**: exploratory — one open decision: the interface's shape (`rt.code.*` hooks or typed stage calls)
+- **Iteration**: write-once
+- **Effort**: large
+- **Scope**: `workflows/lsf/implement.js`, `workflows/lsf/test/implement.test.js`, `workflows/lsf/runtime/stages.js`, `workflows/lsf/test/stages.test.js`, `workflows/lsf-implement.js`, `docs/design/lsf-workflow.md::model-tiers`
+- **Publishes**: the orchestrator's code-stage interface
+- **Depends on**: runtime-core (logical, the runtime); arch-pin-refresh (logical, the merge stage's `architectureSha` and `merges[].sha`); gate-results-integrity (logical, serialises `implement.js`); retained-artefacts-design (design, which ignored files cleanup may delete)
 - **External gates**: `node` (environment, v26.9.0)
-- **Done condition**: Tests reproduce each permission fault in postmortem §C (a denied commit reported with HEAD as its SHA; a denied branch delete) and the transient null of run #2, and show none yields its recorded outcome: a wrong SHA accepted, rows filed under the wrong wave, or a run stopped by one transient null. Prompts for stages that can be denied say what to do on denial. A `gate-not-run` stop is not retried (requester decision, 2026-10-05). The tests pass and the built script is not stale.
-- **Description**: **Provisional.** Postmortem §C's permission rows and the `agent-null` stop.
+- **Done condition**: Load, decision log, ledger append, completion report, merge with its plan bookkeeping, and cleanup run as code through the interface; their agent prompts stay as the Workflow script's path until `script-retirement`. Tests inject at each stage the faults P-C1 to P-C4 and their Appendix B probes record — a placeholder, truncation, overwritten or deleted rows, an append's own rows altered or its heading dropped, a dropped line or fence, an invented `clears` entry — and a rejected commit, and show none is committed or accepted silently. A merge conflict goes to a model call and an unresolvable one is reported. A returned SHA that does not resolve, including `architectureSha` and each `merges[].sha`, is rejected, and a clean merge without its SHA is not attributed to the whole wave. A kill between the merge step's commit and its record resumes with no second merge or bookkeeping commit. Cleanup keeps a worktree holding ignored files unless the retained-artefact policy names them rebuildable. The tests pass and the built script is not stale.
+- **Description**: Replaces `mechanical-stage-integrity`. The spike's code stages parse their inputs out of prompt text (results, Build estimate); the interface passes them as values. **Flag:** six stages exceed the planned-steps bound; the spike's code for each is the behavioural reference, so the excess is not context.
+
+### runtime-signals
+- **Type**: feature
+- **Risk**: medium
+- **Clarity**: exploratory — one open decision: which driver-detected events stop the run
+- **Iteration**: write-once
+- **Effort**: medium
+- **Scope**: `workflows/lsf/schema.js`, `workflows/lsf/scheduling.js`, `workflows/lsf/runtime/`, `workflows/lsf/test/scheduling.test.js`, `workflows/lsf/test/runtime.test.js`, `workflows/lsf-implement.js`, `docs/design/lsf-workflow.md::escalation`
+- **Publishes**: driver-event signal kinds
+- **Depends on**: code-stage-interface (logical, serialises the runtime and orchestrator files)
+- **External gates**: `node` (environment, v26.9.0)
+- **Done condition**: A corrected SHA, a permission denial, uncommitted changes at a stage's return, a gate the agent omitted, and a skill not loaded each reach the ledger as a signal, and the decided ones stop the run. Tests reproduce postmortem §C's permission faults (a denied commit reported with HEAD as its SHA; a denied branch delete) and run #2's transient null, and show none yields its recorded outcome. A `gate-not-run` stop is not retried (requester decision, 2026-10-05). The tests pass and the built script is not stale.
+- **Description**: Replaces `stage-failure-handling`. In the spike these events reached telemetry only.
+
+### declared-gates
+- **Type**: feature
+- **Risk**: medium — a plan-format change reaches every plan
+- **Clarity**: exploratory — one open decision: whether gate commands are declared in the plan block or in project configuration
+- **Iteration**: write-once
+- **Effort**: medium
+- **Scope**: `workflows/lsf/graph.js`, `workflows/lsf/test/graph.test.js`, `workflows/lsf/runtime/`, `workflows/lsf-implement.js`, `docs/plan-graph.md`, `skills/breakdown/SKILL.md::graph`, `docs/design/lsf-workflow.md::lifecycle-mapping`
+- **Publishes**: the declared gate-command field
+- **Depends on**: runtime-signals (logical, serialises the runtime files; the omitted-gate signal)
+- **External gates**: `node` (environment, v26.9.0)
+- **Done condition**: A project's gate commands are declared where the unit decides. The runtime runs them on a clean checkout of the returned commit after implement, after each code fix and after each merge, and the reviewers read its results. Tests show a stage that reports `green` for a gate it did not run, or omits one, is caught. `phronithm:breakdown` emits the declaration. The tests pass and the built script is not stale.
+- **Description**: Closes R11 (results, check 10b).
+
+### runtime-cli-drive
+- **Type**: integration
+- **Risk**: medium
+- **Clarity**: exploratory — one open decision: how pause and status are exposed (pause ref, kill file, state file)
+- **Iteration**: write-once
+- **Effort**: medium
+- **Scope**: `workflows/lsf/runtime/cli.js`, `workflows/lsf/test/cli.test.js`, `skills/lsf-drive/SKILL.md::launch`, `skills/lsf-drive/SKILL.md::relaunch`, `skills/lsf-drive/SKILL.md::startup`, `docs/design/lsf-runtime.md::cli`
+- **Publishes**: the runtime CLI (launch, status, pause, resume, watch)
+- **Depends on**: declared-gates (logical, serialises the runtime files); s2-permissions-design (design, the decided configuration); plan-preflight-check (logical, serialises `skills/lsf-drive/SKILL.md::startup`); relay-probe (knowledge, relay behaviour)
+- **External gates**: `claude-code-headless` (environment, Claude Code 2.1.289); `node` (environment, v26.9.0)
+- **Done condition**: `phronithm:lsf-drive` launches, pauses, resumes and reads the status of a run through the CLI, under the decided permission configuration. A fixture run launched from a turn in which the requester typed a message shows no agent transcript carrying a relayed message, cited by transcript (P-F1). The driver outlives the interactive session that launched it, or the skill says it runs from the requester's terminal. The Relaunch section keeps `gate-not-run`'s route: an environment or project change, not a decision. The tests pass.
+- **Description**: Replaces `relay-mitigation`: headless calls carry no relay (results, check 3), so P-F1 reduces to the launch path.
+
+### script-retirement
+- **Type**: refactor
+- **Risk**: low
+- **Clarity**: specified
+- **Iteration**: write-once
+- **Effort**: small
+- **Scope**: `workflows/lsf-implement.js`, `workflows/lsf/build.js`, `workflows/lsf/test/build.test.js`, `workflows/lsf/spike/`, `workflows/lsf/implement.js`, `docs/design/lsf-workflow.md::constraints`, `CLAUDE.md`
+- **Publishes**: none
+- **Depends on**: runtime-cli-drive (testing, the replacement path runs through `phronithm:lsf-drive`)
+- **External gates**: none
+- **Done condition**: The generated script, `build.js`, its test, the spike directory and the mechanical stages' agent prompts are deleted. `lsf-workflow.md`'s Constraints section describes the runtime, not the Workflow tool. `CLAUDE.md`'s Structure section names the runtime and no longer the generated script. `cd workflows/lsf && node --test test/` passes.
+- **Description**: Ends `lsf-substrate.md`'s interim policy: the Workflow script is the supported Phase 3 path until this unit.
 
 ### empirical-script-support
 - **Type**: feature
@@ -160,11 +216,11 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Clarity**: exploratory
 - **Iteration**: write-once
 - **Effort**: medium
-- **Scope**: `workflows/lsf/implement.js`, `workflows/lsf/graph.js`, `workflows/lsf/schema.js`, `workflows/lsf/test/implement.test.js`, `workflows/lsf/test/graph.test.js`, `workflows/lsf/test/schema.test.js`, `workflows/lsf-implement.js`, `docs/design/lsf-workflow.md::wave-loop`
+- **Scope**: `workflows/lsf/implement.js`, `workflows/lsf/graph.js`, `workflows/lsf/schema.js`, `workflows/lsf/test/implement.test.js`, `workflows/lsf/test/graph.test.js`, `workflows/lsf/test/schema.test.js`, `docs/design/lsf-workflow.md::wave-loop`
 - **Publishes**: the plan-block fields and gate behaviour the empirical design decided
-- **Depends on**: empirical-unit-design (design, plan-level shape); stage-failure-handling (logical, serialises the script files)
+- **Depends on**: empirical-unit-design (design, plan-level shape); script-retirement (logical, serialises the orchestrator files)
 - **External gates**: `node` (environment, v26.9.0)
-- **Done condition**: Tests show the parser accepts every plan-block field the empirical design adds, that a measurement superseding a cited figure with no decision moved is handled as the design decided, and that a non-design unit in a project with no gate of its own reaches review with the gate the design decided. The tests pass and the built script is not stale.
+- **Done condition**: Tests show the parser accepts every plan-block field the empirical design adds, that a measurement superseding a cited figure with no decision moved is handled as the design decided, and that a non-design unit in a project with no gate of its own reaches review with the gate the design decided. The tests pass.
 - **Description**: **Provisional.** Retired if the design routes empirical work outside the plan block and leaves the gate unchanged.
 
 ### findings-consumer-impl
@@ -173,25 +229,12 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Clarity**: exploratory
 - **Iteration**: write-once
 - **Effort**: medium
-- **Scope**: `workflows/lsf/implement.js`, `workflows/lsf/scheduling.js`, `workflows/lsf/test/implement.test.js`, `workflows/lsf/test/scheduling.test.js`, `workflows/lsf-implement.js`, `docs/design/lsf-workflow.md::escalation`
+- **Scope**: `workflows/lsf/implement.js`, `workflows/lsf/scheduling.js`, `workflows/lsf/test/implement.test.js`, `workflows/lsf/test/scheduling.test.js`, `docs/design/lsf-workflow.md::escalation`
 - **Publishes**: finding identity across review rounds
 - **Depends on**: findings-consumer-design (design, the decided consumer); empirical-script-support (logical, serialises the script files)
 - **External gates**: `node` (environment, v26.9.0)
-- **Done condition**: Tests show each unfixed Significant finding reaches the decided destination once, however many review rounds repeat it, with its text and referent. The tests pass and the built script is not stale.
+- **Done condition**: Tests show each unfixed Significant finding reaches the decided destination once, however many review rounds repeat it, with its text and referent. The tests pass.
 - **Description**: **Provisional.** Postmortem §B.
-
-### relay-mitigation
-- **Type**: bug-fix
-- **Risk**: low
-- **Clarity**: exploratory — one open decision: the mitigation
-- **Iteration**: write-once
-- **Effort**: small
-- **Scope**: `workflows/lsf/implement.js`, `workflows/lsf/test/implement.test.js`, `workflows/lsf-implement.js`, `skills/lsf-drive/SKILL.md::launch`, `skills/lsf-drive/SKILL.md::relaunch`, `docs/design/lsf-workflow.md::constraints`
-- **Publishes**: none
-- **Depends on**: relay-probe (knowledge, relay behaviour); substrate-spike (design, confirmed substrate); findings-consumer-impl (logical, serialises the script files)
-- **External gates**: `claude-code-workflow-tool` (environment, Claude Code 2.1.289); `node` (environment, v26.9.0)
-- **Done condition**: A run launched the way `phronithm:lsf-drive` prescribes, from a turn in which the requester has typed a message, shows no agent acting on a relayed message, cited by run id and transcript. A relaunch and a resume are covered. `phronithm:lsf-drive`'s Relaunch section keeps `gate-not-run`'s route: an environment or project change, not a decision.
-- **Description**: Postmortem §F. At 2.1.289 the latest human message delivered in the launch turn is relayed; a turn started by a task notification with no human message carries none, and a resume relays by its own turn (`relay-probe` results, H4). The improvements note's remedy, confirming every launch through AskUserQuestion, does not suppress the relay (`wf_a61f647b-bc6`). A relaunch on a workflow's return notification carries none; one after the requester types a decision relays it.
 
 ### long-running-design
 - **Type**: design
@@ -201,9 +244,9 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Effort**: large
 - **Scope**: `docs/design/lsf-long-running.md`
 - **Publishes**: the decision on work that outlasts a stage
-- **Depends on**: substrate-spike (design, confirmed substrate); empirical-unit-design (design, plan-level shape); retained-artefacts-design (design, retained-artefact policy for a job's outputs); gate-results-integrity (knowledge, the `gate-not-run` stop and the long-gate recipe)
+- **Depends on**: substrate-spike (design, confirmed substrate); runtime-core (knowledge, the runtime's supervision of its calls); empirical-unit-design (design, plan-level shape); retained-artefacts-design (design, retained-artefact policy for a job's outputs); gate-results-integrity (knowledge, the `gate-not-run` stop and the long-gate recipe)
 - **External gates**: none
-- **Done condition**: `docs/design/lsf-long-running.md` is committed. It decides how work that outlasts one agent stage runs, and states the behaviour of the wave barrier, a re-plan while the work is in flight, resume, liveness, and a process left behind by a stopped run. On resume it distinguishes an interrupted attempt from one a re-plan or decision superseded, and states what happens to the interrupted attempt's commits and untracked outputs. It states the route for a project gate that cannot finish within one stage even with the long-gate recipe, which now stops with `gate-not-run` and has no exit through the workflow. `phronithm:critique` (critique-design) passes at the gate bar.
+- **Done condition**: `docs/design/lsf-long-running.md` is committed. It decides how work that outlasts one agent stage runs under the host runtime, and states the behaviour of the wave barrier, a re-plan while the work is in flight, resume, liveness, and a process left behind by a stopped run. On resume it distinguishes an interrupted attempt from one a re-plan or decision superseded, and states what happens to the interrupted attempt's commits and untracked outputs. It states the route for a project gate that cannot finish within one stage even with the long-gate recipe, which now stops with `gate-not-run` and has no exit through the workflow. `phronithm:critique` (critique-design) passes at the gate bar.
 - **Description**: Postmortem §A: 18 campaign stages took 39.7 of 62.1 implement agent-hours; one campaign outlived its stage and left an orphan process.
 
 ### long-running-impl
@@ -212,12 +255,12 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Clarity**: exploratory
 - **Iteration**: iterative (structural)
 - **Effort**: large
-- **Scope**: `workflows/lsf/implement.js`, `workflows/lsf/scheduling.js`, `workflows/lsf/test/implement.test.js`, `workflows/lsf/test/scheduling.test.js`, `workflows/lsf-implement.js`, `docs/design/lsf-workflow.md::wave-loop`, `docs/design/lsf-workflow.md::lifecycle-mapping`
+- **Scope**: `workflows/lsf/implement.js`, `workflows/lsf/scheduling.js`, `workflows/lsf/test/implement.test.js`, `workflows/lsf/test/scheduling.test.js`, `workflows/lsf/runtime/`, `docs/design/lsf-workflow.md::wave-loop`, `docs/design/lsf-workflow.md::lifecycle-mapping`
 - **Publishes**: none
-- **Depends on**: long-running-design (design, the decision); relay-mitigation (logical, serialises the script files)
+- **Depends on**: long-running-design (design, the decision); findings-consumer-impl (logical, serialises the orchestrator files)
 - **External gates**: `node` (environment, v26.9.0)
-- **Done condition**: A test shows a unit whose job outlasts its launching stage completes with its results reviewed, and that a stopped run leaves no process the run has no record of. A test shows that resuming a run treats an interrupted implement attempt's commits and untracked outputs as `long-running-design` decided (P-D6), and that a project gate outlasting its stage takes the route it decided. The tests pass and the built script is not stale.
-- **Description**: **Provisional.** The re-plan after `long-running-design` splits this unit if the decision spans more than the script.
+- **Done condition**: A test shows a unit whose job outlasts its launching stage completes with its results reviewed, and that a stopped run leaves no process the run has no record of. A test shows that resuming a run treats an interrupted implement attempt's commits and untracked outputs as `long-running-design` decided (P-D6), and that a project gate outlasting its stage takes the route it decided. The tests pass.
+- **Description**: **Provisional.** The re-plan after `long-running-design` splits this unit if the decision spans more than the orchestrator and runtime.
 
 ### empirical-criteria-impl
 - **Type**: feature
@@ -253,7 +296,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Effort**: medium
 - **Scope**: `skills/breakdown/SKILL.md`, `docs/plan-graph.md`
 - **Publishes**: none
-- **Depends on**: empirical-unit-design (design, plan-level shape); retained-artefacts-design (design, retained-artefact policy); empirical-script-support (testing, the parser must accept what the skill emits); plan-preflight-check (logical, serialises `skills/breakdown/SKILL.md`)
+- **Depends on**: empirical-unit-design (design, plan-level shape); retained-artefacts-design (design, retained-artefact policy); empirical-script-support (testing, the parser must accept what the skill emits); plan-preflight-check, declared-gates (logical, each serialises a section of `skills/breakdown/SKILL.md`; declared-gates also `docs/plan-graph.md`)
 - **External gates**: none
 - **Done condition**: `skills/breakdown/SKILL.md` and `docs/plan-graph.md` carry the decided shape, and the retained-artefact policy wherever that decision places it in them. A fixture plan written to it passes the pre-flight command. `phronithm:critique` (critique-skill) passes at the gate bar and a `phronithm:edit` pass has been applied.
 - **Description**: **Provisional.**
@@ -292,10 +335,10 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Effort**: medium
 - **Scope**: `skills/lsf-drive/SKILL.md`
 - **Publishes**: none
-- **Depends on**: substrate-spike (design, confirmed substrate); drive-decision-design (design, whether driving rules bind only `phronithm:lsf-drive`); drive-presentation-impl, relay-mitigation, plan-preflight-check, programme-close-out (logical, each serialises a section of `skills/lsf-drive/SKILL.md`)
+- **Depends on**: substrate-spike (design, confirmed substrate); drive-decision-design (design, whether driving rules bind only `phronithm:lsf-drive`); drive-presentation-impl, runtime-cli-drive, plan-preflight-check, programme-close-out (logical, each serialises a section of `skills/lsf-drive/SKILL.md`)
 - **External gates**: none
-- **Done condition**: For each of P-C9, P-E1, P-E6, P-E7, P-E8, P-E9 and P-I1, `phronithm:lsf-drive` carries a rule or the unit's completion report gives the register row a `declined` disposition with the reason. The Relaunch section keeps `gate-not-run`'s route. The skill's byte size before and after is reported. `phronithm:critique` (critique-skill) passes at the gate bar and a `phronithm:edit` pass has been applied.
-- **Description**: About 60% of requester inputs in the first week were mechanics. The unit first asks which duties the confirmed substrate removes, and adds rules only for those that remain. **Flag:** up to seven items exceeds the planned-steps bound; each is a few lines of skill text in one file, so the excess is not context.
+- **Done condition**: For each of P-E1, P-E6, P-E7, P-E8, P-E9 and P-I1, `phronithm:lsf-drive` carries a rule or the unit's completion report gives the register row a `declined` disposition with the reason. The Relaunch section keeps `gate-not-run`'s route. The skill's byte size before and after is reported. `phronithm:critique` (critique-skill) passes at the gate bar and a `phronithm:edit` pass has been applied.
+- **Description**: About 60% of requester inputs in the first week were mechanics. The unit first asks which duties the runtime CLI removes, and adds rules only for those that remain. **Flag:** up to seven items exceeds the planned-steps bound; each is a few lines of skill text in one file, so the excess is not context.
 
 ### shakedown-fixture
 - **Type**: integration
@@ -304,10 +347,10 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Iteration**: iterative (structural)
 - **Effort**: medium
 - **Scope**: `workflows/lsf/test/fixtures/shakedown/`, `docs/design/lsf-workflow.md::status`, `docs/design/lsf-workflow.md::testing`
-- **Publishes**: a fixture plan covering the unit kinds the workflow claims to run
+- **Publishes**: a fixture plan covering the unit kinds the runtime claims to run
 - **Depends on**: long-running-impl (testing, the last script unit); empirical-unit-impl (testing, the plan form); drive-mechanics (testing, the launch path)
-- **External gates**: `claude-code-workflow-tool` (environment, Claude Code 2.1.289)
-- **Done condition**: The workflow, launched through `phronithm:lsf-drive` on a fixture plan with at least one code unit whose gate runs past the 600 s tool timeout, one design unit that settles a decision the architecture document left open, and one empirical unit whose job outlasts the tool timeout, returns `complete`, with the design unit's change recorded as an architecture amendment. A second run, on a variant whose unit moves a decision the document made, stops with `architecture-invalidated`. The design's Status section cites both run ids, lists the unit kinds the workflow has run on, and records how the long gate completed.
+- **External gates**: `claude-code-headless` (environment, Claude Code 2.1.289)
+- **Done condition**: The runtime, launched through `phronithm:lsf-drive` on a fixture plan with at least one code unit whose gate runs past the 600 s tool timeout, one design unit that settles a decision the architecture document left open, and one empirical unit whose job outlasts the tool timeout, returns `complete`, with the design unit's change recorded as an architecture amendment. A second run, on a variant whose unit moves a decision the document made, stops with `architecture-invalidated`. The design's Status section cites both run ids, lists the unit kinds the runtime has run on, and records how the long gate completed.
 - **Description**: Postmortem §G: the workflow was shaken down on code units and met measurement units first on a live programme. The two architecture cases are the upgrade path for the gate half of `arch-pin-refresh`'s done condition, and the long gate for `gate-results-integrity`'s live long-gate claim; both were `conjectured` at completion. **Flag:** the scope path moves if the fixture lives in the bench repository.
 
 ### programme-close
@@ -320,7 +363,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: none
 - **Depends on**: shakedown-fixture (testing, the run); phase2-gate-discipline, programme-close-out, empirical-criteria-impl (logical, their dispositions)
 - **External gates**: none
-- **Done condition**: Every register row has a disposition: `fixed` with a commit, `declined` with a reason, or `deferred` to a named successor. `docs/design/lsf-improvements.md` is deleted. `CLAUDE.md`'s Structure section lists the documents and commands the programme added. `cd workflows/lsf && node --test test/` passes and the built script is not stale.
+- **Done condition**: Every register row has a disposition: `fixed` with a commit, `declined` with a reason, or `deferred` to a named successor. `docs/design/lsf-improvements.md` is deleted. `CLAUDE.md`'s Structure section lists the documents and commands the programme added. `cd workflows/lsf && node --test test/` passes.
 - **Description**: The closure unit: it owns the completeness criterion the other units contribute to (Standing Obligations).
 
 ## Graph
@@ -361,7 +404,7 @@ units:
         kind: organisational
   - id: substrate-spike
     type: design
-    complete: false
+    complete: true
     dependencies: [substrate-options]
     scope: [docs/design/lsf-substrate.md, workflows/lsf/spike]
     publishes: [confirmed substrate]
@@ -478,31 +521,86 @@ units:
     gates:
       - name: requester-verdict
         kind: organisational
-  - id: mechanical-stage-integrity
-    type: bug-fix
+  - id: s2-permissions-design
+    type: design
     complete: false
-    dependencies: [substrate-spike, arch-pin-refresh, gate-results-integrity]
-    scope: [workflows/lsf/implement.js, workflows/lsf/test/implement.test.js, workflows/lsf-implement.js, docs/design/lsf-workflow.md::model-tiers]
-    publishes: []
+    dependencies: [substrate-spike]
+    scope: [docs/design/lsf-runtime.md::permissions]
+    publishes: [per-stage permission configuration]
+    gates:
+      - name: claude-code-headless
+        kind: environment
+        pin: "2.1.289"
+      - name: requester-verdict
+        kind: organisational
+  - id: runtime-core
+    type: foundation
+    complete: false
+    dependencies: [substrate-spike]
+    scope: [workflows/lsf/runtime, workflows/lsf/test/runtime.test.js, docs/design/lsf-runtime.md::runtime]
+    publishes: [host runtime, journal, stage roles as configuration]
     gates:
       - name: node
         kind: environment
         pin: "v26.9.0"
-  - id: stage-failure-handling
-    type: bug-fix
+      - name: claude-code-headless
+        kind: environment
+        pin: "2.1.289"
+  - id: code-stage-interface
+    type: refactor
     complete: false
-    dependencies: [substrate-spike, mechanical-stage-integrity]
-    scope: [workflows/lsf/implement.js, workflows/lsf/scheduling.js, workflows/lsf/test/implement.test.js, workflows/lsf-implement.js, docs/design/lsf-workflow.md::escalation]
-    publishes: []
+    dependencies: [runtime-core, arch-pin-refresh, gate-results-integrity, retained-artefacts-design]
+    scope: [workflows/lsf/implement.js, workflows/lsf/test/implement.test.js, workflows/lsf/runtime/stages.js, workflows/lsf/test/stages.test.js, workflows/lsf-implement.js, docs/design/lsf-workflow.md::model-tiers]
+    publishes: [code-stage interface]
     gates:
       - name: node
         kind: environment
         pin: "v26.9.0"
+  - id: runtime-signals
+    type: feature
+    complete: false
+    dependencies: [code-stage-interface]
+    scope: [workflows/lsf/schema.js, workflows/lsf/scheduling.js, workflows/lsf/runtime, workflows/lsf/test/scheduling.test.js, workflows/lsf/test/runtime.test.js, workflows/lsf-implement.js, docs/design/lsf-workflow.md::escalation]
+    publishes: [driver-event signal kinds]
+    gates:
+      - name: node
+        kind: environment
+        pin: "v26.9.0"
+  - id: declared-gates
+    type: feature
+    complete: false
+    dependencies: [runtime-signals]
+    scope: [workflows/lsf/graph.js, workflows/lsf/test/graph.test.js, workflows/lsf/runtime, workflows/lsf-implement.js, docs/plan-graph.md, skills/breakdown/SKILL.md::graph, docs/design/lsf-workflow.md::lifecycle-mapping]
+    publishes: [declared gate-command field]
+    gates:
+      - name: node
+        kind: environment
+        pin: "v26.9.0"
+  - id: runtime-cli-drive
+    type: integration
+    complete: false
+    dependencies: [declared-gates, s2-permissions-design, plan-preflight-check, relay-probe]
+    scope: [workflows/lsf/runtime/cli.js, workflows/lsf/test/cli.test.js, skills/lsf-drive/SKILL.md::launch, skills/lsf-drive/SKILL.md::relaunch, skills/lsf-drive/SKILL.md::startup, docs/design/lsf-runtime.md::cli]
+    publishes: [runtime CLI]
+    gates:
+      - name: claude-code-headless
+        kind: environment
+        pin: "2.1.289"
+      - name: node
+        kind: environment
+        pin: "v26.9.0"
+  - id: script-retirement
+    type: refactor
+    complete: false
+    dependencies: [runtime-cli-drive]
+    scope: [workflows/lsf-implement.js, workflows/lsf/build.js, workflows/lsf/test/build.test.js, workflows/lsf/spike, workflows/lsf/implement.js, docs/design/lsf-workflow.md::constraints, CLAUDE.md]
+    publishes: []
+    gates: []
   - id: empirical-script-support
     type: feature
     complete: false
-    dependencies: [empirical-unit-design, stage-failure-handling]
-    scope: [workflows/lsf/implement.js, workflows/lsf/graph.js, workflows/lsf/schema.js, workflows/lsf/test/implement.test.js, workflows/lsf/test/graph.test.js, workflows/lsf/test/schema.test.js, workflows/lsf-implement.js, docs/design/lsf-workflow.md::wave-loop]
+    dependencies: [empirical-unit-design, script-retirement]
+    scope: [workflows/lsf/implement.js, workflows/lsf/graph.js, workflows/lsf/schema.js, workflows/lsf/test/implement.test.js, workflows/lsf/test/graph.test.js, workflows/lsf/test/schema.test.js, docs/design/lsf-workflow.md::wave-loop]
     publishes: [empirical plan-block fields]
     gates:
       - name: node
@@ -512,37 +610,24 @@ units:
     type: feature
     complete: false
     dependencies: [findings-consumer-design, empirical-script-support]
-    scope: [workflows/lsf/implement.js, workflows/lsf/scheduling.js, workflows/lsf/test/implement.test.js, workflows/lsf/test/scheduling.test.js, workflows/lsf-implement.js, docs/design/lsf-workflow.md::escalation]
+    scope: [workflows/lsf/implement.js, workflows/lsf/scheduling.js, workflows/lsf/test/implement.test.js, workflows/lsf/test/scheduling.test.js, docs/design/lsf-workflow.md::escalation]
     publishes: [finding identity]
     gates:
-      - name: node
-        kind: environment
-        pin: "v26.9.0"
-  - id: relay-mitigation
-    type: bug-fix
-    complete: false
-    dependencies: [relay-probe, substrate-spike, findings-consumer-impl]
-    scope: [workflows/lsf/implement.js, workflows/lsf/test/implement.test.js, workflows/lsf-implement.js, skills/lsf-drive/SKILL.md::launch, skills/lsf-drive/SKILL.md::relaunch, docs/design/lsf-workflow.md::constraints]
-    publishes: []
-    gates:
-      - name: claude-code-workflow-tool
-        kind: environment
-        pin: "2.1.289"
       - name: node
         kind: environment
         pin: "v26.9.0"
   - id: long-running-design
     type: design
     complete: false
-    dependencies: [substrate-spike, empirical-unit-design, retained-artefacts-design, gate-results-integrity]
+    dependencies: [substrate-spike, runtime-core, empirical-unit-design, retained-artefacts-design, gate-results-integrity]
     scope: [docs/design/lsf-long-running.md]
     publishes: [long-running work decision]
     gates: []
   - id: long-running-impl
     type: feature
     complete: false
-    dependencies: [long-running-design, relay-mitigation]
-    scope: [workflows/lsf/implement.js, workflows/lsf/scheduling.js, workflows/lsf/test/implement.test.js, workflows/lsf/test/scheduling.test.js, workflows/lsf-implement.js, docs/design/lsf-workflow.md::wave-loop, docs/design/lsf-workflow.md::lifecycle-mapping]
+    dependencies: [long-running-design, findings-consumer-impl]
+    scope: [workflows/lsf/implement.js, workflows/lsf/scheduling.js, workflows/lsf/test/implement.test.js, workflows/lsf/test/scheduling.test.js, workflows/lsf/runtime, docs/design/lsf-workflow.md::wave-loop, docs/design/lsf-workflow.md::lifecycle-mapping]
     publishes: []
     gates:
       - name: node
@@ -567,7 +652,7 @@ units:
   - id: empirical-unit-impl
     type: feature
     complete: false
-    dependencies: [empirical-unit-design, retained-artefacts-design, empirical-script-support, plan-preflight-check]
+    dependencies: [empirical-unit-design, retained-artefacts-design, empirical-script-support, plan-preflight-check, declared-gates]
     scope: [skills/breakdown/SKILL.md, docs/plan-graph.md]
     publishes: []
     gates: []
@@ -591,7 +676,7 @@ units:
   - id: drive-mechanics
     type: feature
     complete: false
-    dependencies: [substrate-spike, drive-decision-design, drive-presentation-impl, relay-mitigation, plan-preflight-check, programme-close-out]
+    dependencies: [substrate-spike, drive-decision-design, drive-presentation-impl, runtime-cli-drive, plan-preflight-check, programme-close-out]
     scope: [skills/lsf-drive/SKILL.md]
     publishes: []
     gates: []
@@ -602,7 +687,7 @@ units:
     scope: [workflows/lsf/test/fixtures/shakedown, docs/design/lsf-workflow.md::status, docs/design/lsf-workflow.md::testing]
     publishes: [shakedown fixture plan]
     gates:
-      - name: claude-code-workflow-tool
+      - name: claude-code-headless
         kind: environment
         pin: "2.1.289"
   - id: programme-close
@@ -612,7 +697,7 @@ units:
     scope: [docs/design/lsf-problem-register.md, docs/design/lsf-improvements.md, docs/design/lsf-workflow.md::status, CLAUDE.md]
     publishes: []
     gates: []
-execution_order: [problem-register, relay-probe, arch-pin-refresh, gate-results-integrity, substrate-options, significant-precision-sample, empirical-criteria-design, retained-artefacts-design, substrate-spike, empirical-unit-design, findings-consumer-design, drive-decision-design, plan-preflight-check, mechanical-stage-integrity, stage-failure-handling, empirical-script-support, findings-consumer-impl, relay-mitigation, long-running-design, long-running-impl, empirical-criteria-impl, phase2-gate-discipline, empirical-unit-impl, programme-close-out, drive-presentation-impl, drive-mechanics, shakedown-fixture, programme-close]
+execution_order: [problem-register, relay-probe, arch-pin-refresh, gate-results-integrity, substrate-options, significant-precision-sample, empirical-criteria-design, retained-artefacts-design, substrate-spike, empirical-unit-design, findings-consumer-design, drive-decision-design, plan-preflight-check, s2-permissions-design, runtime-core, code-stage-interface, runtime-signals, declared-gates, runtime-cli-drive, script-retirement, empirical-script-support, findings-consumer-impl, long-running-design, long-running-impl, empirical-criteria-impl, phase2-gate-discipline, empirical-unit-impl, programme-close-out, drive-presentation-impl, drive-mechanics, shakedown-fixture, programme-close]
 ```
 
 ## Dependency Graph
@@ -628,7 +713,7 @@ graph TD
   PR[problem-register: complete]
   RP[relay-probe: complete]
   SO[substrate-options: complete]
-  SS[substrate-spike]
+  SS[substrate-spike: complete]
   APR[arch-pin-refresh: complete]
   GRI[gate-results-integrity: complete]
   PPC[plan-preflight-check]
@@ -638,11 +723,15 @@ graph TD
   RAD[retained-artefacts-design]
   FCD[findings-consumer-design]
   DDD[drive-decision-design]
-  MSI[mechanical-stage-integrity]
-  SFH[stage-failure-handling]
+  SPD[s2-permissions-design]
+  RC[runtime-core]
+  CSI[code-stage-interface]
+  RS[runtime-signals]
+  DG[declared-gates]
+  RCD[runtime-cli-drive]
+  SR[script-retirement]
   ESS[empirical-script-support]
   FCI[findings-consumer-impl]
-  RM[relay-mitigation]
   LRD[long-running-design]
   LRI[long-running-impl]
   ECI[empirical-criteria-impl]
@@ -660,14 +749,20 @@ graph TD
   GRI -.-> EUD
   GRI -.-> LRD
   SO -.-> SS
-  APR --> GRI --> MSI --> SFH --> ESS --> FCI --> RM --> LRI
-  APR --> MSI
-  SS -.-> MSI
-  SS -.-> SFH
-  SS -.-> RM
+  SS -.-> SPD
+  SS -.-> RC
   SS -.-> LRD
   SS -.-> DM
-  RP -.-> RM
+  APR --> GRI
+  RC --> CSI --> RS --> DG --> RCD
+  RCD -. testing .-> SR --> ESS --> FCI --> LRI
+  APR --> CSI
+  GRI --> CSI
+  RAD -.-> CSI
+  SPD -.-> RCD
+  PPC --> RCD
+  RP -.-> RCD
+  RC -.-> LRD
   PR -.-> ECD -.-> EUD
   PR -.-> EUD
   PR -.-> FCD
@@ -686,11 +781,12 @@ graph TD
   PR -.-> P2G
   ESS -. testing .-> EUI
   PPC --> EUI
+  DG --> EUI
   FCD -.-> PCO
   ECD -.-> PCO
   DDD -.-> DPI --> DM
   DDD -.-> DM
-  RM --> DM
+  RCD --> DM
   PPC --> DM
   PCO --> DM
   LRI -. testing .-> SF
@@ -707,12 +803,15 @@ graph TD
   RV --> RAD
   RV --> FCD
   RV --> DDD
+  RV --> SPD
   RV --> P2G
   CC --> RP
   CC --> SS
   CH --> SS
-  CC --> RM
-  CC --> SF
+  CH --> SPD
+  CH --> RC
+  CH --> RCD
+  CH --> SF
 ```
 
 ## Execution Order
@@ -720,24 +819,25 @@ graph TD
 1. `problem-register`, `relay-probe`. The register is the foundation. The probe is small and feeds the substrate decision.
 2. `arch-pin-refresh`, `gate-results-integrity`, `substrate-options`, `significant-precision-sample`. The highest-risk decision is taken as early as its inputs allow. The precision sample has no dependencies and gates the findings decision.
 3. `empirical-criteria-design`, `retained-artefacts-design`, `substrate-spike`.
-4. `empirical-unit-design`, `findings-consumer-design`, `drive-decision-design`, `plan-preflight-check`. All four design decisions land before any provisional unit they govern starts.
-5. `mechanical-stage-integrity`, `stage-failure-handling`, `empirical-script-support`, `findings-consumer-impl`, `relay-mitigation`. The script stream, serial because every unit writes `implement.js`, its test file and the generated script.
-6. `long-running-design`, `long-running-impl`. Last in the script stream: the least certain unit, and the one most likely to be re-planned.
-7. `empirical-criteria-impl`, `phase2-gate-discipline`, `empirical-unit-impl`, `programme-close-out`, `drive-presentation-impl`, `drive-mechanics`. Skill text, each after its decision.
-8. `shakedown-fixture`, `programme-close`.
+4. `empirical-unit-design`, `findings-consumer-design`, `drive-decision-design`, `plan-preflight-check`, `s2-permissions-design`. All five design decisions land before any unit they govern starts.
+5. `runtime-core`, `code-stage-interface`, `runtime-signals`, `declared-gates`, `runtime-cli-drive`, `script-retirement`. The S2 build, serial because each writes the runtime directory or `implement.js`. It leads the orchestrator stream so later units are built and tested on the runtime, not the Workflow script.
+6. `empirical-script-support`, `findings-consumer-impl`. The rest of the orchestrator stream, serial on `implement.js` and its tests.
+7. `long-running-design`, `long-running-impl`. Last in the stream: the least certain unit, and the one most likely to be re-planned.
+8. `empirical-criteria-impl`, `phase2-gate-discipline`, `empirical-unit-impl`, `programme-close-out`, `drive-presentation-impl`, `drive-mechanics`. Skill text, each after its decision.
+9. `shakedown-fixture`, `programme-close`.
 
-`arch-pin-refresh` and `gate-results-integrity` are context-free script defects and run before the substrate is confirmed. If the substrate decision retires the Workflow script, their behaviour carries into the replacement and the work is a port, not a loss.
+Units before `script-retirement` that write `implement.js` keep the generated script building; it is deleted there.
 
 ## Parallel Streams
 
 ### 2 workers
 
-- **Worker 1, decisions and skill text.** `empirical-criteria-design` → `retained-artefacts-design` → `substrate-options` → `empirical-unit-design` → `findings-consumer-design` → `drive-decision-design` → the skill-text units of step 7. Writes `docs/design/` decision records and `skills/`.
-- **Worker 2, script.** `relay-probe` → `significant-precision-sample` → `plan-preflight-check` → `substrate-spike` → the script stream of steps 5–6. Writes `workflows/lsf/`, `workflows/lsf-implement.js` and sections of `docs/design/lsf-workflow.md`.
+- **Worker 1, decisions and skill text.** `empirical-criteria-design` → `retained-artefacts-design` → `substrate-options` → `empirical-unit-design` → `findings-consumer-design` → `drive-decision-design` → `s2-permissions-design` → the skill-text units of step 8. Writes `docs/design/` decision records and `skills/`.
+- **Worker 2, orchestrator and runtime.** `relay-probe` → `significant-precision-sample` → `plan-preflight-check` → `substrate-spike` → the stream of steps 5–7. Writes `workflows/lsf/`, `workflows/lsf-implement.js` until its retirement, and sections of `docs/design/lsf-workflow.md` and `docs/design/lsf-runtime.md`.
 
-Synchronisation points: `relay-probe` before `substrate-options`; `substrate-options` before `substrate-spike`; each design unit before the script unit it governs; both workers before `shakedown-fixture`.
+Synchronisation points: `relay-probe` before `substrate-options`; `substrate-options` before `substrate-spike`; `retained-artefacts-design` before `code-stage-interface`; `s2-permissions-design` before `runtime-cli-drive`; each design unit before the unit it governs; both workers before `shakedown-fixture`.
 
-Shared files are split by section. `docs/design/lsf-workflow.md`, `skills/lsf-drive/SKILL.md`, `skills/large-scale-feature/SKILL.md` and `skills/breakdown/SKILL.md` are each owned per section, written in Scope as `file::section`. `docs/design/lsf-empirical-work.md` is owned per section by its three design units. A unit that writes a whole shared file (`drive-mechanics`, `empirical-unit-impl`) has an edge from every unit that writes a section of it.
+Shared files are split by section. `docs/design/lsf-workflow.md`, `skills/lsf-drive/SKILL.md`, `skills/large-scale-feature/SKILL.md` and `skills/breakdown/SKILL.md` are each owned per section, written in Scope as `file::section`. `docs/design/lsf-empirical-work.md` is owned per section by its three design units, and `docs/design/lsf-runtime.md` by `s2-permissions-design`, `runtime-core` and `runtime-cli-drive`. A unit that writes a whole shared file (`drive-mechanics`, `empirical-unit-impl`) has an edge from every unit that writes a section of it.
 
 ### N workers
 
@@ -746,23 +846,23 @@ Shared files are split by section. `docs/design/lsf-workflow.md`, `skills/lsf-dr
 | 1 | relay-probe, significant-precision-sample, plan-preflight-check, empirical-criteria-design, retained-artefacts-design |
 | 2 | substrate-options, empirical-unit-design, findings-consumer-design, empirical-criteria-impl |
 | 3 | substrate-spike, drive-decision-design, phase2-gate-discipline, programme-close-out |
-| 4 | mechanical-stage-integrity, long-running-design, drive-presentation-impl |
-| 5 onward | the script stream, one unit at a time, with empirical-unit-impl and drive-mechanics as their edges clear |
+| 4 | runtime-core, s2-permissions-design, drive-presentation-impl |
+| 5 onward | the orchestrator stream, one unit at a time, with long-running-design once runtime-core lands, and empirical-unit-impl and drive-mechanics as their edges clear |
 | last | shakedown-fixture, programme-close |
 
 Phases 1–3 each need requester verdicts on two or three design units at once. More than two workers gains little: the script stream is serial and the design units wait on one requester.
 
 ## Critical Path
 
-`relay-probe` → `substrate-options` → `substrate-spike` → `mechanical-stage-integrity` → `stage-failure-handling` → `empirical-script-support` → `findings-consumer-impl` → `relay-mitigation` → `long-running-impl` → `shakedown-fixture` → `programme-close`.
+`runtime-core` → `code-stage-interface` → `runtime-signals` → `declared-gates` → `runtime-cli-drive` → `script-retirement` → `empirical-script-support` → `findings-consumer-impl` → `long-running-impl` → `shakedown-fixture` → `programme-close`.
 
-11 units: four large, four medium, three small. The estimate holds only if the substrate decision keeps the Workflow script. A host-side driver replaces the middle six units with a programme of its own, planned by the re-plan after `substrate-spike`.
+11 units remaining: three large, six medium, two small. The S2 build's size is a conjectured estimate (spike results, Build estimate).
 
 ## Meta-Tasks
 
 - **Executors.** Design units run interactively: `phronithm:investigate` for `significant-precision-sample` and `relay-probe`, and a drafted decision record with a `phronithm:critique` gate for the rest. Implementation units run under `phronithm:feature` in work-unit mode.
 - **Re-plan after every design unit.** Each rewrites the provisional entries it governs.
-- **Build.** Every script unit runs `node workflows/lsf/build.js` before its tests; a test fails when the built script is stale.
+- **Build.** Until `script-retirement`, every unit writing `implement.js` runs `node workflows/lsf/build.js` before its tests; a test fails when the built script is stale.
 
 ## Standing Obligations
 
@@ -779,37 +879,62 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
   | `findings-consumer-design` | P-B1, P-B3 |
   | `programme-close-out` | P-B2, P-B4 |
   | `drive-decision-design` | P-E2, P-E3, P-E4, P-E5 |
-  | `mechanical-stage-integrity` | P-C1, P-C2, P-C3, P-C4, P-C8 (fabricated SHAs) |
-  | `stage-failure-handling` | P-C5, P-C6, P-C7, P-C8 (denied commits) |
-  | `relay-mitigation` | P-F1 |
+  | `s2-permissions-design` | P-C5, P-C6 |
+  | `code-stage-interface` | P-C1, P-C2, P-C3, P-C4, P-C8 (fabricated SHAs), P-C9 |
+  | `runtime-signals` | P-C7, P-C8 (denied commits) |
+  | `runtime-cli-drive` | P-F1 |
   | `long-running-design` | P-A7, P-A8, P-A13, P-D6 |
   | `phase2-gate-discipline` | P-A12, P-G1, P-G2, P-G4 |
-  | `drive-mechanics` | P-C9, P-E1, P-E6, P-E7, P-E8, P-E9, P-I1 |
+  | `drive-mechanics` | P-E1, P-E6, P-E7, P-E8, P-E9, P-I1 |
   | `shakedown-fixture` | P-G3 |
 
   A design unit's row passes to its implementing unit when the design decides to act. A provisional unit the substrate decision retires passes its rows to the units that replace it.
 - **Generality stated.** Every design unit's record states, for the option it chooses, the evidence that the problem holds outside archipeligo, or that it does not and the change is scoped to programmes like it. For a row qualified `not testable`, the record says no second project could show it and states whether the change is adopted generally or scoped. A record citing P-A1, P-A2, P-E4 or P-E9 as generality evidence carries the row's analogue or partial qualifier. Carried by `substrate-options`, `empirical-criteria-design`, `empirical-unit-design`, `retained-artefacts-design`, `findings-consumer-design`, `drive-decision-design`, `long-running-design`, `phase2-gate-discipline`.
-- **Design of record.** A unit that changes behaviour the design describes amends its own section of `docs/design/lsf-workflow.md` in the same commit. Carried by every unit with a `lsf-workflow.md::` Scope entry.
+- **Design of record.** A unit that changes behaviour the design describes amends its own section of `docs/design/lsf-workflow.md` in the same commit. Carried by every unit with a `lsf-workflow.md::` or `lsf-runtime.md::` Scope entry.
 
 ## Risk Registry
 
-- R1 substrate-spike — S2, the host runtime, is selected and its build is unsized; it rewrites `mechanical-stage-integrity`, `stage-failure-handling`, `relay-mitigation`, `long-running-impl` and `drive-mechanics`, and if the spike sizes it beyond this plan the re-plan after the spike opens a successor programme.
-- R2 cross-cutting — six design units wait on one requester; the schedule is bounded by verdicts, not by work.
+- R1 runtime-core — the S2 build estimate (1,500–2,500 lines, six to eight units) is conjectured from the spike; an overrun lengthens the critical path, which it leads.
+- R2 cross-cutting — seven design units wait on one requester; the schedule is bounded by verdicts, not by work.
 - R3 cross-cutting — generality rests on cartomancer-v2 alone, a stream of code units; 11 rows are `not testable` there (P-A3, P-A4, P-A5, P-A7, P-A8, P-A12, P-A13, P-C3, P-G1, P-G3, P-G4), and a problem classed `archipeligo only so far` may be common to any measurement-heavy programme.
 - R4 significant-precision-sample — a hand classification by the model whose reviews produced the findings; the rubric is fixed first, and the requester may want a second rater.
 - R5 phase2-gate-discipline — the opus-tier adversary re-run that `critique-gate.md` waits on belongs to the critique-upgrade backlog and is left out of this programme by requester decision (2026-10-04); the unit sets an interim policy without it.
 - R6 shakedown-fixture — a fixture run shows the workflow completes, not that judgement stages catch defects; the signal-layer measurement in the design's Testing section stays uncommitted.
 - R7 cross-cutting — improvements that add rules to `lsf-drive` (18 KB) and `breakdown` (32 KB) raise every agent's reading cost; `drive-mechanics` reports the size change, the others do not.
-- R8 relay-mitigation — the relay is undocumented harness behaviour that began at 2.1.274; a mitigation resting on 2.1.289's turn rule may not hold at the next version.
+- R8 runtime-cli-drive — until `script-retirement`, Workflow launches still relay under 2.1.289's turn rule, which is undocumented harness behaviour and may change.
 - R9 long-running-design — high risk but placed late because it needs the confirmed substrate and the empirical unit shape; if either slips, the largest single cost in the postmortem (39.7 agent-hours of campaign stages) stays unaddressed longest.
 - R10 cross-cutting — the gate can still misclassify a design unit's settled decision as a decision move, recurring run #8's false stop; per-unit diffs, unit type and the completion report narrow it, and `shakedown-fixture`'s first run is the check.
-- R11 cross-cutting — a stage that reports `green` for a gate it did not run passes the `gate-not-run` check; under S2 it closes only with gate commands declared in the plan or project configuration, a plan-schema change no unit yet owns.
-- R12 cross-cutting — the long-gate recipe is untested in live workflow agents; if the harness kills the detached process, every gate over 600 s stops with `gate-not-run` and no route until `long-running-impl`.
+- R11 declared-gates — a stage that reports `green` for a gate it did not run passes the `gate-not-run` check until this unit's runtime runs declared gates itself.
+- R12 cross-cutting — the long-gate recipe is untested in live agents; if the harness kills the detached process, a gate over 600 s stops with `gate-not-run` until `declared-gates`, whose runtime runs declared gates with no tool limit.
 - R13 cross-cutting — until `empirical-script-support`, a non-design unit in a project with no gate of its own stops with `gate-not-run` on every launch.
+- R14 s2-permissions-design — until the decision, runtime stages run under the spike's deny list, which a shell command can bypass (spike check 9).
 
 ## Plan Maintenance
 
 On each unit completion, run the re-plan step before starting its dependants.
+
+### 2026-10-05 — substrate-spike complete
+Report: docs/investigations/substrate-spike-results.md @ 23b38d4.
+unit-removed mechanical-stage-integrity — S2 moves its stages to code; done-condition faults, SHA checks and rows to code-stage-interface
+unit-removed stage-failure-handling — permission faults, transient null and the no-retry rule to runtime-signals; P-C5, P-C6 to s2-permissions-design
+unit-removed relay-mitigation — headless calls carry no relay (spike check 3); P-F1 and R8 to runtime-cli-drive
+unit-added s2-permissions-design, runtime-core, code-stage-interface, runtime-signals, declared-gates, runtime-cli-drive, script-retirement — the S2 build (requester decision: inside this plan)
+scope-reassignment code-stage-interface — P-C9 from drive-mechanics; cleanup is code, and keeping ignored files waits on retained-artefacts-design
+new-edge retained-artefacts-design → code-stage-interface — which ignored files cleanup may delete
+new-edge script-retirement → empirical-script-support — the stream continues on the runtime
+new-edge findings-consumer-impl → long-running-impl — replaces the edge through relay-mitigation
+new-edge runtime-core → long-running-design — the runtime's supervision
+new-edge declared-gates → empirical-unit-impl — serialises `skills/breakdown/SKILL.md` and `docs/plan-graph.md`
+new-edge runtime-cli-drive → drive-mechanics — replaces relay-mitigation; serialises `skills/lsf-drive/SKILL.md`
+done-condition empirical-script-support, findings-consumer-impl, long-running-impl, programme-close — the built script is retired; scope drops it
+done-condition long-running-design — designs against the host runtime
+done-condition drive-mechanics — P-C9 removed; duties are those the runtime CLI leaves
+gate-removed shakedown-fixture — `claude-code-workflow-tool`
+gate-added shakedown-fixture — `claude-code-headless` (environment, 2.1.289)
+execution-order runtime-core, code-stage-interface, runtime-signals, declared-gates, runtime-cli-drive, script-retirement — the S2 build leads the orchestrator stream
+check R1 — closed: the build is not clearly too large for this plan; restated as the estimate's risk
+check R11, R12 — re-homed to declared-gates
+check drive-decision-design — S2 moves driving mechanics to the CLI, not presentation; no change
 
 ### 2026-10-05 — substrate-options complete
 Report: docs/design/lsf-substrate.md @ 8d22932.
