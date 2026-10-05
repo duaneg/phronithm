@@ -161,8 +161,9 @@ carries its own unit plan template and stages instead:
    architecture section they affect, distress counts, the done-condition
    verdict. The prompt tells the stage how to wait out a gate longer than
    the Bash tool's limit without ending its turn: run it detached with its
-   output and exit status in per-gate files under the git directory, and
-   poll in calls shorter than the limit. A gate reported `not-run`, or no gate reported, is a STOP
+   output, exit status and PID in per-gate files under the git directory,
+   and poll in calls shorter than the limit until the gate ends or dies (no
+   status file: `not-run`). A test runs the recipe under bash. A gate reported `not-run`, or no gate reported, is a STOP
    (`gate-not-run`) before review: the reviewers would meet the same tool
    timeout, and a relaunch meets the same gate, so the requester changes the
    environment or completes the unit by hand. A design unit is exempt; its

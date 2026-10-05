@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { run, renderCompletionReport, GATE_MAX_ROUNDS } from '../implement.js';
+import { execSync } from 'node:child_process';
+import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { run, renderCompletionReport, GATE_MAX_ROUNDS, LONG_GATES } from '../implement.js';
 
 // ---------------------------------------------------------------- stub runtime
 
@@ -514,13 +518,45 @@ test('the implement and code-fix prompts say how to wait out a long gate; the pl
   for (const label of ['implement:A', 'fix-code:r1:A']) {
     const p = prompt(label);
     assert.match(p, /ending your turn while it runs returns this stage with the gate unrun/, label);
-    assert.match(p, /D=\$\(git rev-parse --absolute-git-dir\); rm -f "\$D"\/lsf-gate-<n>\.\*; \(<command> > "\$D\/lsf-gate-<n>\.log" 2>&1; echo \$\? > "\$D\/lsf-gate-<n>\.rc"\) &/, label);
-    // The poll's outer double quotes let the shell expand $D before sh -c runs.
-    assert.match(p, /timeout 540 sh -c "until \[ -f '\$D\/lsf-gate-<n>\.rc' \]; do sleep 15; done"/, label);
+    assert.ok(p.includes(LONG_GATES), label);
     assert.match(p, /Bash tool's timeout set to 600000 ms/, label);
     assert.match(p, /Report a gate `not-run`, with why in its summary, only when it could not be completed/, label);
   }
   assert.doesNotMatch(prompt('fix-plan:r1:A'), /lsf-gate|not-run/);
+});
+
+// The long-gate recipe, run as an agent would: the detach call returns at
+// once, the poll returns when the gate ends, a compound command is captured
+// whole, and a gate that dies ends the poll with no status file.
+test('the long-gate recipe detaches, captures a compound command\'s output and status, and ends the poll when the gate dies', () => {
+  const [detach, poll] = LONG_GATES.match(/`D=[^`]*`/g).map((c) => c.slice(1, -1));
+  const dir = mkdtempSync(join(tmpdir(), 'lsf-gate-'));
+  const sh = (cmd) => execSync(cmd, { cwd: dir, shell: '/bin/bash', encoding: 'utf8' });
+  try {
+    sh('git init -q');
+    const D = sh('git rev-parse --absolute-git-dir').trim();
+    const gate = (n, command) => detach.replaceAll('<n>', n).replace('<command>', command);
+    const waitDone = (n) => { const t = Date.now(); while (!existsSync(join(D, `lsf-gate-${n}.rc`)) && Date.now() - t < 5000) sh('sleep 0.1'); };
+
+    const t0 = Date.now();
+    sh(gate(1, 'sleep 1 && echo a && echo b >&2 && false'));
+    assert.ok(Date.now() - t0 < 900, 'the detach call does not wait for the gate');
+    waitDone(1);
+    sh(poll.replaceAll('<n>', 1));
+    assert.equal(readFileSync(join(D, 'lsf-gate-1.rc'), 'utf8').trim(), '1', 'the status of the compound command');
+    assert.equal(readFileSync(join(D, 'lsf-gate-1.log'), 'utf8'), 'a\nb\n', 'both parts\' output, stdout and stderr');
+    assert.equal(sh('git status --porcelain'), '', 'nothing in the work tree');
+
+    sh(gate(2, 'sleep 30'));
+    const pid = readFileSync(join(D, 'lsf-gate-2.pid'), 'utf8').trim();
+    sh(`pkill -KILL -P ${pid}; kill -KILL ${pid}`);
+    const t1 = Date.now();
+    sh(poll.replaceAll('<n>', 2));
+    assert.ok(Date.now() - t1 < 20000, 'the poll ends when the gate dies');
+    assert.ok(!existsSync(join(D, 'lsf-gate-2.rc')), 'a dead gate leaves no status file: not-run');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('a design unit\'s fix keeps the plain fix schema and is not asked for gates', async () => {

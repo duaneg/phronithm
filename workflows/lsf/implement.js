@@ -391,7 +391,7 @@ ${RETURN_FIELDS}`;
 // A gate past the Bash tool's limit moves to the background, and an agent
 // that ends its turn waiting returns with the gate unrun (postmortem §D).
 // The status file sits under the git directory, outside the work tree.
-const LONG_GATES = `A gate can outlast the Bash tool's time limit, which moves the command to the background; ending your turn while it runs returns this stage with the gate unrun. Run each gate that may take more than a few minutes detached, one at a time, with its own output and status files under the git directory: \`D=$(git rev-parse --absolute-git-dir); rm -f "$D"/lsf-gate-<n>.*; (<command> > "$D/lsf-gate-<n>.log" 2>&1; echo $? > "$D/lsf-gate-<n>.rc") &\`, where \`<n>\` is the gate's position. Then wait for it with the Bash tool's timeout set to 600000 ms: \`D=$(git rev-parse --absolute-git-dir); timeout 540 sh -c "until [ -f '$D/lsf-gate-<n>.rc' ]; do sleep 15; done"\`, repeating the call until the status file exists. Report from that gate's files. Report a gate \`not-run\`, with why in its summary, only when it could not be completed; the run stops on a gate not run, and the requester decides.`;
+const LONG_GATES = `A gate can outlast the Bash tool's time limit, which moves the command to the background; ending your turn while it runs returns this stage with the gate unrun. Run each gate detached unless you know it finishes well inside a minute, one at a time, numbering the gates 1, 2, … in the order you report them, with \`<command>\` the gate's full command line: \`D=$(git rev-parse --absolute-git-dir); rm -f "$D"/lsf-gate-<n>.*; ( { <command>; } > "$D/lsf-gate-<n>.log" 2>&1; echo $? > "$D/lsf-gate-<n>.rc" ) </dev/null >/dev/null 2>&1 & echo $! > "$D/lsf-gate-<n>.pid"\`. Then wait for it with the Bash tool's timeout set to 600000 ms: \`D=$(git rev-parse --absolute-git-dir); P=$(cat "$D/lsf-gate-<n>.pid"); timeout 540 sh -c "until [ -f '$D/lsf-gate-<n>.rc' ] || ! kill -0 $P 2>/dev/null; do sleep 15; done"\`. Exit status 124 means the gate is still running: make the same call again. Otherwise read \`lsf-gate-<n>.rc\`: 0 is \`green\`, any other value \`red\`, with the summary from the end of \`lsf-gate-<n>.log\`; no \`.rc\` file means the gate died, and it is \`not-run\`. Report a gate \`not-run\`, with why in its summary, only when it could not be completed; the run stops on a gate not run, and the requester decides.`;
 
 function fixPrompt(ctx, plan, unit, branch, subject, criticals, round, gates = []) {
   return `${header(ctx, plan)}
@@ -1285,4 +1285,4 @@ async function run(runtime) {
   return outcome('complete');
 }
 
-export { run, critiqueLoop, runUnit, renderCompletionReport, LENSES_BY_TYPE, GATE_MAX_ROUNDS };
+export { run, critiqueLoop, runUnit, renderCompletionReport, LENSES_BY_TYPE, GATE_MAX_ROUNDS, LONG_GATES };
