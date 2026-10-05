@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Stub `claude -p ... --output-format stream-json`. STUB_MODE: ok | hang | nullout
+set -u
+mode="${STUB_MODE:-ok}"
+echo '{"type":"system","subtype":"init","session_id":"stub-1","tools":["Read","Bash"]}'
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}'
+case "$mode" in
+  ok)      echo '{"type":"result","subtype":"success","is_error":false,"structured_output":{"verdict":"pass","n":3},"total_cost_usd":0.012}' ;;
+  nullout) echo '{"type":"result","subtype":"success","is_error":false,"structured_output":null}' ;;
+  hang)    sleep 300 & echo "$!" > "${STUB_PIDFILE:-/dev/null}"; wait ;;
+esac
