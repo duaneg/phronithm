@@ -1,0 +1,21 @@
+cabal-version: 3.0
+name:          probe
+version:       0.1.0
+
+common shared
+  default-language: GHC2021
+  ghc-options:      -Wall
+  build-depends:    base, aeson, bytestring, process, async, unix, containers
+
+library
+  import:          shared
+  hs-source-dirs:  src
+  exposed-modules: Call
+
+test-suite spec
+  import:         shared
+  type:           exitcode-stdio-1.0
+  hs-source-dirs: test
+  main-is:        Spec.hs
+  ghc-options:    -threaded
+  build-depends:  probe, tasty, tasty-hunit, directory, filepath, temporary
