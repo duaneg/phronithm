@@ -171,4 +171,4 @@ The Workflow script stays the supported Phase 3 path until the spike confirms S2
 
 ## Requester verdict
 
-2026-10-05: S2 selected for `substrate-spike`. The critique gate passed with no Critical findings (`phronithm:critic`, critique-design, sonnet, round 1), and its Significant findings were applied before the verdict.
+2026-10-05: S2 selected for `substrate-spike`. 2026-10-06: the runtime and the orchestrator are not to be JavaScript or TypeScript; the orchestrator is ported, and `runtime-language-design` decides the language. "Carried over unchanged" above holds for the spike only. The critique gate passed with no Critical findings (`phronithm:critic`, critique-design, sonnet, round 1), and its Significant findings were applied before the verdict.

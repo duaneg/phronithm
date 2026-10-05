@@ -194,6 +194,8 @@ The estimate is 1,500–2,500 lines including tests, as six to eight units:
 - retiring the generated `workflows/lsf-implement.js`, `build.js` and their test;
 - Node at run time for plugin users, a new dependency.
 
+**Language.** The estimate assumes the JavaScript orchestrator runs unchanged. The requester excluded JavaScript and TypeScript (2026-10-06), so the orchestrator is ported as well; the plan's R1 records the added size.
+
 **R1.** The units S2 replaces carry effort labels, not sizes: `mechanical-stage-integrity` (large), `stage-failure-handling` (medium), `relay-mitigation` (small), and part of `drive-mechanics` (medium). On that label comparison, R1's "too large for this plan" is not clearly borne out.
 
 ## Open obligations
