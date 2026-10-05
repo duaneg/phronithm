@@ -401,12 +401,38 @@ test('an invalidation missing a field, and every note, is recorded and handed to
   assert.doesNotMatch(w1, /Other records this wave/);
 });
 
-test('reviewers with no gate run reported are told to run the gates once themselves', async () => {
-  const { rt, calls } = runtime(twoWaves(), { implement: (p, o, u) => ret(implemented(u, { gates: [] })) });
-  await run(rt);
-  const p = calls.find((c) => c.label === 'critique-code:r1:A').prompt;
-  assert.match(p, /HEAD:\n- none reported\n/);
-  assert.match(p, /If no gate is listed above, run the project's gates once and treat the result as the implement stage's\./);
+test('an implement return with a gate not run stops before review, naming the gate, and keeps its records', async () => {
+  const { rt, labels, calls } = runtime(twoWaves(), {
+    implement: (p, o, u) => ret(implemented(u, {
+      gates: [{ command: 'pytest -q', status: 'green', summary: '412 passed' }, { command: 'xtask ci', status: 'not-run', summary: 'outlived the tool timeout' }],
+      discoveries: [{ statement: 'note from the stopped unit', affects: 'B' }],
+    })),
+  });
+  const out = await run(rt);
+  assert.equal(out.status, 'stopped');
+  const stops = out.escalation.signals;
+  assert.deepEqual(stops.map((s) => [s.kind, s.stage, s.source]), [['gate-not-run', 'implement', 'structural']]);
+  assert.match(stops[0].statement, /gate\(s\) not run: xtask ci$/);
+  assert.equal(stops[0].referent, 'xtask ci');
+  assert.ok(!labels().some((x) => x.startsWith('critique-code') || x.startsWith('lens-review')));
+  assert.match(calls.find((c) => c.label === 'ledger:w1').prompt, /note from the stopped unit/, 'the stopped unit keeps its discovery record');
+});
+
+test('an implement return with no gate reported stops before review as a gate not run', async () => {
+  const { rt, labels } = runtime(twoWaves(), { implement: (p, o, u) => ret(implemented(u, { gates: [] })) });
+  const out = await run(rt);
+  assert.equal(out.status, 'stopped');
+  assert.deepEqual(out.escalation.signals.map((s) => s.kind), ['gate-not-run']);
+  assert.match(out.escalation.signals[0].statement, /\(no gate reported\)/);
+  assert.ok(!labels().some((x) => x.startsWith('critique-code') || x.startsWith('lens-review')));
+});
+
+test('a design unit with no gate reported is not stopped: its review reads no gates', async () => {
+  const plan = graph('plan0', [unit('D', { type: 'design' })]);
+  const { rt, labels } = runtime(plan, { implement: (p, o, u) => ret(implemented(u, { gates: [] })) });
+  const out = await run(rt);
+  assert.ok(!(out.escalation?.signals ?? []).some((s) => s.kind === 'gate-not-run'));
+  assert.ok(labels().includes('critique-design:r1:D'));
 });
 
 test('renderCompletionReport renders the implement and review returns section by section, with finding counts pointing at the ledger', () => {

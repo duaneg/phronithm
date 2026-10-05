@@ -157,7 +157,11 @@ carries its own unit plan template and stages instead:
    completion-report fields: deviations, files written outside the Scope
    line, deferrals with the receiving unit, discoveries with the unit or
    architecture section they affect, distress counts, the done-condition
-   verdict.
+   verdict. A gate reported `not-run`, or no gate reported, is a STOP
+   (`gate-not-run`) before review: the reviewers would meet the same tool
+   timeout, and a relaunch meets the same gate, so the requester changes the
+   environment or completes the unit by hand. A design unit is exempt; its
+   review reads no gates.
 4. **review** stage over the branch diff: one critique-code gate at the
    Critical-only bar and lens review per unit type, in parallel. No separate
    static-analysis stage: the project's own gates (linters, type checks) run

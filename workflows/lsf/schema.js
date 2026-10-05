@@ -16,6 +16,7 @@ const STOP_KINDS = Object.freeze([
   'merge-conflict-unresolvable',
   'merge-regression',
   'environment-gate-drift',
+  'gate-not-run', // implement or code-fix stage: a gate reported not-run, or no gate reported
   'no-ready-unit',
   'standing-obligation-undischarged',
   'agent-null',

@@ -36,6 +36,7 @@ const STOP_KINDS = Object.freeze([
   'merge-conflict-unresolvable',
   'merge-regression',
   'environment-gate-drift',
+  'gate-not-run', // implement or code-fix stage: a gate reported not-run, or no gate reported
   'no-ready-unit',
   'standing-obligation-undischarged',
   'agent-null',
@@ -1231,22 +1232,25 @@ const FINDINGS_SCHEMA = stageSchema(obj({
   summary: str,
 }));
 
-const FIX_SCHEMA = stageSchema(obj({
-  ...COMMIT_FIELDS,
-  applied: arr(obj({ finding: str, fix: str })),
-  notApplied: arr(obj({ finding: str, reason: str })),
-}));
-
 const GATE_RUN_SCHEMA = obj({
   command: str,
   status: { type: 'string', enum: ['green', 'red', 'not-run'] },
   summary: { ...str, description: 'One line: counts, or what failed' },
 });
+const GATES_FIELD = { ...arr(GATE_RUN_SCHEMA), description: 'The project\'s gates — the test suite and whatever else its own instructions name (linters, type checks) — as last run at HEAD' };
+
+const FIX_FIELDS = {
+  applied: arr(obj({ finding: str, fix: str })),
+  notApplied: arr(obj({ finding: str, reason: str })),
+};
+const FIX_SCHEMA = stageSchema(obj({ ...COMMIT_FIELDS, ...FIX_FIELDS }));
+// A code fix re-runs the gates; the next review round reads them.
+const FIX_CODE_SCHEMA = stageSchema(obj({ ...COMMIT_FIELDS, ...FIX_FIELDS, gates: GATES_FIELD }));
 
 const IMPLEMENT_SCHEMA = stageSchema(obj({
   ...COMMIT_FIELDS,
   gateProbe: arr(obj({ name: str, pin: str, observed: str, drifted: bool })),
-  gates: { ...arr(GATE_RUN_SCHEMA), description: 'The project\'s gates — the test suite and whatever else its own instructions name (linters, type checks) — as last run at HEAD' },
+  gates: GATES_FIELD,
   distress: DISTRESS_SCHEMA,
   deviations: { ...strings, description: 'Departures from the unit entry\'s scope or publishes, one statement each' },
   writesOutsideScope: { ...strings, description: 'Files changed that the unit entry\'s Scope line does not name' },
@@ -1463,11 +1467,19 @@ ${RETURN_FIELDS}`;
 // The implement stage ran the gates once at HEAD; the reviewers read the
 // result instead of re-running the suite, which in a compiled project cost
 // more of their wall-clock than the review itself.
+// The gates a stage did not run: each `not-run` command, or a placeholder when
+// it reported none. Empty when every gate has a result. A gate not run never
+// reaches review: the reviewers would meet the same tool timeout.
+const unrunGates = (gates) => (gates?.length ? gates.filter((g) => g.status === 'not-run').map((g) => g.command) : ['(no gate reported)']);
+const gateNotRunSignal = (ctx, missing) => signal({
+  ...ctx, kind: 'gate-not-run', source: 'structural',
+  statement: `gate(s) not run: ${missing.join(', ')}`, referent: missing.join(','),
+});
 const renderGates = (gates) => (gates?.length ? gates.map((g) => `- \`${g.command}\` — ${g.status}${g.summary ? `: ${g.summary}` : ''}`).join('\n') : '- none reported');
 function gateResults(gates) {
   return `The implement stage ran the project's gates at this branch's HEAD:
 ${renderGates(gates)}
-Take that as the test and lint result. Do not run the whole suite, the project's CI job, or a lint pass; run a single targeted test only to check a specific claim of a finding, and name the test in the finding.${gates?.length ? '' : ' If no gate is listed above, run the project\'s gates once and treat the result as the implement stage\'s.'}`;
+Take that as the test and lint result. Do not run the whole suite, the project's CI job, or a lint pass; run a single targeted test only to check a specific claim of a finding, and name the test in the finding.`;
 }
 
 function codeCritiquePrompt(ctx, plan, unit, branch, round, gates) {
@@ -1815,6 +1827,12 @@ async function runUnit(rt, ctx, plan, unit, wave) {
   result.distress = impl.result.distress;
   signals.push(...signalsFromImplement(impl.result, stageCtx('implement')));
   signals.push(...distressSignals(impl.result.distress, { unit: unit.id, wave }, ctx.config));
+  // A design unit's review reads no gates.
+  const unrun = unit.type === 'design' ? [] : unrunGates(impl.result.gates);
+  if (unrun.length) {
+    signals.push(gateNotRunSignal(stageCtx('implement'), unrun));
+    return abort('implement');
+  }
   if (!impl.result.doneCondition.evaluable) {
     signals.push(signal({
       ...stageCtx('implement'), kind: 'done-condition-unevaluable', source: 'structural',
