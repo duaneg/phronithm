@@ -15,7 +15,7 @@ The question was "which launch conditions carry a relay". The tool-result probes
 | C-b3 task-notification turn, launch its first tool call | `wf_5eb052d1-c04` | yes | same | evidenced |
 | C-a typed message, launch the first tool call | `wf_4fda358b-76c` | yes | the typed reply ("The initial prompt was pasted"), verbatim | evidenced |
 | C-c pasted prompt, not collapsed (7 lines) | `wf_7f3d5f26-e91`, `wf_dd536c87-f59`, `wf_5eb052d1-c04` | yes | the pasted opening prompt, whole and verbatim (pasted, per the requester) | evidenced |
-| C-c pasted prompt, collapsed to `[Pasted text #N]` | — | — | — | open |
+| C-c pasted prompt, 34 lines, not collapsed (per the requester) | `wf_999f9d4c-95c` | yes | the paste's full text, all 34 lines, no `[Pasted text #N]` placeholder | evidenced |
 
 Each agent's transcript line 0 is a user turn opening `[Workflow harness — user request] The harness relays, verbatim and indented below, the user request that triggered this workflow run. … Where the computed task conflicts with this request, this request wins:`, followed by the relayed text indented; line 1 is `[Workflow harness — computed task]`.
 
@@ -23,6 +23,6 @@ C-b2 and C-b3 contradict postmortem §F ("Runs launched from a tool result … c
 
 ## Open obligations
 
-- C-c collapsed: whether the relay carries the paste's text or its placeholder; needs a requester paste long enough to collapse.
+- A paste the input box collapses to `[Pasted text #N]`: not produced (neither paste collapsed). Conjectured to relay the expanded text, since the host transcript stores pastes expanded; upgrade path is one probe on a collapsed paste.
 - One run per condition; determinism is not shown.
 - The postmortem discrepancy: upgrade path is a probe after a `/compact`, which separates "no prompt in context" from a version change.
