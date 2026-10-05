@@ -463,9 +463,28 @@ test('a review round after a code fix reads the fix stage\'s gate runs, not the 
     assert.doesNotMatch(p, /412 passed/, label);
   }
   const fix = calls.find((c) => c.label === 'fix-code:r1:A');
-  assert.match(fix.prompt, /every gate the implement stage ran[^]*report each under `gates`/);
+  assert.match(fix.prompt, /every gate below, as last run on this branch, not only those the fix touches:\n- `pytest -q`\n- `ruff check \.`\nand report each under `gates`/, 'the fix is given the gate set to re-run');
   assert.ok(fix.opts.schema.properties.result.required.includes('gates'), 'a code fix must return its gate runs');
   assert.match(calls.find((c) => c.label === 'completion-report:A').prompt, /Gates at HEAD:\n\n- `pytest -q` — green: 99 passed \(fix\)/);
+});
+
+test('a second fix round: review reads the round-2 fix\'s runs, the round-2 fix is given round 1\'s set, and a red fix gate still reaches review', async () => {
+  let round = 0;
+  const { rt, calls } = runtime(graph('plan0', [unit('A')]), {
+    'critique-code': () => (++round <= 2 ? ret({ findings: [{ severity: 'Critical', statement: 'bad', location: 'a.py' }], systemic: false, summary: 's' }) : NO_FINDINGS),
+    'fix-code': (p, o, u) => {
+      const n = o.label.split(':')[1];
+      return ret({ branch: `fixed-${n}-${u}`, sha: 'f', applied: [{ finding: 'bad', fix: 'ok' }], notApplied: [],
+        gates: n === 'r1' ? [{ command: 'pytest -q', status: 'red', summary: '1 failed (r1)' }, { command: 'mypy .', status: 'green', summary: '' }] : [{ command: 'pytest -q', status: 'green', summary: '5 passed (r2)' }, { command: 'mypy .', status: 'green', summary: '' }] });
+    },
+  });
+  const out = await run(rt);
+  assert.equal(out.status, 'complete');
+  const prompt = (label) => calls.find((c) => c.label === label).prompt;
+  assert.match(prompt('critique-code:r2:A'), /The round-1 fix stage ran[^]*`pytest -q` — red: 1 failed \(r1\)/, 'a red fix gate is a result and reaches review');
+  assert.match(prompt('fix-code:r2:A'), /not only those the fix touches:\n- `pytest -q`\n- `mypy \.`\n/);
+  assert.match(prompt('critique-code:r3:A'), /The round-2 fix stage ran[^]*5 passed \(r2\)/);
+  assert.doesNotMatch(prompt('critique-code:r3:A'), /\(r1\)|412 passed/);
 });
 
 test('a code fix whose gate did not run, or that reports none, stops before the next review round', async () => {

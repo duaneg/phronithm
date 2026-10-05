@@ -16,7 +16,9 @@ Status: `lsf-implement` exists (`workflows/lsf/implement.js`, built into
 run on cartomancer-v2 (nine runs to 2026-09-19, a 41-unit stream closed).
 The rules added since — the archive at merge, the ledger row shapes, the
 re-plan skip on a wave with nothing to absorb, the script-rendered completion
-report, reviewers taking the implement stage's gate runs — have not run. The
+report, reviewers taking the gate runs at HEAD (the implement stage's or
+the last code fix's), the `gate-not-run` stop and the long-gate recipe —
+have not run. The
 plugin loader registers it as `phronithm:lsf-implement` (confirmed 2026-09-10
 against Claude Code 2.1.267: the loader reads `workflows/` non-recursively,
 so `workflows/lsf/` is ignored); the bare name below denotes the script.

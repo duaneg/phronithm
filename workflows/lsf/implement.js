@@ -393,7 +393,7 @@ ${RETURN_FIELDS}`;
 // The status file sits under the git directory, outside the work tree.
 const LONG_GATES = `A gate can outlast the Bash tool's time limit, which moves the command to the background; ending your turn while it runs returns this stage with the gate unrun. Run each gate that may take more than a few minutes detached, one at a time, with its own output and status files under the git directory: \`D=$(git rev-parse --absolute-git-dir); rm -f "$D"/lsf-gate-<n>.*; (<command> > "$D/lsf-gate-<n>.log" 2>&1; echo $? > "$D/lsf-gate-<n>.rc") &\`, where \`<n>\` is the gate's position. Then wait for it with the Bash tool's timeout set to 600000 ms: \`D=$(git rev-parse --absolute-git-dir); timeout 540 sh -c "until [ -f '$D/lsf-gate-<n>.rc' ]; do sleep 15; done"\`, repeating the call until the status file exists. Report from that gate's files. Report a gate \`not-run\`, with why in its summary, only when it could not be completed; the run stops on a gate not run, and the requester decides.`;
 
-function fixPrompt(ctx, plan, unit, branch, subject, criticals, round) {
+function fixPrompt(ctx, plan, unit, branch, subject, criticals, round, gates = []) {
   return `${header(ctx, plan)}
 ${worktree(branch)}
 
@@ -405,7 +405,9 @@ ${JSON.stringify(criticals, null, 2)}
 
 Fix each finding that is repairable within the ${subject}, then commit. A finding you decline to fix — because the repair would change the unit entry, the architecture document, or the request record, or because you cannot repair it — goes under \`notApplied\` with the reason. The run stops on a declined finding and the requester decides, so decline only when the repair is genuinely outside the ${subject}. ${subject === 'plan' ? `The plan is docs/plans/${unit.id}-plan.md on this branch. Repair the findings; do not shorten the plan to length.` : unit.type === 'design'
     ? 'Run the tests the fix touches as you go, then the project\'s gates once at the end; a fix that breaks a test is not applied.'
-    : `Run the tests the fix touches as you go; a fix that breaks a test is not applied. Then run the project's gates once at your final HEAD — every gate the implement stage ran, not only those the fix touches — and report each under \`gates\` with its command, status, and a one-line summary; the next review round reads these, not the implement stage's. ${LONG_GATES}`}
+    : `Run the tests the fix touches as you go; a fix that breaks a test is not applied. Then run the project's gates once at your final HEAD — every gate below, as last run on this branch, not only those the fix touches:
+${gates.map((g) => `- \`${g.command}\``).join('\n')}
+and report each under \`gates\` with its command, status, and a one-line summary; the next review round reads these, not the implement stage's. ${LONG_GATES}`}
 ${RETURN_FIELDS}`;
 }
 
@@ -826,7 +828,7 @@ async function runUnit(rt, ctx, plan, unit, wave) {
         rt.agent(prompt, opts(`${stage}:r${n}`, { isolation: 'worktree', schema: FINDINGS_SCHEMA, ...tier(ctx, 'critique') }))));
       return reviewers.map(([stage], i) => ({ stage, ret: rets[i] ?? null }));
     },
-    fix: (n, criticals) => rt.agent(fixPrompt(ctx, plan, unit, branch, 'code', criticals, n),
+    fix: (n, criticals) => rt.agent(fixPrompt(ctx, plan, unit, branch, 'code', criticals, n, gateRun.gates),
       opts(`fix-code:r${n}`, { isolation: 'worktree', schema: design ? FIX_SCHEMA : FIX_CODE_SCHEMA })),
     onFix: (fixed, n) => {
       branch = fixed.result.branch;
