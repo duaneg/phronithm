@@ -2,7 +2,7 @@
 
 ## Summary
 
-A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 28 units, two complete; critical path 11 units through the substrate decision and the serialised script stream. Base commit `b3dac6a`.
+A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 28 units, three complete; critical path 11 units through the substrate decision and the serialised script stream. Base commit `b3dac6a`.
 
 The postmortem's problems are taken as accurate for archipeligo. The proposals in [lsf-improvements](../design/lsf-improvements.md) are candidate options, not designs: every decision unit states its problem without a solution, checks whether the problem holds outside archipeligo, and weighs the proposal against alternatives that include doing nothing.
 
@@ -37,9 +37,9 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Effort**: large
 - **Scope**: `docs/design/lsf-substrate.md`
 - **Publishes**: the option selected for the spike; the interim policy for the Workflow script while any replacement is built
-- **Depends on**: problem-register (knowledge, problem ids and generality classes); relay-probe (knowledge, relay behaviour)
+- **Depends on**: problem-register (knowledge, problem ids and generality classes); relay-probe (knowledge, relay behaviour); gate-results-integrity (knowledge, P-D3's residual: a gate reported green that did not run)
 - **External gates**: `requester-verdict` (organisational)
-- **Done condition**: `docs/design/lsf-substrate.md` is committed with at least three options including the status quo. Each is assessed against every register row whose Topic is `mechanical-stage`, `long-running`, `relay` or `driving`, with that row's Appendix B instances: what it removes, what it costs, and what it gives up (journal resume, the `/workflows` view, the per-agent floor). One option is selected for the spike and the requester's verdict is recorded.
+- **Done condition**: `docs/design/lsf-substrate.md` is committed with at least three options including the status quo. Each is assessed against every register row whose Topic is `mechanical-stage`, `long-running`, `relay` or `driving`, with that row's Appendix B instances and, for P-D3, the residual that a stage can report `green` for a gate it did not run: what it removes, what it costs, and what it gives up (journal resume, the `/workflows` view, the per-agent floor). One option is selected for the spike and the requester's verdict is recorded.
 - **Description**: Postmortem §C, and the parts of §A, §D, §E and §F that follow from the script having no filesystem, shell or clock. Options to cover at minimum: harden the script's mechanical stages; have mechanical agents run committed deterministic tools instead of transcribing; a host-side driver (the improvements note's suggestion, exemplar `~/src/maths-proofs/tools/campaign/`); and a split in which only some stages move.
 
 ### substrate-spike
@@ -57,18 +57,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 
 ### arch-pin-refresh — complete at `382b5e2`; entry at `0cacac9`; report `docs/plans/arch-pin-refresh-completion.md`
 
-### gate-results-integrity
-- **Type**: bug-fix
-- **Risk**: low
-- **Clarity**: exploratory — one open decision: what a stage does when a project gate outlives the tool timeout
-- **Iteration**: write-once
-- **Effort**: medium
-- **Scope**: `workflows/lsf/implement.js`, `workflows/lsf/schema.js`, `workflows/lsf/test/implement.test.js`, `workflows/lsf-implement.js`, `docs/design/lsf-workflow.md::lifecycle-mapping`
-- **Publishes**: the fix stage's return shape
-- **Depends on**: arch-pin-refresh (logical, serialises the script files)
-- **External gates**: `node` (environment, v26.9.0)
-- **Done condition**: Tests show (a) a review round after a fix reads the gate results of the fix, not of the implement stage, and (b) an implement or fix return whose gate did not run does not reach review as though it had. The tests pass and the built script is not stale.
-- **Description**: Postmortem §D "Gate results after a fix" and "Gates that outlive the tool timeout". The second affected seven agents across code, docs and measurement units.
+### gate-results-integrity — complete at `efc7658`; entry at `c901531`; report `docs/plans/gate-results-integrity-completion.md`
 
 ### plan-preflight-check
 - **Type**: feature
@@ -117,9 +106,9 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Effort**: medium
 - **Scope**: `docs/design/lsf-empirical-work.md::units`
 - **Publishes**: the decided plan-level shape of empirical work
-- **Depends on**: problem-register (knowledge, problem ids and generality classes); empirical-criteria-design (design, the criteria form a unit's registration cites)
+- **Depends on**: problem-register (knowledge, problem ids and generality classes); empirical-criteria-design (design, the criteria form a unit's registration cites); gate-results-integrity (knowledge, an empty gates list stops with `gate-not-run`)
 - **External gates**: `archipeligo-records` (data, `~/src/archipeligo-evolved` @ `c220c62`); `requester-verdict` (organisational)
-- **Done condition**: The Units section is committed. It decides how a plan represents work whose outcome is a measurement, comparing at least a new unit type, added entry fields, and routing the work to `phronithm:investigate`. It covers fail branches (P-A4), the risk and clarity rating of sampled work (P-A5), companion tuning units (P-A6), sizing under outcome uncertainty (P-A9), and a measurement that supersedes cited evidence without moving a decision (P-A10). It is walked against `stage1-gate` at `arch@dc88280` and `stage2-horizon-confirm`. The requester's verdict is recorded.
+- **Done condition**: The Units section is committed. It decides how a plan represents work whose outcome is a measurement, comparing at least a new unit type, added entry fields, and routing the work to `phronithm:investigate`. It covers fail branches (P-A4), the risk and clarity rating of sampled work (P-A5), companion tuning units (P-A6), sizing under outcome uncertainty (P-A9), and a measurement that supersedes cited evidence without moving a decision (P-A10). It decides what a non-design unit declares as its gate in a project with no gate of its own, for measurement and docs units, since an empty gates list stops with `gate-not-run`. It is walked against `stage1-gate` at `arch@dc88280` and `stage2-horizon-confirm`. The requester's verdict is recorded.
 - **Description**: Postmortem §A's unit-level bullets: campaigns typed `feature` or `integration`, units sized by context and not by outcome uncertainty, measured values accumulating in the architecture document.
 
 ### retained-artefacts-design
@@ -184,7 +173,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: none
 - **Depends on**: substrate-spike (design, confirmed substrate); mechanical-stage-integrity (logical, serialises the script files)
 - **External gates**: `node` (environment, v26.9.0)
-- **Done condition**: Tests reproduce each permission fault in postmortem §C (a denied commit reported with HEAD as its SHA; a denied branch delete) and the transient null of run #2, and show none yields its recorded outcome: a wrong SHA accepted, rows filed under the wrong wave, or a run stopped by one transient null. Prompts for stages that can be denied say what to do on denial. The tests pass and the built script is not stale.
+- **Done condition**: Tests reproduce each permission fault in postmortem §C (a denied commit reported with HEAD as its SHA; a denied branch delete) and the transient null of run #2, and show none yields its recorded outcome: a wrong SHA accepted, rows filed under the wrong wave, or a run stopped by one transient null. Prompts for stages that can be denied say what to do on denial. A `gate-not-run` stop is not retried (requester decision, 2026-10-05). The tests pass and the built script is not stale.
 - **Description**: **Provisional.** Postmortem §C's permission rows and the `agent-null` stop.
 
 ### empirical-script-support
@@ -197,7 +186,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: the plan-block fields and gate behaviour the empirical design decided
 - **Depends on**: empirical-unit-design (design, plan-level shape); stage-failure-handling (logical, serialises the script files)
 - **External gates**: `node` (environment, v26.9.0)
-- **Done condition**: Tests show the parser accepts every plan-block field the empirical design adds, and that a measurement superseding a cited figure with no decision moved is handled as the design decided. The tests pass and the built script is not stale.
+- **Done condition**: Tests show the parser accepts every plan-block field the empirical design adds, that a measurement superseding a cited figure with no decision moved is handled as the design decided, and that a non-design unit in a project with no gate of its own reaches review with the gate the design decided. The tests pass and the built script is not stale.
 - **Description**: **Provisional.** Retired if the design routes empirical work outside the plan block and leaves the gate unchanged.
 
 ### findings-consumer-impl
@@ -223,7 +212,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: none
 - **Depends on**: relay-probe (knowledge, relay behaviour); substrate-spike (design, confirmed substrate); findings-consumer-impl (logical, serialises the script files)
 - **External gates**: `claude-code-workflow-tool` (environment, Claude Code 2.1.289); `node` (environment, v26.9.0)
-- **Done condition**: Either a run launched the way `phronithm:lsf-drive` prescribes shows no agent acting on a relayed message, cited by run id and transcript; or `relay-probe` found no relay and the register row is closed as not reproducible at the pinned version.
+- **Done condition**: Either a run launched the way `phronithm:lsf-drive` prescribes shows no agent acting on a relayed message, cited by run id and transcript; or `relay-probe` found no relay and the register row is closed as not reproducible at the pinned version. Either way, `phronithm:lsf-drive`'s Relaunch section keeps `gate-not-run`'s route: an environment or project change, not a decision.
 - **Description**: Postmortem §F. The improvements note's remedy adds a confirmation to every launch; the design's opening paragraph rules out procedural sign-off, so the unit must argue the trade or find another route.
 
 ### long-running-design
@@ -234,9 +223,9 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Effort**: large
 - **Scope**: `docs/design/lsf-long-running.md`
 - **Publishes**: the decision on work that outlasts a stage
-- **Depends on**: substrate-spike (design, confirmed substrate); empirical-unit-design (design, plan-level shape); retained-artefacts-design (design, retained-artefact policy for a job's outputs)
+- **Depends on**: substrate-spike (design, confirmed substrate); empirical-unit-design (design, plan-level shape); retained-artefacts-design (design, retained-artefact policy for a job's outputs); gate-results-integrity (knowledge, the `gate-not-run` stop and the long-gate recipe)
 - **External gates**: none
-- **Done condition**: `docs/design/lsf-long-running.md` is committed. It decides how work that outlasts one agent stage runs, and states the behaviour of the wave barrier, a re-plan while the work is in flight, resume, liveness, and a process left behind by a stopped run. On resume it distinguishes an interrupted attempt from one a re-plan or decision superseded, and states what happens to the interrupted attempt's commits and untracked outputs. `phronithm:critique` (critique-design) passes at the gate bar.
+- **Done condition**: `docs/design/lsf-long-running.md` is committed. It decides how work that outlasts one agent stage runs, and states the behaviour of the wave barrier, a re-plan while the work is in flight, resume, liveness, and a process left behind by a stopped run. On resume it distinguishes an interrupted attempt from one a re-plan or decision superseded, and states what happens to the interrupted attempt's commits and untracked outputs. It states the route for a project gate that cannot finish within one stage even with the long-gate recipe, which now stops with `gate-not-run` and has no exit through the workflow. `phronithm:critique` (critique-design) passes at the gate bar.
 - **Description**: Postmortem §A: 18 campaign stages took 39.7 of 62.1 implement agent-hours; one campaign outlived its stage and left an orphan process.
 
 ### long-running-impl
@@ -249,7 +238,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: none
 - **Depends on**: long-running-design (design, the decision); relay-mitigation (logical, serialises the script files)
 - **External gates**: `node` (environment, v26.9.0)
-- **Done condition**: A test shows a unit whose job outlasts its launching stage completes with its results reviewed, and that a stopped run leaves no process the run has no record of. A test shows that resuming a run treats an interrupted implement attempt's commits and untracked outputs as `long-running-design` decided (P-D6). The tests pass and the built script is not stale.
+- **Done condition**: A test shows a unit whose job outlasts its launching stage completes with its results reviewed, and that a stopped run leaves no process the run has no record of. A test shows that resuming a run treats an interrupted implement attempt's commits and untracked outputs as `long-running-design` decided (P-D6), and that a project gate outlasting its stage takes the route it decided. The tests pass and the built script is not stale.
 - **Description**: **Provisional.** The re-plan after `long-running-design` splits this unit if the decision spans more than the script.
 
 ### empirical-criteria-impl
@@ -327,7 +316,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: none
 - **Depends on**: substrate-spike (design, confirmed substrate); drive-decision-design (design, whether driving rules bind only `phronithm:lsf-drive`); drive-presentation-impl, relay-mitigation, plan-preflight-check, programme-close-out (logical, each serialises a section of `skills/lsf-drive/SKILL.md`)
 - **External gates**: none
-- **Done condition**: For each of P-C9, P-E1, P-E6, P-E7, P-E8, P-E9 and P-I1, `phronithm:lsf-drive` carries a rule or the unit's completion report gives the register row a `declined` disposition with the reason. The skill's byte size before and after is reported. `phronithm:critique` (critique-skill) passes at the gate bar and a `phronithm:edit` pass has been applied.
+- **Done condition**: For each of P-C9, P-E1, P-E6, P-E7, P-E8, P-E9 and P-I1, `phronithm:lsf-drive` carries a rule or the unit's completion report gives the register row a `declined` disposition with the reason. The Relaunch section keeps `gate-not-run`'s route. The skill's byte size before and after is reported. `phronithm:critique` (critique-skill) passes at the gate bar and a `phronithm:edit` pass has been applied.
 - **Description**: About 60% of requester inputs in the first week were mechanics. The unit first asks which duties the confirmed substrate removes, and adds rules only for those that remain. **Flag:** up to seven items exceeds the planned-steps bound; each is a few lines of skill text in one file, so the excess is not context.
 
 ### shakedown-fixture
@@ -340,8 +329,8 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: a fixture plan covering the unit kinds the workflow claims to run
 - **Depends on**: long-running-impl (testing, the last script unit); empirical-unit-impl (testing, the plan form); drive-mechanics (testing, the launch path)
 - **External gates**: `claude-code-workflow-tool` (environment, Claude Code 2.1.289)
-- **Done condition**: The workflow, launched through `phronithm:lsf-drive` on a fixture plan with at least one code unit, one design unit that settles a decision the architecture document left open, and one empirical unit whose job outlasts the tool timeout, returns `complete`, with the design unit's change recorded as an architecture amendment. A second run, on a variant whose unit moves a decision the document made, stops with `architecture-invalidated`. The design's Status section cites both run ids and lists the unit kinds the workflow has run on.
-- **Description**: Postmortem §G: the workflow was shaken down on code units and met measurement units first on a live programme. The two architecture cases are the upgrade path for the gate half of `arch-pin-refresh`'s done condition, `conjectured` at completion. **Flag:** the scope path moves if the fixture lives in the bench repository.
+- **Done condition**: The workflow, launched through `phronithm:lsf-drive` on a fixture plan with at least one code unit whose gate runs past the 600 s tool timeout, one design unit that settles a decision the architecture document left open, and one empirical unit whose job outlasts the tool timeout, returns `complete`, with the design unit's change recorded as an architecture amendment. A second run, on a variant whose unit moves a decision the document made, stops with `architecture-invalidated`. The design's Status section cites both run ids, lists the unit kinds the workflow has run on, and records how the long gate completed.
+- **Description**: Postmortem §G: the workflow was shaken down on code units and met measurement units first on a live programme. The two architecture cases are the upgrade path for the gate half of `arch-pin-refresh`'s done condition, and the long gate for `gate-results-integrity`'s live long-gate claim; both were `conjectured` at completion. **Flag:** the scope path moves if the fixture lives in the bench repository.
 
 ### programme-close
 - **Type**: integration
@@ -386,7 +375,7 @@ units:
   - id: substrate-options
     type: design
     complete: false
-    dependencies: [problem-register, relay-probe]
+    dependencies: [problem-register, relay-probe, gate-results-integrity]
     scope: [docs/design/lsf-substrate.md]
     publishes: [selected option, interim script policy]
     gates:
@@ -417,10 +406,10 @@ units:
         pin: "v26.9.0"
   - id: gate-results-integrity
     type: bug-fix
-    complete: false
+    complete: true
     dependencies: [arch-pin-refresh]
-    scope: [workflows/lsf/implement.js, workflows/lsf/schema.js, workflows/lsf/test/implement.test.js, workflows/lsf-implement.js, docs/design/lsf-workflow.md::lifecycle-mapping]
-    publishes: [fix return shape]
+    scope: [workflows/lsf/implement.js, workflows/lsf/schema.js, workflows/lsf/test/implement.test.js, workflows/lsf-implement.js, docs/design/lsf-workflow.md::lifecycle-mapping, skills/lsf-drive/SKILL.md::relaunch]
+    publishes: [fix return shape, gate-not-run stop, long-gate recipe, P-D3 residual]
     gates:
       - name: node
         kind: environment
@@ -466,7 +455,7 @@ units:
   - id: empirical-unit-design
     type: design
     complete: false
-    dependencies: [problem-register, empirical-criteria-design]
+    dependencies: [problem-register, empirical-criteria-design, gate-results-integrity]
     scope: [docs/design/lsf-empirical-work.md::units]
     publishes: [empirical work plan shape]
     gates:
@@ -564,7 +553,7 @@ units:
   - id: long-running-design
     type: design
     complete: false
-    dependencies: [substrate-spike, empirical-unit-design, retained-artefacts-design]
+    dependencies: [substrate-spike, empirical-unit-design, retained-artefacts-design, gate-results-integrity]
     scope: [docs/design/lsf-long-running.md]
     publishes: [long-running work decision]
     gates: []
@@ -642,7 +631,7 @@ units:
     scope: [docs/design/lsf-problem-register.md, docs/design/lsf-improvements.md, docs/design/lsf-workflow.md::status, CLAUDE.md]
     publishes: []
     gates: []
-execution_order: [problem-register, relay-probe, substrate-options, significant-precision-sample, arch-pin-refresh, empirical-criteria-design, retained-artefacts-design, substrate-spike, gate-results-integrity, empirical-unit-design, findings-consumer-design, drive-decision-design, plan-preflight-check, mechanical-stage-integrity, stage-failure-handling, empirical-script-support, findings-consumer-impl, relay-mitigation, long-running-design, long-running-impl, empirical-criteria-impl, phase2-gate-discipline, empirical-unit-impl, programme-close-out, drive-presentation-impl, drive-mechanics, shakedown-fixture, programme-close]
+execution_order: [problem-register, relay-probe, arch-pin-refresh, gate-results-integrity, substrate-options, significant-precision-sample, empirical-criteria-design, retained-artefacts-design, substrate-spike, empirical-unit-design, findings-consumer-design, drive-decision-design, plan-preflight-check, mechanical-stage-integrity, stage-failure-handling, empirical-script-support, findings-consumer-impl, relay-mitigation, long-running-design, long-running-impl, empirical-criteria-impl, phase2-gate-discipline, empirical-unit-impl, programme-close-out, drive-presentation-impl, drive-mechanics, shakedown-fixture, programme-close]
 ```
 
 ## Dependency Graph
@@ -659,7 +648,7 @@ graph TD
   SO[substrate-options]
   SS[substrate-spike]
   APR[arch-pin-refresh: complete]
-  GRI[gate-results-integrity]
+  GRI[gate-results-integrity: complete]
   PPC[plan-preflight-check]
   SPS[significant-precision-sample]
   ECD[empirical-criteria-design]
@@ -685,6 +674,9 @@ graph TD
 
   PR -.-> SO
   RP -.-> SO
+  GRI -.-> SO
+  GRI -.-> EUD
+  GRI -.-> LRD
   SO -.-> SS
   APR --> GRI --> MSI --> SFH --> ESS --> FCI --> RM --> LRI
   APR --> MSI
@@ -743,8 +735,8 @@ graph TD
 ## Execution Order
 
 1. `problem-register`, `relay-probe`. The register is the foundation. The probe is small and feeds the substrate decision.
-2. `substrate-options`, `significant-precision-sample`, `arch-pin-refresh`. The highest-risk decision is taken as early as its inputs allow. The precision sample has no dependencies and gates the findings decision.
-3. `empirical-criteria-design`, `retained-artefacts-design`, `substrate-spike`, `gate-results-integrity`.
+2. `arch-pin-refresh`, `gate-results-integrity`, `substrate-options`, `significant-precision-sample`. The highest-risk decision is taken as early as its inputs allow. The precision sample has no dependencies and gates the findings decision.
+3. `empirical-criteria-design`, `retained-artefacts-design`, `substrate-spike`.
 4. `empirical-unit-design`, `findings-consumer-design`, `drive-decision-design`, `plan-preflight-check`. All four design decisions land before any provisional unit they govern starts.
 5. `mechanical-stage-integrity`, `stage-failure-handling`, `empirical-script-support`, `findings-consumer-impl`, `relay-mitigation`. The script stream, serial because every unit writes `implement.js`, its test file and the generated script.
 6. `long-running-design`, `long-running-impl`. Last in the script stream: the least certain unit, and the one most likely to be re-planned.
@@ -758,7 +750,7 @@ graph TD
 ### 2 workers
 
 - **Worker 1, decisions and skill text.** `empirical-criteria-design` → `retained-artefacts-design` → `substrate-options` → `empirical-unit-design` → `findings-consumer-design` → `drive-decision-design` → the skill-text units of step 7. Writes `docs/design/` decision records and `skills/`.
-- **Worker 2, script.** `relay-probe` → `gate-results-integrity` → `significant-precision-sample` → `plan-preflight-check` → `substrate-spike` → the script stream of steps 5–6. Writes `workflows/lsf/`, `workflows/lsf-implement.js` and sections of `docs/design/lsf-workflow.md`.
+- **Worker 2, script.** `relay-probe` → `significant-precision-sample` → `plan-preflight-check` → `substrate-spike` → the script stream of steps 5–6. Writes `workflows/lsf/`, `workflows/lsf-implement.js` and sections of `docs/design/lsf-workflow.md`.
 
 Synchronisation points: `relay-probe` before `substrate-options`; `substrate-options` before `substrate-spike`; each design unit before the script unit it governs; both workers before `shakedown-fixture`.
 
@@ -768,7 +760,7 @@ Shared files are split by section. `docs/design/lsf-workflow.md`, `skills/lsf-dr
 
 | Phase | Concurrent units |
 |---|---|
-| 1 | relay-probe, significant-precision-sample, plan-preflight-check, gate-results-integrity, empirical-criteria-design, retained-artefacts-design |
+| 1 | relay-probe, significant-precision-sample, plan-preflight-check, empirical-criteria-design, retained-artefacts-design |
 | 2 | substrate-options, empirical-unit-design, findings-consumer-design, empirical-criteria-impl |
 | 3 | substrate-spike, drive-decision-design, phase2-gate-discipline, programme-close-out |
 | 4 | mechanical-stage-integrity, long-running-design, drive-presentation-impl |
@@ -828,10 +820,31 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 - R8 relay-probe — the harness changes between releases; a result pinned to 2.1.289 may not hold at the next version.
 - R9 long-running-design — high risk but placed late because it needs the confirmed substrate and the empirical unit shape; if either slips, the largest single cost in the postmortem (39.7 agent-hours of campaign stages) stays unaddressed longest.
 - R10 cross-cutting — the gate can still misclassify a design unit's settled decision as a decision move, recurring run #8's false stop; per-unit diffs, unit type and the completion report narrow it, and `shakedown-fixture`'s first run is the check.
+- R11 cross-cutting — a stage that reports `green` for a gate it did not run passes the `gate-not-run` check; it stays open until the substrate decision says what removes it.
+- R12 cross-cutting — the long-gate recipe is untested in live workflow agents; if the harness kills the detached process, every gate over 600 s stops with `gate-not-run` and no route until `long-running-impl`.
+- R13 cross-cutting — until `empirical-script-support`, a non-design unit in a project with no gate of its own stops with `gate-not-run` on every launch.
 
 ## Plan Maintenance
 
 On each unit completion, run the re-plan step before starting its dependants.
+
+### 2026-10-05 — gate-results-integrity complete
+Report: docs/plans/gate-results-integrity-completion.md @ efc7658.
+scope-reassignment gate-results-integrity — block scope records the write to `skills/lsf-drive/SKILL.md::relaunch`; relay-mitigation and drive-mechanics are serialised after it
+new-edge gate-results-integrity → substrate-options — P-D3's residual, a gate reported green that did not run
+done-condition substrate-options — assesses that residual; not given to mechanical-stage-integrity, since the implement stage is not mechanical and detecting it needs a shell
+new-edge gate-results-integrity → empirical-unit-design — an empty gates list stops with `gate-not-run`
+done-condition empirical-unit-design — decides the gate a non-design unit declares in a project with none (requester decision)
+done-condition empirical-script-support — such a unit reaches review
+new-edge gate-results-integrity → long-running-design — the `gate-not-run` stop and the long-gate recipe
+done-condition long-running-design, long-running-impl — the route for a project gate that outlasts a stage even with the recipe
+done-condition shakedown-fixture — a code unit's gate runs past 600 s; upgrade path for the live long-gate claim
+done-condition stage-failure-handling — `gate-not-run` is not retried, superseding the retry in `lsf-improvements.md` §6.3
+done-condition relay-mitigation, drive-mechanics — the Relaunch section keeps `gate-not-run`'s route
+execution-order arch-pin-refresh, gate-results-integrity — before substrate-options, which now reads P-D3's residual
+check mechanical-stage-integrity — size budget re-checked on four mid-implementation decisions; two surfaces, one open decision, steps at the bound; re-sized when substrate-spike rewrites it
+check stage-failure-handling — size budget re-checked likewise; within budget
+check drive-decision-design, drive-presentation-impl — `gate-not-run` is not a decision stop; no change
 
 ### 2026-10-05 — arch-pin-refresh complete
 Report: docs/plans/arch-pin-refresh-completion.md @ 382b5e2.
