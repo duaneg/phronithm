@@ -2,7 +2,7 @@
 
 ## Summary
 
-A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 28 units, four complete; critical path 11 units through the substrate decision and the serialised script stream. Base commit `b3dac6a`.
+A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 28 units, five complete; critical path 11 units through the substrate decision and the serialised script stream. Base commit `b3dac6a`.
 
 The postmortem's problems are taken as accurate for archipeligo. The proposals in [lsf-improvements](../design/lsf-improvements.md) are candidate options, not designs: every decision unit states its problem without a solution, checks whether the problem holds outside archipeligo, and weighs the proposal against alternatives that include doing nothing.
 
@@ -18,18 +18,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 
 ### relay-probe — complete at `ff1a49f`; entry at `83bebd1`; report `docs/investigations/relay-probe-results.md`
 
-### substrate-options
-- **Type**: design
-- **Risk**: high — decides where nine later units land
-- **Clarity**: exploratory
-- **Iteration**: write-once
-- **Effort**: large
-- **Scope**: `docs/design/lsf-substrate.md`
-- **Publishes**: the option selected for the spike; the interim policy for the Workflow script while any replacement is built
-- **Depends on**: problem-register (knowledge, problem ids and generality classes); relay-probe (knowledge, relay behaviour); gate-results-integrity (knowledge, P-D3's residual: a gate reported green that did not run)
-- **External gates**: `requester-verdict` (organisational)
-- **Done condition**: `docs/design/lsf-substrate.md` is committed with at least three options including the status quo. Each is assessed against every register row whose Topic is `mechanical-stage`, `long-running`, `relay` or `driving`, with that row's Appendix B instances and, for P-D3, the residual that a stage can report `green` for a gate it did not run: what it removes, what it costs, and what it gives up (journal resume, the `/workflows` view, the per-agent floor). One option is selected for the spike and the requester's verdict is recorded.
-- **Description**: Postmortem §C, and the parts of §A, §D, §E and §F that follow from the script having no filesystem, shell or clock. Options to cover at minimum: harden the script's mechanical stages; have mechanical agents run committed deterministic tools instead of transcribing; a host-side driver (the improvements note's suggestion, exemplar `~/src/maths-proofs/tools/campaign/`); and a split in which only some stages move.
+### substrate-options — complete at `8d22932`; entry at `5d5842f`; report `docs/design/lsf-substrate.md`
 
 ### substrate-spike
 - **Type**: design
@@ -40,8 +29,8 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Scope**: `docs/design/lsf-substrate.md`, `workflows/lsf/spike/`
 - **Publishes**: the confirmed substrate decision; rewritten entries for the provisional units
 - **Depends on**: substrate-options (design, selected option)
-- **External gates**: `claude-code-workflow-tool` (environment, Claude Code 2.1.289); `node` (environment, v26.9.0)
-- **Done condition**: The selected option is exercised through one end-to-end path (load, one unit's stages, merge, ledger append) on a fixture plan, with the fault kinds of postmortem §C's table injected at each stage the option claims to protect. The record states `confirmed` or `overturned` with the evidence, and the provisional units' entries in this plan are rewritten to match.
+- **External gates**: `claude-code-workflow-tool` (environment, Claude Code 2.1.289); `claude-code-headless` (environment, Claude Code 2.1.289); `node` (environment, v26.9.0)
+- **Done condition**: The selected option is exercised through one end-to-end path (load, one unit's stages, merge, ledger append) on a fixture plan, with the fault kinds of postmortem §C's table injected at each stage the option claims to protect, plus a failed headless call, a permission denial and a kill mid-stage. The record states each of `lsf-substrate.md`'s ten spike checks' outcome and an estimate of the host runtime's build, and states `confirmed` or `overturned` with the evidence; a failed overturn check is `overturned`. The provisional units' entries in this plan are rewritten to match.
 - **Description**: Spike code is throwaway unless the record adopts it; its path moves if the option is not a Workflow script. An `overturned` result returns to `substrate-options`.
 
 ### arch-pin-refresh — complete at `382b5e2`; entry at `0cacac9`; report `docs/plans/arch-pin-refresh-completion.md`
@@ -363,7 +352,7 @@ units:
         pin: "2.1.289"
   - id: substrate-options
     type: design
-    complete: false
+    complete: true
     dependencies: [problem-register, relay-probe, gate-results-integrity]
     scope: [docs/design/lsf-substrate.md]
     publishes: [selected option, interim script policy]
@@ -378,6 +367,9 @@ units:
     publishes: [confirmed substrate]
     gates:
       - name: claude-code-workflow-tool
+        kind: environment
+        pin: "2.1.289"
+      - name: claude-code-headless
         kind: environment
         pin: "2.1.289"
       - name: node
@@ -631,10 +623,11 @@ Solid arrows are logical edges (including file serialisation), dashed are testin
 graph TD
   RV([requester-verdict])
   CC([claude-code-workflow-tool 2.1.289])
+  CH([claude-code-headless 2.1.289])
 
   PR[problem-register: complete]
   RP[relay-probe: complete]
-  SO[substrate-options]
+  SO[substrate-options: complete]
   SS[substrate-spike]
   APR[arch-pin-refresh: complete]
   GRI[gate-results-integrity: complete]
@@ -717,6 +710,7 @@ graph TD
   RV --> P2G
   CC --> RP
   CC --> SS
+  CH --> SS
   CC --> RM
   CC --> SF
 ```
@@ -799,7 +793,7 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 
 ## Risk Registry
 
-- R1 substrate-options — a host-side driver retires or rewrites `mechanical-stage-integrity`, `stage-failure-handling`, `relay-mitigation`, `long-running-impl` and `drive-mechanics`, and is too large for this plan; the re-plan after the spike would open a successor programme.
+- R1 substrate-spike — S2, the host runtime, is selected and its build is unsized; it rewrites `mechanical-stage-integrity`, `stage-failure-handling`, `relay-mitigation`, `long-running-impl` and `drive-mechanics`, and if the spike sizes it beyond this plan the re-plan after the spike opens a successor programme.
 - R2 cross-cutting — six design units wait on one requester; the schedule is bounded by verdicts, not by work.
 - R3 cross-cutting — generality rests on cartomancer-v2 alone, a stream of code units; 11 rows are `not testable` there (P-A3, P-A4, P-A5, P-A7, P-A8, P-A12, P-A13, P-C3, P-G1, P-G3, P-G4), and a problem classed `archipeligo only so far` may be common to any measurement-heavy programme.
 - R4 significant-precision-sample — a hand classification by the model whose reviews produced the findings; the rubric is fixed first, and the requester may want a second rater.
@@ -809,13 +803,21 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 - R8 relay-mitigation — the relay is undocumented harness behaviour that began at 2.1.274; a mitigation resting on 2.1.289's turn rule may not hold at the next version.
 - R9 long-running-design — high risk but placed late because it needs the confirmed substrate and the empirical unit shape; if either slips, the largest single cost in the postmortem (39.7 agent-hours of campaign stages) stays unaddressed longest.
 - R10 cross-cutting — the gate can still misclassify a design unit's settled decision as a decision move, recurring run #8's false stop; per-unit diffs, unit type and the completion report narrow it, and `shakedown-fixture`'s first run is the check.
-- R11 cross-cutting — a stage that reports `green` for a gate it did not run passes the `gate-not-run` check; it stays open until the substrate decision says what removes it.
+- R11 cross-cutting — a stage that reports `green` for a gate it did not run passes the `gate-not-run` check; under S2 it closes only with gate commands declared in the plan or project configuration, a plan-schema change no unit yet owns.
 - R12 cross-cutting — the long-gate recipe is untested in live workflow agents; if the harness kills the detached process, every gate over 600 s stops with `gate-not-run` and no route until `long-running-impl`.
 - R13 cross-cutting — until `empirical-script-support`, a non-design unit in a project with no gate of its own stops with `gate-not-run` on every launch.
 
 ## Plan Maintenance
 
 On each unit completion, run the re-plan step before starting its dependants.
+
+### 2026-10-05 — substrate-options complete
+Report: docs/design/lsf-substrate.md @ 8d22932.
+gate-added substrate-spike — `claude-code-headless` (environment, 2.1.289): S2 runs agents as headless `claude -p` calls
+done-condition substrate-spike — records the ten spike checks' outcomes and a build estimate; injects a failed headless call, a denial and a kill mid-stage
+check mechanical-stage-integrity, stage-failure-handling — held on the spike by the interim policy; already depend on it; no change
+check relay-mitigation — under S2 reduces to spike check 3's evidence; rewritten at the spike's re-plan (R1)
+check drive-decision-design — S2 moves driving mechanics to a CLI, not presentation; no change
 
 ### 2026-10-05 — relay-probe complete
 Report: docs/investigations/relay-probe-results.md @ ff1a49f.
