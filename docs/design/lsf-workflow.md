@@ -64,23 +64,25 @@ Documented behaviour this design relies on:
   is unchanged (same probe). Decisions handed back must therefore appear in
   the prompts of the calls they affect — the plan or decision-log SHA does
   this — not merely in `args`.
-- **The human message that started the launch turn is relayed to the run's
+- **The latest human message of the launch turn is relayed to the run's
   agents**, under a frame stating it outranks their task. Probed at Claude
   Code 2.1.289 (2026-10-05, one single-agent run per condition,
   [results](../investigations/relay-probe-results.md)): the agent's first
   user turn is a `[Workflow harness — user request]` block quoting that
-  message, indented. It is relayed whether the launch is the turn's first tool
-  call (typed `wf_8286cecd-21c`; collapsed paste `wf_a00b2346-6b4`, relayed in
-  full, not as its placeholder) or follows a tool result (`Bash`
-  `wf_119eb6c3-fab`; AskUserQuestion answer `wf_a61f647b-bc6`, which relays
-  the turn's message, not the answer). In one turn started by a task
-  notification, two runs carried no relay, the second after an AskUserQuestion
-  answer (`wf_90db02e7-63b`, `wf_956ed621-4cd`). Earlier runs agree
-  (2.1.274–2.1.283; none before 2.1.274 carried a relay): every agent of a
-  run launched in a human-started turn carried it, a slash-command launch
-  relays the command and its arguments, not the skill body, and a resume
-  relays by its own turn. Unprobed at 2.1.289: a slash-command launch and a
-  human message queued mid-turn.
+  message, indented. The turn's starting message is relayed whether the
+  launch is the turn's first tool call (typed `wf_8286cecd-21c`; collapsed
+  paste `wf_a00b2346-6b4`, relayed in full, not as its placeholder) or
+  follows a tool result (`Bash` `wf_119eb6c3-fab`; AskUserQuestion answer
+  `wf_a61f647b-bc6`, which relays the turn's message, not the answer). A
+  slash command relays as the command and its arguments, not the skill body
+  (`wf_689da7e8-1ad`). A human message delivered mid-turn replaces it
+  (`wf_d2c2719c-453`). In one turn started by a task notification, two runs
+  carried no relay, the second after an AskUserQuestion answer
+  (`wf_90db02e7-63b`, `wf_956ed621-4cd`). Earlier runs agree (2.1.274–2.1.283;
+  none before 2.1.274 carried a relay): every agent of a run launched in a
+  human-started turn carried it, and a resume relays by its own turn.
+  Unprobed: a human message delivered mid-turn into a notification-started
+  turn.
 - **Plugins ship workflows** from a `workflows/` directory, namespaced
   `phronithm:<meta.name>`.
 - **Every agent pays a floor before its first read**: the harness prompt

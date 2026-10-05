@@ -18,6 +18,8 @@ Host session `21d5d59b-b891-4722-8a41-8bd4a526256d`; host and agent transcripts 
 | typed message | `wf_8286cecd-21c` | human (host line 140) | first tool call | relay of the typed message, verbatim |
 | after an AskUserQuestion answer, same human-started turn | `wf_a61f647b-bc6` | human (as above) | mid-turn, answer at host line 148 | relay of the turn's typed message, not the answer |
 | 16-line paste, collapsed to `[Pasted text #N]` (requester-reported) | `wf_a00b2346-6b4` | human (host line 178) | first tool call | relay of the paste's full text inside its `<pasted_content>` wrapper, not the placeholder |
+| slash command `/phronithm:feature test a slash command` | `wf_689da7e8-1ad` | human (host line 365) | first tool call | relay of the command wrapper (`<command-message>`, `<command-name>`, `<command-args>`), not the skill body |
+| human message queued mid-turn (`And one midtown`, `enqueue`/`remove` at host lines 375–376, delivered at 380) | `wf_d2c2719c-453` | human (slash command, as above) | mid-turn, next tool call after delivery | relay of the mid-turn message, not the turn's starting command |
 
 ## Observations at 2.1.288
 
@@ -37,7 +39,8 @@ Each agent's transcript line 0 is a user turn opening `[Workflow harness — use
 
 - **H2** (an intervening tool result suppresses the relay): refuted at 2.1.288 and 2.1.289. Mid-turn tool results, an AskUserQuestion answer and a mid-turn notification did not suppress it in a human-started turn.
 - **H1** (the session's most recent human prompt): refuted at 2.1.289 by `wf_90db02e7-63b`, which followed the human prompt `Resume relay-probe` with no later human prompt and carried no relay.
-- **H3** (the prompt that started the current turn; none if a notification started it): not contradicted by the six 2.1.289 runs or the 2.1.288 runs. An AskUserQuestion answer does not start a turn and is not relayed: in a notification-started turn nothing is relayed (`wf_956ed621-4cd`), in a human-started turn the turn's prompt is (`wf_a61f647b-bc6`). The notification case rests on one turn (two runs sharing a `promptId`).
+- **H3** (the prompt that started the current turn): refuted at 2.1.289 by `wf_d2c2719c-453`, which relayed a human message delivered mid-turn instead of the turn's starting command.
+- **H4** (the latest human message delivered in the current turn; none if the turn has had none): consistent with every run. An AskUserQuestion answer is not a human message for this purpose: in a notification-started turn nothing is relayed after one (`wf_956ed621-4cd`), in a human-started turn the turn's prompt is (`wf_a61f647b-bc6`). The notification case rests on one turn (two runs sharing a `promptId`). Untested: a human message delivered mid-turn into a notification-started turn (H4 predicts a relay), and a turn started by a subagent hand-back (`origin.kind: peer`).
 
 ## Reconciliation with earlier runs
 
@@ -49,10 +52,10 @@ Every workflow run in the archipeligo-evolved and cartomancer-v2 project transcr
 - **The relay is fixed at launch.** Agents of runs still live across a `/clear` relay the launching session's message (`wf_3478a815-312`, `wf_405a2c0f-0ec`, `wf_a50c2fbb-5a3`, `wf_ea1ae00c-488`). Each of those runs shows one non-relay agent in the post-`/clear` session directory: an agent in flight at the `/clear`, whose file there starts with a tool result, not its first turn.
 - **A slash-command launch relays the command, not the skill body**: `<command-message>`, `<command-name>` and `<command-args>` (`wf_ec361be0-a69`, `wf_1078a8f1-b58` at 2.1.278; `wf_95020a23-3cc` at 2.1.281).
 
-No earlier run contradicts H3 at 2.1.274 and later.
+No earlier run contradicts H4 at 2.1.274 and later; none was checked for mid-turn human messages.
 
 ## Open obligations
 
-- Unprobed at 2.1.289: a slash-command launch (seen only at 2.1.278–2.1.281, above) and a human message queued mid-turn.
+- Unprobed at 2.1.289: a human message delivered mid-turn into a notification-started turn, and a turn started by a subagent hand-back.
 - Multi-agent runs are not re-probed at 2.1.289; at 2.1.278–2.1.283 every agent of a human-turn launch carried the relay.
 - One run per condition; determinism is not shown. The 2.1.288 rows were not re-verified by the critique.
