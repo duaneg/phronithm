@@ -78,11 +78,11 @@ Documented behaviour this design relies on:
   (`wf_689da7e8-1ad`). A human message delivered mid-turn replaces it
   (`wf_d2c2719c-453`). In one turn started by a task notification, two runs
   carried no relay, the second after an AskUserQuestion answer
-  (`wf_90db02e7-63b`, `wf_956ed621-4cd`). Earlier runs agree (2.1.274–2.1.283;
+  (`wf_90db02e7-63b`, `wf_956ed621-4cd`); in another, a human message
+  delivered mid-turn was relayed (`wf_d08c2e20-b27`). Earlier runs agree (2.1.274–2.1.283;
   none before 2.1.274 carried a relay): every agent of a run launched in a
   human-started turn carried it, and a resume relays by its own turn.
-  Unprobed: a human message delivered mid-turn into a notification-started
-  turn.
+  Unprobed: a turn started by a subagent hand-back.
 - **Plugins ship workflows** from a `workflows/` directory, namespaced
   `phronithm:<meta.name>`.
 - **Every agent pays a floor before its first read**: the harness prompt
