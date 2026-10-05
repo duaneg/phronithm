@@ -166,8 +166,11 @@ carries its own unit plan template and stages instead:
    Critical-only bar and lens review per unit type, in parallel. No separate
    static-analysis stage: the project's own gates (linters, type checks) run
    in the implement stage, whose done conditions require them green, and
-   again after each merge. Both reviewers are given the implement stage's
-   gate runs and take them as the test and lint result: no suite, CI job, or
+   again after each merge. Both reviewers are given the gate runs at the
+   branch's HEAD — the implement stage's, or after a code fix the fix
+   stage's, which re-runs every gate and returns the runs (a code fix whose
+   gate did not run stops with `gate-not-run`, as at implement) — and take
+   them as the test and lint result: no suite, CI job, or
    lint pass of their own, a single targeted test only to check a finding's
    claim (in a compiled project the two suite re-runs cost more of the
    reviewers' wall-clock than the review). The code critique evaluates the
@@ -177,7 +180,9 @@ carries its own unit plan template and stages instead:
 5. **completion-report** is rendered by the script from the implement and
    review returns — summary, done-condition verdict and evidence, deviations
    and writes outside Scope, deferrals, discoveries, standing obligations,
-   gate re-verification, and the counts of findings left unfixed with the
+   gate re-verification, the gate runs at the unit's final HEAD (the last
+   code fix's, when there was one; the verdict stays the implement
+   stage's), and the counts of findings left unfixed with the
    ledger's path — and committed on the unit branch by a copy stage at the
    mechanical tier. No agent authors it; the rows the findings became are in
    the ledger, not the report.

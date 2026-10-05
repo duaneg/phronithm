@@ -398,7 +398,9 @@ Critique gate round ${round} found these Critical findings against the ${subject
 
 ${JSON.stringify(criticals, null, 2)}
 
-Fix each finding that is repairable within the ${subject}, then commit. A finding you decline to fix — because the repair would change the unit entry, the architecture document, or the request record, or because you cannot repair it — goes under \`notApplied\` with the reason. The run stops on a declined finding and the requester decides, so decline only when the repair is genuinely outside the ${subject}. ${subject === 'plan' ? `The plan is docs/plans/${unit.id}-plan.md on this branch. Repair the findings; do not shorten the plan to length.` : 'Run the tests the fix touches as you go, then the project\'s gates once at the end; a fix that breaks a test is not applied.'}
+Fix each finding that is repairable within the ${subject}, then commit. A finding you decline to fix — because the repair would change the unit entry, the architecture document, or the request record, or because you cannot repair it — goes under \`notApplied\` with the reason. The run stops on a declined finding and the requester decides, so decline only when the repair is genuinely outside the ${subject}. ${subject === 'plan' ? `The plan is docs/plans/${unit.id}-plan.md on this branch. Repair the findings; do not shorten the plan to length.` : unit.type === 'design'
+    ? 'Run the tests the fix touches as you go, then the project\'s gates once at the end; a fix that breaks a test is not applied.'
+    : 'Run the tests the fix touches as you go; a fix that breaks a test is not applied. Then run the project\'s gates once at your final HEAD — every gate the implement stage ran, not only those the fix touches — and report each under `gates` with its command, status, and a one-line summary; the next review round reads these, not the implement stage\'s.'}
 ${RETURN_FIELDS}`;
 }
 
@@ -416,9 +418,6 @@ Otherwise execute the plan in full, single-shot, committing as you go with the p
 ${RETURN_FIELDS}`;
 }
 
-// The implement stage ran the gates once at HEAD; the reviewers read the
-// result instead of re-running the suite, which in a compiled project cost
-// more of their wall-clock than the review itself.
 // The gates a stage did not run: each `not-run` command, or a placeholder when
 // it reported none. Empty when every gate has a result. A gate not run never
 // reaches review: the reviewers would meet the same tool timeout.
@@ -427,32 +426,37 @@ const gateNotRunSignal = (ctx, missing) => signal({
   ...ctx, kind: 'gate-not-run', source: 'structural',
   statement: `gate(s) not run: ${missing.join(', ')}`, referent: missing.join(','),
 });
+
+// The implement stage, or the last code fix, ran the gates once at HEAD; the
+// reviewers read that result instead of re-running the suite, which in a
+// compiled project cost more of their wall-clock than the review itself.
+// `run` is { by, gates }: the stage that ran them, and the runs.
 const renderGates = (gates) => (gates?.length ? gates.map((g) => `- \`${g.command}\` — ${g.status}${g.summary ? `: ${g.summary}` : ''}`).join('\n') : '- none reported');
-function gateResults(gates) {
-  return `The implement stage ran the project's gates at this branch's HEAD:
-${renderGates(gates)}
+function gateResults(run) {
+  return `${run.by} ran the project's gates at this branch's HEAD:
+${renderGates(run.gates)}
 Take that as the test and lint result. Do not run the whole suite, the project's CI job, or a lint pass; run a single targeted test only to check a specific claim of a finding, and name the test in the finding.`;
 }
 
-function codeCritiquePrompt(ctx, plan, unit, branch, round, gates) {
+function codeCritiquePrompt(ctx, plan, unit, branch, round, gateRun) {
   return `${header(ctx, plan)}
 ${worktree(branch)}
 
 ${unitBlock(plan, unit)}
 
-${gateResults(gates)}
+${gateResults(gateRun)}
 
 Run the phronithm:critique skill with type critique-code over this branch's diff against ${ctx.integrationBranch} (\`git diff ${ctx.integrationBranch}...HEAD\`), reading surrounding code as needed. This is round ${round} of the critique gate. Pass bar: no Critical findings. Also evaluate the unit's done condition against this branch under the readings in docs/plans/${unit.id}-plan.md, from the code and the gate results above; a done condition that is not met, or a reading the code does not bear out, is a Critical finding. Set \`systemic\` when the findings indicate a structural defect that iteration will not resolve. Do not modify anything and do not spawn subagents. Continue through to completion — do not stop to wait for instruction.
 ${RETURN_FIELDS}`;
 }
 
-function lensReviewPrompt(ctx, plan, unit, branch, lenses, round, gates) {
+function lensReviewPrompt(ctx, plan, unit, branch, lenses, round, gateRun) {
   return `${header(ctx, plan)}
 ${worktree(branch)}
 
 ${unitBlock(plan, unit)}
 
-${gateResults(gates)}
+${gateResults(gateRun)}
 
 Run the phronithm:review skill over this branch's diff against ${ctx.integrationBranch} through these lenses: ${lenses.join(', ')}. Round ${round} of the review gate. Return each finding with a severity; a finding is Critical only when it would be wrong to merge without fixing it. Do not modify anything and do not spawn subagents.
 ${RETURN_FIELDS}`;
@@ -481,6 +485,8 @@ function renderCompletionReport(ctx, unit, wave, branch, impl, review) {
   const dc = impl.doneCondition ?? {};
   const outside = impl.writesOutsideScope ?? [];
   const probes = impl.gateProbe ?? [];
+  // After a code fix, the fix's runs are the gates at the unit's final HEAD.
+  const headGates = review.gates ?? impl.gates;
   const lines = [
     `# ${unit.id} — completion report`,
     '',
@@ -489,9 +495,9 @@ function renderCompletionReport(ctx, unit, wave, branch, impl, review) {
     ...(impl.summary ? [impl.summary, ''] : []),
     '## Done-condition verdict',
     '',
-    `**${dc.met ? 'Met' : 'Not met'}**${dc.evaluable === false ? ' (not evaluable as written)' : ''}. ${dc.evidence ?? ''}`.trimEnd(),
+    `**${dc.met ? 'Met' : 'Not met'}** (implement stage)${dc.evaluable === false ? ' (not evaluable as written)' : ''}. ${dc.evidence ?? ''}`.trimEnd(),
     ...(probes.length ? ['', `External gates re-verified: ${probes.map((g) => `${g.name} pinned ${g.pin}, observed ${g.observed}`).join('; ')}.`] : []),
-    ...(impl.gates?.length ? ['', 'Gates at HEAD:', '', renderGates(impl.gates)] : []),
+    ...(headGates?.length ? ['', 'Gates at HEAD:', '', renderGates(headGates)] : []),
     '',
     '## Deviations and writes outside Scope',
     '',
@@ -670,7 +676,8 @@ ${RETURN_FIELDS}`;
 // findings } and pushes signals as it goes. Significant and Minor findings
 // accumulate in `findings`, each stamped with its stage and round, for the
 // caller to record once per gate; a Critical the fix stage declines, a
-// systemic verdict, or the round cap is a structural stop.
+// systemic verdict, or the round cap is a structural stop. `onFix(fixed, n)`
+// may return STOP signals for a fix whose return cannot go to the next round.
 async function critiqueLoop({ round, fix, onFix, stageCtx, signals }) {
   const findings = [];
   for (let n = 1; n <= GATE_MAX_ROUNDS; n++) {
@@ -726,7 +733,11 @@ async function critiqueLoop({ round, fix, onFix, stageCtx, signals }) {
       }
       return { ok: false, reason: 'declined', rounds: n, findings };
     }
-    onFix(fixed);
+    const stops = onFix(fixed, n) ?? [];
+    if (stops.length) {
+      signals.push(...stops);
+      return { ok: false, reason: 'fix-stop', rounds: n, findings };
+    }
   }
   return { ok: false, reason: 'hard-cap', rounds: GATE_MAX_ROUNDS, findings };
 }
@@ -759,7 +770,7 @@ async function runUnit(rt, ctx, plan, unit, wave) {
     }],
     fix: (n, criticals) => rt.agent(fixPrompt(ctx, plan, unit, branch, 'plan', criticals, n),
       opts(`fix-plan:r${n}`, { isolation: 'worktree', schema: FIX_SCHEMA })),
-    onFix: (fixed) => { branch = fixed.result.branch; },
+    onFix: (fixed) => { branch = fixed.result.branch; return []; },
   });
   signals.push(...signalsFromFindings(planGate.findings, stageCtx('critique-plan')));
   if (!planGate.ok) return abort('critique-plan');
@@ -795,28 +806,37 @@ async function runUnit(rt, ctx, plan, unit, wave) {
 
   // 4. review gate over the branch diff
   const lenses = LENSES_BY_TYPE[unit.type] ?? LENSES_BY_TYPE.feature;
+  const design = unit.type === 'design';
+  let gateRun = { by: 'The implement stage', gates: impl.result.gates };
   const reviewGate = await critiqueLoop({
     stageCtx, signals,
     round: async (n) => {
-      const reviewers = unit.type === 'design'
+      const reviewers = design
         ? [['critique-design', designCritiquePrompt(ctx, plan, unit, branch, n)]]
         : [
-          ['critique-code', codeCritiquePrompt(ctx, plan, unit, branch, n, impl.result.gates)],
-          ...(lenses.length ? [['lens-review', lensReviewPrompt(ctx, plan, unit, branch, lenses, n, impl.result.gates)]] : []),
+          ['critique-code', codeCritiquePrompt(ctx, plan, unit, branch, n, gateRun)],
+          ...(lenses.length ? [['lens-review', lensReviewPrompt(ctx, plan, unit, branch, lenses, n, gateRun)]] : []),
         ];
       const rets = await rt.parallel(reviewers.map(([stage, prompt]) => () =>
         rt.agent(prompt, opts(`${stage}:r${n}`, { isolation: 'worktree', schema: FINDINGS_SCHEMA, ...tier(ctx, 'critique') }))));
       return reviewers.map(([stage], i) => ({ stage, ret: rets[i] ?? null }));
     },
     fix: (n, criticals) => rt.agent(fixPrompt(ctx, plan, unit, branch, 'code', criticals, n),
-      opts(`fix-code:r${n}`, { isolation: 'worktree', schema: FIX_SCHEMA })),
-    onFix: (fixed) => { branch = fixed.result.branch; },
+      opts(`fix-code:r${n}`, { isolation: 'worktree', schema: design ? FIX_SCHEMA : FIX_CODE_SCHEMA })),
+    onFix: (fixed, n) => {
+      branch = fixed.result.branch;
+      if (design) return [];
+      const unrun = unrunGates(fixed.result.gates);
+      if (unrun.length) return [gateNotRunSignal(stageCtx('fix'), unrun)];
+      gateRun = { by: `The round-${n} fix stage`, gates: fixed.result.gates };
+      return [];
+    },
   });
   signals.push(...signalsFromFindings(reviewGate.findings, stageCtx('review')));
   if (!reviewGate.ok) return abort('review');
 
   // 5. completion report: rendered here, committed by a copy stage
-  const review = { rounds: reviewGate.rounds, findings: reviewGate.findings };
+  const review = { rounds: reviewGate.rounds, findings: reviewGate.findings, gates: gateRun.gates };
   const text = renderCompletionReport(ctx, unit, wave, branch, impl.result, review);
   signals.push(...signalsFromDocumentSize(byteLength(text), { ...stageCtx('completion-report'), path: completionPath(unit), targetKb: COMPLETION_REPORT_TARGET_KB }));
   const report = await rt.agent(completionScribePrompt(ctx, plan, unit, branch, text), opts('completion-report', { isolation: 'worktree', schema: COMPLETION_SCHEMA, ...tier(ctx, 'mechanical') }));

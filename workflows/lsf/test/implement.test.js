@@ -53,7 +53,7 @@ function defaults(plan) {
     implement: (p, o, u) => ret(implemented(u)),
     'critique-code': () => NO_FINDINGS,
     'lens-review': () => NO_FINDINGS,
-    'fix-code': (p, o, u) => ret({ branch: `fixed-code-${u}`, sha: 'f', applied: [], notApplied: [] }),
+    'fix-code': (p, o, u) => ret({ branch: `fixed-code-${u}`, sha: 'f', applied: [], notApplied: [], gates: [{ command: 'pytest -q', status: 'green', summary: '413 passed' }] }),
     'completion-report': (p, o, u) => ret({ branch: `done-${u}`, sha: 'c', path: `docs/plans/${u}-completion.md` }),
     cleanup: () => ret({ removed: 0, kept: [] }),
     merge: (p, o, u, state) => {
@@ -427,12 +427,73 @@ test('an implement return with no gate reported stops before review as a gate no
   assert.ok(!labels().some((x) => x.startsWith('critique-code') || x.startsWith('lens-review')));
 });
 
+test('a red gate is a result, not a gate not run: the unit reaches review', async () => {
+  const { rt, labels } = runtime(twoWaves(), { implement: (p, o, u) => ret(implemented(u, { gates: [{ command: 'pytest -q', status: 'red', summary: '2 failed' }] })) });
+  const out = await run(rt);
+  assert.ok(!(out.escalation?.signals ?? []).some((s) => s.kind === 'gate-not-run'));
+  assert.ok(labels().includes('critique-code:r1:A'));
+});
+
 test('a design unit with no gate reported is not stopped: its review reads no gates', async () => {
   const plan = graph('plan0', [unit('D', { type: 'design' })]);
   const { rt, labels } = runtime(plan, { implement: (p, o, u) => ret(implemented(u, { gates: [] })) });
   const out = await run(rt);
   assert.ok(!(out.escalation?.signals ?? []).some((s) => s.kind === 'gate-not-run'));
   assert.ok(labels().includes('critique-design:r1:D'));
+});
+
+// A review gate whose round 1 raises one Critical and passes afterwards.
+const criticalOnce = () => {
+  let round = 0;
+  return () => (++round === 1 ? ret({ findings: [{ severity: 'Critical', statement: 'bad', location: 'a.py' }], systemic: false, summary: 's' }) : NO_FINDINGS);
+};
+
+test('a review round after a code fix reads the fix stage\'s gate runs, not the implement stage\'s', async () => {
+  const { rt, calls } = runtime(graph('plan0', [unit('A')]), {
+    'critique-code': criticalOnce(),
+    'fix-code': (p, o, u) => ret({ branch: `fixed-code-${u}`, sha: 'f', applied: [{ finding: 'bad', fix: 'ok' }], notApplied: [], gates: [{ command: 'pytest -q', status: 'green', summary: '99 passed (fix)' }] }),
+  });
+  const out = await run(rt);
+  assert.equal(out.status, 'complete');
+  const r1 = calls.find((c) => c.label === 'critique-code:r1:A').prompt;
+  assert.match(r1, /The implement stage ran the project's gates at this branch's HEAD:\n- `pytest -q` — green: 412 passed/);
+  for (const label of ['critique-code:r2:A', 'lens-review:r2:A']) {
+    const p = calls.find((c) => c.label === label).prompt;
+    assert.match(p, /The round-1 fix stage ran the project's gates at this branch's HEAD:\n- `pytest -q` — green: 99 passed \(fix\)\n/, label);
+    assert.doesNotMatch(p, /412 passed/, label);
+  }
+  const fix = calls.find((c) => c.label === 'fix-code:r1:A');
+  assert.match(fix.prompt, /every gate the implement stage ran[^]*report each under `gates`/);
+  assert.ok(fix.opts.schema.properties.result.required.includes('gates'), 'a code fix must return its gate runs');
+  assert.match(calls.find((c) => c.label === 'completion-report:A').prompt, /Gates at HEAD:\n\n- `pytest -q` — green: 99 passed \(fix\)/);
+});
+
+test('a code fix whose gate did not run, or that reports none, stops before the next review round', async () => {
+  for (const gates of [[{ command: 'xtask ci', status: 'not-run', summary: 'timed out' }], []]) {
+    const { rt, labels } = runtime(graph('plan0', [unit('A')]), {
+      'critique-code': criticalOnce(),
+      'fix-code': (p, o, u) => ret({ branch: `fixed-code-${u}`, sha: 'f', applied: [{ finding: 'bad', fix: 'ok' }], notApplied: [], gates }),
+    });
+    const out = await run(rt);
+    assert.equal(out.status, 'stopped');
+    const stop = out.escalation.signals.find((s) => s.kind === 'gate-not-run');
+    assert.equal(stop.stage, 'fix');
+    assert.match(stop.statement, gates.length ? /xtask ci/ : /\(no gate reported\)/);
+    assert.ok(!labels().includes('critique-code:r2:A'), 'no round-2 review');
+  }
+});
+
+test('a design unit\'s fix keeps the plain fix schema and is not asked for gates', async () => {
+  let round = 0;
+  const { rt, calls } = runtime(graph('plan0', [unit('D', { type: 'design' })]), {
+    'critique-design': () => (++round === 1 ? ret({ findings: [{ severity: 'Critical', statement: 'bad', location: 'd.md' }], systemic: false, summary: 's' }) : NO_FINDINGS),
+    'fix-code': (p, o, u) => ret({ branch: `fixed-code-${u}`, sha: 'f', applied: [{ finding: 'bad', fix: 'ok' }], notApplied: [] }),
+  });
+  const out = await run(rt);
+  assert.equal(out.status, 'complete');
+  const fix = calls.find((c) => c.label === 'fix-code:r1:D');
+  assert.ok(!('gates' in fix.opts.schema.properties.result.properties));
+  assert.doesNotMatch(fix.prompt, /report each under `gates`/);
 });
 
 test('renderCompletionReport renders the implement and review returns section by section, with finding counts pointing at the ledger', () => {
@@ -457,7 +518,7 @@ test('renderCompletionReport renders the implement and review returns section by
     'Unit `A` (feature), wave 1, branch `impl-A`.', '',
     'Widened the predicate and pinned it.', '',
     '## Done-condition verdict', '',
-    '**Met**. clause (i): test_a green; clause (ii): 3 of 3 fixtures.', '',
+    '**Met** (implement stage). clause (i): test_a green; clause (ii): 3 of 3 fixtures.', '',
     'External gates re-verified: fontforge pinned 20230101, observed 20230101.', '',
     'Gates at HEAD:', '',
     '- `pytest -q` — green: 412 passed\n- `ruff check .` — green', '',
@@ -474,11 +535,14 @@ test('renderCompletionReport renders the implement and review returns section by
   ].join('\n'));
   assert.doesNotMatch(text, /fragile|a\.py/, 'findings are counts; the rows live in the ledger');
   const bare = renderCompletionReport(ctx, unit, 2, 'impl-A', implemented('A', { doneCondition: { evaluable: false, met: false, evidence: 'the clause names a file that does not exist' } }), { rounds: 1, findings: [] });
-  assert.match(bare, /\*\*Not met\*\* \(not evaluable as written\)\. the clause names a file that does not exist/);
+  assert.match(bare, /\*\*Not met\*\* \(implement stage\) \(not evaluable as written\)\. the clause names a file that does not exist/);
   assert.equal((bare.match(/^None\.$/gm) ?? []).length, 4, 'every empty section says so');
   assert.doesNotMatch(bare, /External gates|Written outside/);
   assert.doesNotMatch(renderCompletionReport(ctx, unit, 2, 'impl-A', implemented('A', { gates: [] }), { rounds: 1, findings: [] }), /Gates at HEAD/);
   assert.doesNotMatch(bare, /breakdown|re-plan mode/, 'no serial-mode footer');
+  const afterFix = renderCompletionReport(ctx, unit, 1, 'impl-A', impl, { rounds: 2, findings: [], gates: [{ command: 'pytest -q', status: 'green', summary: '99 passed (fix)' }] });
+  assert.match(afterFix, /Gates at HEAD:\n\n- `pytest -q` — green: 99 passed \(fix\)\n/, 'after a fix, the fix\'s runs are the gates at HEAD');
+  assert.doesNotMatch(afterFix, /412 passed/);
 });
 
 test('a plan or report past twice its size target is a document-oversize ledger row, never a stop or a re-plan item', async () => {
