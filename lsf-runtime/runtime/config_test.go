@@ -96,3 +96,19 @@ func TestLaunchClaudeBinEnv(t *testing.T) {
 		t.Errorf("ClaudeBin %q", c.ClaudeBin)
 	}
 }
+
+func TestLoadConfigRejectsDurationsAndTrailing(t *testing.T) {
+	base := `"stateDir":"/x","defaultRole":"w","roles":{"w":{"tools":"t","permissionMode":"dontAsk"}}`
+	for _, tc := range []struct{ body, want string }{
+		{`{` + base + `,"guardTimeout":"-1s"}`, "must not be negative"},
+		{`{` + base + `,"backoff":["1s","-1s"]}`, "must not be negative"},
+		{`{` + base + `,"backoff":[]}`, "backoff: omit it"},
+		{`{` + base + `} {}`, "trailing data"},
+		{`{` + base + `,"skills":[{"label":"","skill":"s"}]}`, "skills[0].label is required"},
+	} {
+		_, err := LoadConfig(writeConfig(t, tc.body))
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err %v, want %q", tc.body, err, tc.want)
+		}
+	}
+}

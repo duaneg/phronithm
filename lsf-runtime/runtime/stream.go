@@ -66,8 +66,8 @@ func (a *streamAcc) add(line []byte) {
 	if len(line) == 0 {
 		return
 	}
-	var e streamEvent
-	if err := json.Unmarshal(line, &e); err != nil {
+	e, ok := decodeEvent(line)
+	if !ok {
 		a.BadLines++
 		return
 	}
@@ -98,11 +98,7 @@ func (a *streamAcc) add(line []byte) {
 			r.APIErrorStatus = *e.APIErrorStatus
 		}
 		for _, d := range e.PermissionDenials {
-			in := string(d.ToolInput)
-			if len(in) > 160 {
-				in = in[:160]
-			}
-			r.Denials = append(r.Denials, fmt.Sprintf("%s: %s", d.ToolName, in))
+			r.Denials = append(r.Denials, fmt.Sprintf("%s: %s", d.ToolName, truncateRunes(string(d.ToolInput), 160)))
 		}
 		a.Result = r
 	}
@@ -151,4 +147,27 @@ func (a *streamAcc) skillLoaded(skill string, prefixed bool) bool {
 		}
 	}
 	return false
+}
+
+// decodeEvent decodes a stream line. A field whose type has drifted (a CLI
+// version changing a field's shape) drops only that field, not the line, so a
+// result event with one odd field still yields its structured_output. ok is
+// false only for a line that is not a JSON object.
+func decodeEvent(line []byte) (e streamEvent, ok bool) {
+	if json.Unmarshal(line, &e) == nil {
+		return e, true
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(line, &fields) != nil {
+		return streamEvent{}, false
+	}
+	e = streamEvent{}
+	for k, v := range fields {
+		one, _ := json.Marshal(map[string]json.RawMessage{k: v})
+		var f streamEvent
+		if json.Unmarshal(one, &f) == nil {
+			json.Unmarshal(one, &e)
+		}
+	}
+	return e, true
 }

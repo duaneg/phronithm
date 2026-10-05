@@ -42,6 +42,7 @@ type attempt struct {
 	spawnErr error // the process did not start
 	cause    error // context cause when the attempt was cancelled
 	exitCode int
+	stderr   string // tail
 	acc      streamAcc
 }
 
@@ -55,6 +56,8 @@ type verdict struct {
 
 // classify applies design §2.5. The result event decides first: the CLI can
 // recover from a mid-stream assistant error and still return a valid result.
+// A cancellation other than errGuard or errKilled (the parent context) is the
+// caller's to check before classifying.
 func classify(a *attempt, schema json.RawMessage, skill string, prefixed bool) verdict {
 	switch {
 	case errors.Is(a.cause, errKilled):

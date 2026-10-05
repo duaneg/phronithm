@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 )
 
 // validateOutput checks raw JSON against the JSON Schema subset the stage
 // schemas use: type, properties, required, items, enum (the spike's
 // validate.js). It returns one message per violation; none means valid.
+// Properties are visited in sorted key order, not the schema's insertion order
+// as in the spike, so messages are deterministic; the set of messages matches.
 func validateOutput(schema, raw json.RawMessage) []string {
 	var s map[string]any
 	if err := json.Unmarshal(schema, &s); err != nil {
@@ -26,7 +29,10 @@ func validateOutput(schema, raw json.RawMessage) []string {
 }
 
 func validateValue(schema map[string]any, v any, path string) []string {
-	t, _ := schema["type"].(string)
+	t, isString := schema["type"].(string)
+	if raw, present := schema["type"]; present && !isString {
+		return []string{fmt.Sprintf("%s: unsupported schema type %s", path, abbrev(raw))}
+	}
 	if t != "" {
 		ok, known := isType(t, v)
 		if !known {
@@ -94,18 +100,44 @@ func isType(t string, v any) (ok, known bool) {
 	return ok, true
 }
 
+// jsonEqual is enum membership as JavaScript's includes sees it: numbers
+// compare by value (1 equals 1.0), anything else by its JSON encoding.
 func jsonEqual(a, b any) bool {
+	if fa, ok := asFloat(a); ok {
+		fb, ok := asFloat(b)
+		return ok && fa == fb
+	}
 	ja, errA := json.Marshal(a)
 	jb, errB := json.Marshal(b)
 	return errA == nil && errB == nil && bytes.Equal(ja, jb)
 }
 
-func abbrev(v any) string {
-	b, _ := json.Marshal(v)
-	if len(b) > 40 {
-		return string(b[:40]) + "…"
+func asFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
 	}
-	return string(b)
+	return 0, false
+}
+
+// abbrev renders v as JSON cut to 40 runes; it is fed back to the model.
+func abbrev(v any) string {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.Encode(v)
+	return truncateRunes(strings.TrimSuffix(buf.String(), "\n"), 40)
+}
+
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
 
 func sortedKeys(m map[string]any) []string {

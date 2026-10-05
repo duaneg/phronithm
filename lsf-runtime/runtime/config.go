@@ -47,7 +47,8 @@ type Role struct {
 }
 
 // RoleRule matches when every non-empty matcher matches (AND); at least one is
-// set. Express OR as two rules. Label is an RE2 regex.
+// set. Express OR as two rules. Label is an RE2 regex, unanchored: anchor it
+// with ^ to match a label prefix.
 type RoleRule struct {
 	AgentType string `json:"agentType,omitempty"`
 	Label     string `json:"label,omitempty"`
@@ -55,6 +56,7 @@ type RoleRule struct {
 }
 
 // SkillRule sends a matching label's prompt as the skill's slash command.
+// Label is an unanchored RE2 regex.
 type SkillRule struct {
 	Label string `json:"label"`
 	Skill string `json:"skill"`
@@ -98,6 +100,9 @@ func LoadConfig(path string) (Config, error) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&c); err != nil {
 		return Config{}, fmt.Errorf("config %s: %w", path, err)
+	}
+	if dec.More() {
+		return Config{}, fmt.Errorf("config %s: trailing data after the config object", path)
 	}
 	if err := c.prepare(); err != nil {
 		return Config{}, fmt.Errorf("config %s: %w", path, err)
@@ -150,13 +155,27 @@ func (c *Config) prepare() error {
 			errs = append(errs, fmt.Errorf("skills[%d]: skill is required", i))
 		}
 		re, err := regexp.Compile(s.Label)
-		if err != nil || s.Label == "" {
-			errs = append(errs, fmt.Errorf("skills[%d].label: a regex is required: %v", i, err))
+		switch {
+		case s.Label == "":
+			errs = append(errs, fmt.Errorf("skills[%d].label is required", i))
+		case err != nil:
+			errs = append(errs, fmt.Errorf("skills[%d].label: %w", i, err))
 		}
 		c.skillRes[i] = re
 	}
 	if c.Concurrency < 0 || c.MaxSessionWaits < 0 || c.Caps.MaxCalls < 0 || c.Caps.MaxCostUSD < 0 {
 		errs = append(errs, errors.New("concurrency, maxSessionWaits and caps must not be negative"))
+	}
+	durations := []Duration{c.GuardTimeout, c.KillGrace, c.SessionLimitMargin, c.SessionLimitFallback, c.Caps.MaxWallClock}
+	durations = append(durations, c.Backoff...)
+	for _, d := range durations {
+		if d < 0 {
+			errs = append(errs, errors.New("durations must not be negative"))
+			break
+		}
+	}
+	if c.Backoff != nil && len(c.Backoff) == 0 {
+		errs = append(errs, errors.New("backoff: omit it for the default; an empty list would retry transient errors never"))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return err

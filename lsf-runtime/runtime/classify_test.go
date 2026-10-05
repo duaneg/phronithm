@@ -121,3 +121,12 @@ func TestClassifyOkCarriesOutputAndDenials(t *testing.T) {
 		t.Fatalf("denials %v", d)
 	}
 }
+
+func TestDriftedFieldKeepsResult(t *testing.T) {
+	a := &attempt{acc: accFromLines(initLine,
+		`{"type":"result","subtype":"success","is_error":false,"api_error_status":"none","structured_output":{"verdict":"pass"},"total_cost_usd":0.5}`)}
+	v := classify(a, []byte(verdictSchema), "", false)
+	if v.class != classOK || a.acc.Result.CostUSD != 0.5 || a.acc.BadLines != 0 {
+		t.Fatalf("got %+v, acc %+v", v, a.acc)
+	}
+}

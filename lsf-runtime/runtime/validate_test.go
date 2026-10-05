@@ -49,3 +49,21 @@ func TestValidateUnsupportedType(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestValidateEnumNumbersAndTypes(t *testing.T) {
+	if got := validateOutput([]byte(`{"enum":[1,2]}`), []byte(`1.0`)); len(got) != 0 {
+		t.Errorf("1.0 in enum [1,2]: %q", got)
+	}
+	if got := validateOutput([]byte(`{"enum":[1,2]}`), []byte(`"1"`)); len(got) != 1 {
+		t.Errorf(`"1" in enum [1,2]: %q`, got)
+	}
+	if got := validateOutput([]byte(`{"type":["string","null"]}`), []byte(`"x"`)); len(got) != 1 || !strings.Contains(got[0], "unsupported schema type") {
+		t.Errorf("type list: %q", got)
+	}
+	if got := abbrev(strings.Repeat("é", 50)); !strings.HasSuffix(got, "…") || !strings.Contains(got, "é") {
+		t.Errorf("abbrev: %q", got)
+	}
+	if got := abbrev("<a&b>"); got != `"<a&b>"` {
+		t.Errorf("abbrev escapes HTML: %q", got)
+	}
+}

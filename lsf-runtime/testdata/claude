@@ -1,11 +1,91 @@
 #!/usr/bin/env bash
-# Stub `claude -p ... --output-format stream-json`. STUB_MODE: ok | hang | nullout
+# Stub `claude -p --output-format stream-json` for the runtime's tests.
+# Bash 3.2 compatible (macOS). The prompt is read from stdin.
+#
+# STUB_SCRIPT   comma list of modes, one per invocation, the last repeating
+#               (STUB_MODE is the single-mode form; default ok).
+# STUB_STATE    directory for per-invocation records: count, argv.<n> (NUL-
+#               separated), stdin.<n>, pids.<n> ("leader grandchild"), and
+#               active/maxactive (concurrent invocations).
+# STUB_PIDFILE  also receives the grandchild pid of a hang mode.
+# STUB_RESET_IN seconds from now to the session-limit reset (default 1).
+#
+# Modes: ok | cost:<usd> | nullout | invalid | slow:<secs> | transient |
+#        session | session-noreset | hang | hang-ignore-term |
+#        orphan-ignore-term | fixture:<name> (cats streams/<name>.jsonl)
 set -u
-mode="${STUB_MODE:-ok}"
-echo '{"type":"system","subtype":"init","session_id":"stub-1","tools":["Read","Bash"]}'
-echo '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}'
+here=$(cd "$(dirname "$0")" && pwd)
+state="${STUB_STATE:-}"
+prompt=$(cat)
+n=1
+
+lock() { while ! mkdir "$state/.lock" 2>/dev/null; do sleep 0.01; done; }
+unlock() { rmdir "$state/.lock"; }
+bump() { # name delta: adds delta to a counter file; tracks maxactive
+  local v
+  v=$(cat "$state/$1" 2>/dev/null || echo 0)
+  v=$((v + $2))
+  echo "$v" > "$state/$1"
+  if [ "$1" = active ] && [ "$v" -gt "$(cat "$state/maxactive" 2>/dev/null || echo 0)" ]; then echo "$v" > "$state/maxactive"; fi
+}
+if [ -n "$state" ]; then
+  mkdir -p "$state"
+  lock
+  n=$(( $(cat "$state/count" 2>/dev/null || echo 0) + 1 ))
+  echo "$n" > "$state/count"
+  bump active 1
+  unlock
+  printf '%s\0' "$@" > "$state/argv.$n"
+  printf '%s' "$prompt" > "$state/stdin.$n"
+fi
+finish() { if [ -n "$state" ]; then lock; bump active -1; unlock; fi; }
+
+session=stub
+prev=
+for a in "$@"; do [ "$prev" = --session-id ] && session=$a; prev=$a; done
+
+script="${STUB_SCRIPT:-${STUB_MODE:-ok}}"
+IFS=, read -r -a modes <<< "$script"
+i=$((n - 1))
+[ "$i" -ge "${#modes[@]}" ] && i=$((${#modes[@]} - 1))
+mode=${modes[$i]}
+
+init() { echo "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$session\",\"tools\":[\"Read\",\"Bash\"],\"slash_commands\":[]}"; }
+result_ok() { echo "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"structured_output\":$1,\"total_cost_usd\":${2:-0.01}}"; }
+hang() { # $1: leader TERM disposition, $2: grandchild TERM disposition
+  [ "$1" = ignore ] && trap '' TERM
+  if [ "$2" = ignore ]; then (trap '' TERM; exec sleep 300) & else sleep 300 & fi
+  g=$!
+  [ -n "${STUB_PIDFILE:-}" ] && echo "$g" > "$STUB_PIDFILE"
+  [ -n "$state" ] && echo "$$ $g" > "$state/pids.$n"
+  while :; do wait; done
+}
+
 case "$mode" in
-  ok)      echo '{"type":"result","subtype":"success","is_error":false,"structured_output":{"verdict":"pass","n":3},"total_cost_usd":0.012}' ;;
-  nullout) echo '{"type":"result","subtype":"success","is_error":false,"structured_output":null}' ;;
-  hang)    sleep 300 & echo "$!" > "${STUB_PIDFILE:-/dev/null}"; wait ;;
+  fixture:*) ;;
+  *) init; echo '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}' ;;
 esac
+code=0
+case "$mode" in
+  ok)        result_ok '{"verdict":"pass","n":3}' ;;
+  cost:*)    result_ok '{"verdict":"pass","n":3}' "${mode#cost:}" ;;
+  nullout)   echo '{"type":"result","subtype":"success","is_error":false,"structured_output":null}' ;;
+  invalid)   result_ok '{"wrong":1}' ;;
+  slow:*)    sleep "${mode#slow:}"; result_ok '{"verdict":"pass","n":3}' ;;
+  transient) echo '{"type":"assistant","error":"overloaded","message":{"content":[{"type":"text","text":"Overloaded"}]}}'
+             echo '{"type":"result","subtype":"success","is_error":true,"api_error_status":529,"total_cost_usd":0}'; code=1 ;;
+  session|session-noreset)
+             echo '{"type":"assistant","error":"rate_limit","message":{"content":[{"type":"text","text":"You'"'"'ve hit your session limit"}]}}'
+             if [ "$mode" = session ]; then
+               r=$(( $(date +%s) + ${STUB_RESET_IN:-1} ))
+               echo "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"rejected\",\"resetsAt\":$r,\"rateLimitType\":\"five_hour\"}}"
+             fi
+             echo '{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"total_cost_usd":0}'; code=1 ;;
+  hang)               hang default default ;;
+  hang-ignore-term)   hang ignore ignore ;;
+  orphan-ignore-term) hang default ignore ;;
+  fixture:*) cat "$here/streams/${mode#fixture:}.jsonl" ;;
+  *) echo "stub: unknown mode $mode" >&2; code=2 ;;
+esac
+finish
+exit "$code"
