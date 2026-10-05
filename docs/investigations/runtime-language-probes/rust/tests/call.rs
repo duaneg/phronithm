@@ -23,6 +23,7 @@ fn hang_killed() {
     assert!(t.elapsed() < Duration::from_secs(3));
     std::thread::sleep(Duration::from_millis(100));
     let pid: i32 = std::fs::read_to_string(&f).unwrap().trim().parse().unwrap();
+    let _ = std::fs::remove_file(&f);
     assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "grandchild alive");
 }
 #[test]

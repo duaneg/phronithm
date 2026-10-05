@@ -13,11 +13,12 @@ class T(unittest.TestCase):
     def test_null(self):
         self.assertEqual(call(STUB, {"STUB_MODE": "nullout"}, 10).kind, "null")
     def test_hang_killed(self):
-        f = tempfile.NamedTemporaryFile(delete=False).name
-        t = time.monotonic()
-        o = call(STUB, {"STUB_MODE": "hang", "STUB_PIDFILE": f}, 1)
-        self.assertEqual(o.kind, "timeout"); self.assertLess(time.monotonic() - t, 3)
-        time.sleep(0.1); self.assertFalse(alive(int(open(f).read())))
+        with tempfile.TemporaryDirectory() as d:
+            f = os.path.join(d, "pid")
+            t = time.monotonic()
+            o = call(STUB, {"STUB_MODE": "hang", "STUB_PIDFILE": f}, 1)
+            self.assertEqual(o.kind, "timeout"); self.assertLess(time.monotonic() - t, 3)
+            time.sleep(0.1); self.assertFalse(alive(int(open(f).read())))
     def test_parallel(self):
         self.assertTrue(all(o.kind == "ok" for o in parallel(STUB, 8)))
 unittest.main()
