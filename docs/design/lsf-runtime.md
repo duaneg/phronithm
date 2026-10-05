@@ -100,7 +100,7 @@ Facts from the Claude Code plugin docs (code.claude.com/docs/en/plugins, fetched
 
 ### Weighing
 
-**Install** favours Python outright: no build, binaries, release or first-use download. Its costs are an interpreter floor that no one has tested and optional typing (mypy). Among the compiled candidates, Go builds every target from one host (probed). Rust needs a CI runner matrix (probed). Haskell's distribution shape is unknown: not probed, rather than shown to be worse. Every compiled verdict also needs a distribution unit the plan does not yet have (see Open), which Python does not.
+**Install** favours Python outright: no build, binaries, release or first-use download. Its costs are an interpreter floor that no one has tested and optional typing (mypy). Among the compiled candidates, Go builds every target from one host (probed). Rust needs a CI runner matrix (probed). Haskell's distribution shape is unknown: not probed, rather than shown to be worse. Every compiled verdict also needs a distribution unit (see Plan consequences), which Python does not.
 
 **Iteration** favours Python (no build) and Go (about a second to rebuild and test).
 
@@ -131,7 +131,7 @@ Go was recommended, and chosen, on the probed cross-builds and iteration speed, 
 
 Go's type weaknesses (no sum types, lenient decoding by default) fall on code that classifies by list membership. Strict decoding comes from the schema validator plus `DisallowUnknownFields`.
 
-The decision is conditional on the re-plan adding the distribution unit (see Open). Without that unit, `script-retirement` cannot finish for plugin users. The verdict therefore takes on that unit's cost: CI for four targets, a release, and the D1-or-D4 choice.
+The decision carries the cost of the distribution unit (`runtime-distribution`): CI for four targets, a release, and the D1-or-D4 choice.
 
 **Alternatives put to the verdict:**
 
@@ -159,17 +159,14 @@ The decision is conditional on the re-plan adding the distribution unit (see Ope
 - `go test ./...` from `lsf-runtime/` is the suite that `script-retirement` and `programme-close` name.
 - The `runtime/` directory's package is named `lsfrt`, so it does not shadow the stdlib's `runtime`.
 
-### Open for the re-plan
+### Plan consequences
 
-- **Distribution.** No unit owns the route, the CI or the release: the spike's estimate counted "packaging", but the re-plan gave it no unit. The re-plan should add one before `script-retirement`. That unit chooses between D1 and D4 on these points:
+- **Distribution.** The route, the CI and the release are owned by `runtime-distribution`, which runs before `script-retirement` and chooses between D1 and D4:
   - **D1** keeps the git marketplace source. It needs a first-use download and a pinned hash per target. Its release order is: build at commit X, release, then commit the hashes at X+1 and version the plugin there.
   - **D4** needs no network at first use and no hash commit. The cost is that the whole plugin ships as a CI-built archive.
-  - **Development (either route).** `claude --plugin-dir` and the shakedown fixture must run the working tree's build, not a release. The launcher script prefers a locally built binary, or one named by an environment variable, over a downloaded one.
-- **Shared root files.** No unit's Scope covers these:
-  - `go.mod` and `go.sum`, which also pin the toolchain;
-  - `testdata/` and `tools/`.
-
-  `runtime-core` and `orchestrator-port-plan` run side by side and both touch them. Serialising those two units would put `runtime-core` (large) on the critical path. Proposal for the re-plan:
-  - **A skeleton.** This unit, after the verdict, commits `go.mod`, the four empty packages, `testdata/claude` and an empty `tools/`. That adds those paths to its Scope.
-  - With no dependencies, `go.mod` changes only when a unit adds a dependency or a `tool` directive. That is a recorded decision, serialised on `go.mod`. `tools/` is written only by the two port units, which are already serial.
+  - **Development (either route).** `claude --plugin-dir` and the shakedown fixture must run the working tree's build, not a release. The launcher prefers a locally built binary, or one named by an environment variable, over a downloaded one.
+- **Shared root files.**
+  - The skeleton (`go.mod`, the four package stubs and `testdata/claude`) is committed at `c3330d2`, so `runtime-core` and `orchestrator-port-plan` run side by side.
+  - `testdata/` is in `runtime-core`'s Scope, and `tools/` in the two port units', which are serial.
+  - `go.mod` changes only when a unit adds a dependency or a `tool` directive, which that unit records as a decision.
 - **No top-level `bin/`.** Skills invoke the runtime through `${CLAUDE_PLUGIN_ROOT}`, so organisation-sync installs keep working.
