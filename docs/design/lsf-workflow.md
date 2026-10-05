@@ -75,9 +75,12 @@ Documented behaviour this design relies on:
   `wf_119eb6c3-fab`; AskUserQuestion answer `wf_a61f647b-bc6`, which relays
   the turn's message, not the answer). In one turn started by a task
   notification, two runs carried no relay, the second after an AskUserQuestion
-  answer (`wf_90db02e7-63b`, `wf_956ed621-4cd`). Unprobed: a slash-command or
-  skill-expanded launch prompt, a human message queued mid-turn, and runs
-  with several agents.
+  answer (`wf_90db02e7-63b`, `wf_956ed621-4cd`). Earlier runs agree
+  (2.1.274–2.1.283; none before 2.1.274 carried a relay): every agent of a
+  run launched in a human-started turn carried it, a slash-command launch
+  relays the command and its arguments, not the skill body, and a resume
+  relays by its own turn. Unprobed at 2.1.289: a slash-command launch and a
+  human message queued mid-turn.
 - **Plugins ship workflows** from a `workflows/` directory, namespaced
   `phronithm:<meta.name>`.
 - **Every agent pays a floor before its first read**: the harness prompt

@@ -39,11 +39,20 @@ Each agent's transcript line 0 is a user turn opening `[Workflow harness — use
 - **H1** (the session's most recent human prompt): refuted at 2.1.289 by `wf_90db02e7-63b`, which followed the human prompt `Resume relay-probe` with no later human prompt and carried no relay.
 - **H3** (the prompt that started the current turn; none if a notification started it): not contradicted by the six 2.1.289 runs or the 2.1.288 runs. An AskUserQuestion answer does not start a turn and is not relayed: in a notification-started turn nothing is relayed (`wf_956ed621-4cd`), in a human-started turn the turn's prompt is (`wf_a61f647b-bc6`). The notification case rests on one turn (two runs sharing a `promptId`).
 
-H3 does not yet reconcile the earlier non-relay runs: postmortem §F's 8 of 28 (it attributes them to launches from an AskUserQuestion answer or a task notification) and cartomancer-v2's 15 of 18. H3 explains them only if those launches were in notification-started turns; that is unchecked, and a harness change before 2.1.289 is not excluded.
+## Reconciliation with earlier runs
+
+Every workflow run in the archipeligo-evolved and cartomancer-v2 project transcripts, grouped by launch: the Workflow call found in the host transcript, its turn's starting entry found by walking back past tool results and mid-turn notifications (`queue-operation remove`), and each agent's first user turn checked for the relay frame.
+
+- **archipeligo (2.1.278–2.1.283).** All 20 runs launched in a human-started turn carried the relay in every agent, including 6 pasted prompts and 3 `/phronithm:lsf-drive` launches. All 8 launched as the first tool call of a notification-started turn (`wf_1ed25bc2-6be`, `wf_e714da30-985`, `wf_b4372b73-be0`, `wf_f97d8e41-bd7`, `wf_3f1363e4-8cf`, `wf_29189f36-57c`, `wf_78fa5d4d-514`, `wf_35d9d789-ba9`) carried none. This is postmortem §F's 20 of 28.
+- **cartomancer-v2 (2.1.267–2.1.276).** All 15 runs launched at 2.1.267–2.1.273 carried no relay, every one from a human-started turn. All 3 launched at 2.1.274 or later carried it (`wf_e50c9431-6d1`, `wf_58847e5b-beb`, `wf_ea1ae00c-488`). This is the register's 3 of 18: the relay first appears between 2.1.273 and 2.1.274.
+- **A resume is a launch.** `wf_58847e5b-beb` was launched in a human-started turn (19 agents relayed), then resumed with `resumeFromRunId` in a notification-started turn (cartomancer host `771809f3`, line 432); its 32 later agents carried none.
+- **The relay is fixed at launch.** Agents of runs still live across a `/clear` relay the launching session's message (`wf_3478a815-312`, `wf_405a2c0f-0ec`, `wf_a50c2fbb-5a3`, `wf_ea1ae00c-488`). Each of those runs shows one non-relay agent in the post-`/clear` session directory: an agent in flight at the `/clear`, whose file there starts with a tool result, not its first turn.
+- **A slash-command launch relays the command, not the skill body**: `<command-message>`, `<command-name>` and `<command-args>` (`wf_ec361be0-a69`, `wf_1078a8f1-b58` at 2.1.278; `wf_95020a23-3cc` at 2.1.281).
+
+No earlier run contradicts H3 at 2.1.274 and later.
 
 ## Open obligations
 
-- Reconcile the archipeligo and cartomancer-v2 non-relay runs: check each launch turn's origin (`origin.kind`, `promptId`, where those versions record them).
-- Unprobed launch prompts: a slash command or skill-expanded prompt (`phronithm:lsf-drive` is entered that way) and a human message queued mid-turn.
-- Single-agent runs only; whether every agent of a multi-agent run carries the relay is the postmortem's observation, not re-probed.
+- Unprobed at 2.1.289: a slash-command launch (seen only at 2.1.278–2.1.281, above) and a human message queued mid-turn.
+- Multi-agent runs are not re-probed at 2.1.289; at 2.1.278–2.1.283 every agent of a human-turn launch carried the relay.
 - One run per condition; determinism is not shown. The 2.1.288 rows were not re-verified by the critique.
