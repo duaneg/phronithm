@@ -2,7 +2,7 @@
 
 ## Summary
 
-A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 28 units, three complete; critical path 11 units through the substrate decision and the serialised script stream. Base commit `b3dac6a`.
+A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 28 units, four complete; critical path 11 units through the substrate decision and the serialised script stream. Base commit `b3dac6a`.
 
 The postmortem's problems are taken as accurate for archipeligo. The proposals in [lsf-improvements](../design/lsf-improvements.md) are candidate options, not designs: every decision unit states its problem without a solution, checks whether the problem holds outside archipeligo, and weighs the proposal against alternatives that include doing nothing.
 
@@ -16,18 +16,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 
 ### problem-register — complete at `f10f9d5`; entry at `f3a395a`; report `docs/plans/problem-register-completion.md`
 
-### relay-probe
-- **Type**: design
-- **Risk**: low — a bounded probe
-- **Clarity**: specified
-- **Iteration**: write-once
-- **Effort**: small
-- **Scope**: `docs/design/lsf-workflow.md::constraints`
-- **Publishes**: the harness relay behaviour at the pinned Claude Code version
-- **Depends on**: none
-- **External gates**: `claude-code-workflow-tool` (environment, Claude Code 2.1.289)
-- **Done condition**: The design's Constraints section records, at Claude Code 2.1.289, whether the launch turn's user message reaches workflow agents when the launch follows (a) a typed message, (b) a tool result, (c) a pasted prompt, each observed in a probe run's agent transcript and cited by run id.
-- **Description**: Postmortem §F. The relay was observed 2026-09-19 to 10-02 and reported upstream; the harness may have changed since. The result is an input to the substrate decision and decides whether `relay-mitigation` has anything to do.
+### relay-probe — complete at `ff1a49f`; entry at `83bebd1`; report `docs/investigations/relay-probe-results.md`
 
 ### substrate-options
 - **Type**: design
@@ -205,15 +194,15 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 ### relay-mitigation
 - **Type**: bug-fix
 - **Risk**: low
-- **Clarity**: exploratory — one open decision: the mitigation, weighed against "never procedural sign-off"
+- **Clarity**: exploratory — one open decision: the mitigation
 - **Iteration**: write-once
 - **Effort**: small
 - **Scope**: `workflows/lsf/implement.js`, `workflows/lsf/test/implement.test.js`, `workflows/lsf-implement.js`, `skills/lsf-drive/SKILL.md::launch`, `skills/lsf-drive/SKILL.md::relaunch`, `docs/design/lsf-workflow.md::constraints`
 - **Publishes**: none
 - **Depends on**: relay-probe (knowledge, relay behaviour); substrate-spike (design, confirmed substrate); findings-consumer-impl (logical, serialises the script files)
 - **External gates**: `claude-code-workflow-tool` (environment, Claude Code 2.1.289); `node` (environment, v26.9.0)
-- **Done condition**: Either a run launched the way `phronithm:lsf-drive` prescribes shows no agent acting on a relayed message, cited by run id and transcript; or `relay-probe` found no relay and the register row is closed as not reproducible at the pinned version. Either way, `phronithm:lsf-drive`'s Relaunch section keeps `gate-not-run`'s route: an environment or project change, not a decision.
-- **Description**: Postmortem §F. The improvements note's remedy adds a confirmation to every launch; the design's opening paragraph rules out procedural sign-off, so the unit must argue the trade or find another route.
+- **Done condition**: A run launched the way `phronithm:lsf-drive` prescribes, from a turn in which the requester has typed a message, shows no agent acting on a relayed message, cited by run id and transcript. A relaunch and a resume are covered. `phronithm:lsf-drive`'s Relaunch section keeps `gate-not-run`'s route: an environment or project change, not a decision.
+- **Description**: Postmortem §F. At 2.1.289 the latest human message delivered in the launch turn is relayed; a turn started by a task notification with no human message carries none, and a resume relays by its own turn (`relay-probe` results, H4). The improvements note's remedy, confirming every launch through AskUserQuestion, does not suppress the relay (`wf_a61f647b-bc6`). A relaunch on a workflow's return notification carries none; one after the requester types a decision relays it.
 
 ### long-running-design
 - **Type**: design
@@ -364,7 +353,7 @@ units:
         pin: "quality-bar-interiors-signals.md; transcripts from 2026-09-10"
   - id: relay-probe
     type: design
-    complete: false
+    complete: true
     dependencies: []
     scope: [docs/design/lsf-workflow.md::constraints]
     publishes: [relay behaviour]
@@ -644,7 +633,7 @@ graph TD
   CC([claude-code-workflow-tool 2.1.289])
 
   PR[problem-register: complete]
-  RP[relay-probe]
+  RP[relay-probe: complete]
   SO[substrate-options]
   SS[substrate-spike]
   APR[arch-pin-refresh: complete]
@@ -817,7 +806,7 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 - R5 phase2-gate-discipline — the opus-tier adversary re-run that `critique-gate.md` waits on belongs to the critique-upgrade backlog and is left out of this programme by requester decision (2026-10-04); the unit sets an interim policy without it.
 - R6 shakedown-fixture — a fixture run shows the workflow completes, not that judgement stages catch defects; the signal-layer measurement in the design's Testing section stays uncommitted.
 - R7 cross-cutting — improvements that add rules to `lsf-drive` (18 KB) and `breakdown` (32 KB) raise every agent's reading cost; `drive-mechanics` reports the size change, the others do not.
-- R8 relay-probe — the harness changes between releases; a result pinned to 2.1.289 may not hold at the next version.
+- R8 relay-mitigation — the relay is undocumented harness behaviour that began at 2.1.274; a mitigation resting on 2.1.289's turn rule may not hold at the next version.
 - R9 long-running-design — high risk but placed late because it needs the confirmed substrate and the empirical unit shape; if either slips, the largest single cost in the postmortem (39.7 agent-hours of campaign stages) stays unaddressed longest.
 - R10 cross-cutting — the gate can still misclassify a design unit's settled decision as a decision move, recurring run #8's false stop; per-unit diffs, unit type and the completion report narrow it, and `shakedown-fixture`'s first run is the check.
 - R11 cross-cutting — a stage that reports `green` for a gate it did not run passes the `gate-not-run` check; it stays open until the substrate decision says what removes it.
@@ -827,6 +816,12 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 ## Plan Maintenance
 
 On each unit completion, run the re-plan step before starting its dependants.
+
+### 2026-10-05 — relay-probe complete
+Report: docs/investigations/relay-probe-results.md @ ff1a49f.
+done-condition relay-mitigation — the relay reproduces at 2.1.289, so the not-reproducible branch is removed; the run is launched from a requester-typed turn and covers a relaunch and a resume
+check relay-mitigation — the AskUserQuestion remedy is refuted, so the trade against procedural sign-off no longer arises; description records the turn rule; R8 re-homed to it
+check substrate-options — reads the relay as harness-imposed under the Workflow tool from 2.1.274; done condition unchanged
 
 ### 2026-10-05 — gate-results-integrity complete
 Report: docs/plans/gate-results-integrity-completion.md @ efc7658.
