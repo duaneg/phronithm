@@ -30,7 +30,7 @@ type scenario struct {
 }
 
 // odd is string data with the characters JSON encoders disagree on.
-const odd = "x <y> & z   \U0001F600 `tick` \"q\"\nline2"
+const odd = "x <y> & z \u2028 \u2029 \x01 \x7f \U0001F600 `tick` \"q\" \\ \nline2"
 
 func merge(hs ...Hs) Hs {
 	out := Hs{}
