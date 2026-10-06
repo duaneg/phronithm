@@ -69,6 +69,6 @@ None named this unit.
   - `guard-killed-after-result`;
   - orphan carry-forward on `ps` failure;
   - the label-uniqueness assumption, made explicit.
-- **Review findings.** The per-step and full-diff critiques found no Critical issues. They found 22 Significant findings, all fixed.
+- **Review findings.** The per-step and full-diff critiques found no Critical issues. They found 20 Significant findings, all fixed; the plan critique found another 17, all addressed in the plan.
 
 Run `/phronithm:breakdown` in re-plan mode with the decomposition plan and this report before starting any dependent unit.
