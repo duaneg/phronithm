@@ -2,7 +2,7 @@ package orchestrator
 
 import (
 	"encoding/json"
-	"strings"
+	"regexp"
 	"testing"
 
 	"github.com/duaneg/phronithm/lsf-runtime/orchestrator/orchtest"
@@ -252,36 +252,60 @@ func TestUncommittedPerSite(t *testing.T) {
 		{"termination", "termination", true, twoWaves, nil, nil},
 		{"obligations", "obligations", false, twoWaves, nil, nil},
 	} {
-		t.Run(tc.prefix, func(t *testing.T) {
-			hs := Hs{}
-			for k, h := range tc.extra {
-				if h != nil {
-					hs[k] = h
+		for _, ev := range []struct {
+			name             string
+			cr               lsfrt.CallResult
+			writer, reader   string // the kind at a writer and at a reader
+			readerStops, val bool   // val: the value survives
+		}{
+			{"uncommitted", dirty, "uncommitted-at-return", "residue-at-return", false, true},
+			{"violation", lsfrt.CallResult{Violations: []string{"$.result: required"}}, "schema-violation", "schema-violation", true, false},
+		} {
+			t.Run(tc.prefix+"/"+ev.name, func(t *testing.T) {
+				hs := Hs{}
+				for k, h := range tc.extra {
+					if h != nil {
+						hs[k] = h
+					}
 				}
-			}
-			hs[tc.prefix] = withCall(tc.prefix, hs[tc.prefix], dirty)
-			s := stub(t, tc.p(), hs, tc.args)
-			out := run(t, s)
-			if !has(s.Labels(), tc.label) {
-				t.Fatalf("%s not called: %v", tc.label, s.Labels())
-			}
-			kind := "residue-at-return"
-			if tc.writer {
-				kind = "uncommitted-at-return"
-			}
-			rows := 0
-			for _, l := range filterPrefix(s.Labels(), "ledger:") {
-				rows += strings.Count(ledgerText(t, s, l), "| "+kind+" | 1 path(s) uncommitted at return: src/a.go | "+tc.label+" |")
-			}
-			eq(t, rows, 1, "rows of "+kind)
-			if tc.writer {
-				eq(t, out.Status, "stopped")
-				if !has(out.stopKinds(), kind) {
-					t.Errorf("stops %v", out.stopKinds())
+				cr := ev.cr
+				if ev.val {
+					hs[tc.prefix] = withCall(tc.prefix, hs[tc.prefix], cr)
+				} else {
+					hs[tc.prefix] = func(Call, *State) any { return cr }
 				}
-			} else if has(out.stopKinds(), "uncommitted-at-return") || has(out.stopKinds(), kind) {
-				t.Errorf("a reader stopped: %v", out.stopKinds())
-			}
-		})
+				s := stub(t, tc.p(), hs, tc.args)
+				out := run(t, s)
+				if !has(s.Labels(), tc.label) {
+					t.Fatalf("%s not called: %v", tc.label, s.Labels())
+				}
+				kind, stops := ev.reader, ev.readerStops
+				if tc.writer {
+					kind, stops = ev.writer, true
+				}
+				row := regexp.MustCompile(`\| ` + kind + ` \| [^|]* \| ` + regexp.QuoteMeta(tc.label) + ` \|`)
+				rows := 0
+				for _, l := range filterPrefix(s.Labels(), "ledger:") {
+					rows += len(row.FindAllString(ledgerText(t, s, l), -1))
+				}
+				eq(t, rows, 1, "rows of "+kind)
+				if stops {
+					eq(t, out.Status, "stopped")
+					if !has(out.stopKinds(), kind) {
+						t.Errorf("stops %v", out.stopKinds())
+					}
+				} else if has(out.stopKinds(), kind) || has(out.stopKinds(), ev.writer) {
+					t.Errorf("a reader stopped: %v", out.stopKinds())
+				}
+			})
+		}
 	}
+}
+
+// S5: a gate-not-run stop is not retried: one implement call, then the stop.
+func TestGateNotRunNotRetried(t *testing.T) {
+	s := stub(t, graph("plan0", unit("A")), Hs{"implement": implemented(M{"gates": gates(g("xtask ci", "not-run", "timed out"))})}, nil)
+	out := run(t, s)
+	eqs(t, out.stopKinds(), []string{"gate-not-run"})
+	eq(t, len(filterPrefix(s.Labels(), "implement:")), 1, "implement calls")
 }

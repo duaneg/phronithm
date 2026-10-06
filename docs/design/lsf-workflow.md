@@ -182,8 +182,9 @@ carries its own unit plan template and stages instead:
    the Bash tool's limit without ending its turn: run it detached with its
    output, exit status and PID in per-gate files under the git directory,
    and poll in calls shorter than the limit until the gate ends or dies (no
-   status file: `not-run`). A gate reported `not-run`, or no gate reported,
-   is a STOP (`gate-not-run`) before review: the reviewers would meet the
+   status file: `not-run`). A gate reported `not-run` is a STOP
+   (`gate-not-run`) before review, and no gate reported is a STOP
+   (`gate-omitted`; `gate-not-run` in the Workflow script): the reviewers would meet the
    same tool timeout, and a relaunch meets the same gate, so the requester
    changes the environment or the project until the gate completes. A design
    unit is exempt; its review reads no gates.
@@ -194,8 +195,8 @@ carries its own unit plan template and stages instead:
    again after each merge. Both reviewers are given the gate runs at the
    branch's HEAD — the implement stage's, or after a code fix the fix
    stage's, which re-runs every gate the implement stage ran and returns the
-   runs (a code fix whose gate did not run, or that omits one of those gates,
-   stops with `gate-not-run`, as at implement) — and take
+   runs (a code fix whose gate did not run stops with `gate-not-run`, and
+   one that omits one of those gates with `gate-omitted`, as at implement) — and take
    them as the test and lint result: no suite, CI job, or
    lint pass of their own, a single targeted test only to check a finding's
    claim (in a compiled project the two suite re-runs cost more of the
@@ -492,6 +493,9 @@ STOP (return an escalation record):
   uncommitted check failed. In the main checkout a requester's own edit
   during the call counts too: the statement names the paths;
 - a skill that did not load after the runtime's retry;
+- a gate a stage left out of its return (`gate-omitted`): none reported, or
+  one the implement stage ran that a code fix did not report;
+- a code stage's own failure (`stage-fault`), its reason in the statement;
 - a stage result outside its schema (an enum value, a missing field), even
   where its mapping would otherwise record it: an unknown merge status is
   not a claimed-disjoint conflict, and an unknown finding severity is not
@@ -558,7 +562,7 @@ A stop does not always relaunch the workflow. Per STOP kind:
 | STOP kind | Relaunch | Inputs |
 |-----------|----------|--------|
 | Architecture invalidated; a re-plan item unabsorbed because the answer changes a decision in the architecture document or the request record | `phronithm:large-scale-feature` Phase 2, re-entry sub-procedure (fresh session; the skill's startup prompt carries the inputs) | Per `phronithm:lsf-drive`'s *Return to Phase 2* prompt: plan SHA, architecture document and request record, integration branch, ledger path, the stop with the gate's five fields, the requester's decision, unscribed ledger rows |
-| Everything else: done condition unevaluable as written (the requester's rewrite is a decision the decision re-plan applies); cycle or unrepairable budget excess; gate non-convergence; unresolvable merge conflict or regression; environment drift; gated units; null agent; load failure; undischarged obligation; uncommitted at return; skill not loaded; schema violation | Same workflow | Decision log SHA |
+| Everything else: done condition unevaluable as written (the requester's rewrite is a decision the decision re-plan applies); cycle or unrepairable budget excess; gate non-convergence; unresolvable merge conflict or regression; environment drift; gated units; null agent; load failure; undischarged obligation; uncommitted at return; skill not loaded; schema violation; gate omitted; code-stage fault | Same workflow | Decision log SHA |
 
 For an uncommitted-at-return stop, the requester commits or removes the named paths and relaunches. A relaunch without decisions replays the call, which re-checks the paths and passes once they are clean. With decisions, every prompt changes and the stage runs again. An isolated writer's worktree is reused, so dirt still in it is reported again.
 

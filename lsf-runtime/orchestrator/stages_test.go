@@ -316,7 +316,7 @@ func TestLoadFaultsStop(t *testing.T) {
 		t.Fatalf("%+v %v", got, err)
 	}
 	st := got.stops[0]
-	eq(t, st.Kind, "agent-null")
+	eq(t, st.Kind, "stage-fault")
 	match(t, st.Statement, `^load failed: .*docs/plans/f-breakdown\.md does not exist`)
 }
 
@@ -811,7 +811,7 @@ func TestCodeStageFaultsStop(t *testing.T) {
 	eq(t, out.Status, "stopped")
 	eq(t, out.Escalation.Stage, "ledger")
 	st := out.stops()
-	if len(st) != 1 || st[0].Kind != "agent-null" || st[0].Statement != "ledger failed: git: boom" || st[0].Referent != "docs/plans/f-signals/plan0.md" {
+	if len(st) != 1 || st[0].Kind != "stage-fault" || st[0].Statement != "ledger failed: git: boom" || st[0].Referent != "docs/plans/f-signals/plan0.md" {
 		t.Errorf("%+v", st)
 	}
 

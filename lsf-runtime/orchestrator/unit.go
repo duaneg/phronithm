@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/duaneg/phronithm/lsf-runtime/plan"
@@ -138,14 +139,9 @@ func critiqueLoop(
 	return gateOutcome{reason: "hard-cap", rounds: gateMaxRounds, findings: findings}, nil
 }
 
-// unrunGates are the gates a stage did not run: each not-run command, or a
-// placeholder when it reported none. Empty when every gate has a result. A
-// gate not run never reaches review: the reviewers would meet the same tool
-// timeout.
-func unrunGates(gates []gateRun) []string {
-	if len(gates) == 0 {
-		return []string{"(no gate reported)"}
-	}
+// notRunGates are the gates a stage reported not run. A gate not run never
+// reaches review: the reviewers would meet the same tool timeout.
+func notRunGates(gates []gateRun) []string {
 	out := []string{}
 	for _, g := range gates {
 		if g.Status == "not-run" {
@@ -155,11 +151,40 @@ func unrunGates(gates []gateRun) []string {
 	return out
 }
 
-func gateNotRunSignal(at plan.At, missing []string) *plan.Signal {
-	return plan.NewSignal(plan.Signal{
-		Kind: "gate-not-run", Source: "structural", Stage: at.Stage, Unit: at.Unit, Wave: at.Wave,
-		Statement: "gate(s) not run: " + strings.Join(missing, ", "), Referent: strings.Join(missing, ","),
-	})
+// omittedGates are the gates a stage left out of its return: a placeholder
+// when it reported none, and each command in ran (the implement stage's
+// gates, for a fix) it did not report (D22).
+func omittedGates(gates, ran []gateRun) []string {
+	out := []string{}
+	if len(gates) == 0 {
+		out = append(out, "(no gate reported)")
+	}
+	reported := map[string]bool{}
+	for _, g := range gates {
+		reported[g.Command] = true
+	}
+	for _, g := range ran {
+		if !reported[g.Command] && !slices.Contains(out, g.Command) {
+			out = append(out, g.Command)
+		}
+	}
+	return out
+}
+
+// gateSignals are a stage's gate stops: gate-omitted, then gate-not-run.
+func gateSignals(at plan.At, gates, ran []gateRun) []*plan.Signal {
+	out := []*plan.Signal{}
+	add := func(kind, what string, cmds []string) {
+		if len(cmds) > 0 {
+			out = append(out, plan.NewSignal(plan.Signal{
+				Kind: kind, Source: "structural", Stage: at.Stage, Unit: at.Unit, Wave: at.Wave,
+				Statement: "gate(s) " + what + ": " + strings.Join(cmds, ", "), Referent: strings.Join(cmds, ","),
+			}))
+		}
+	}
+	add("gate-omitted", "omitted", omittedGates(gates, ran))
+	add("gate-not-run", "not run", notRunGates(gates))
+	return out
 }
 
 // unitOpts are a unit stage's options: label `<label>:<unit>`, phase Units,
@@ -265,8 +290,8 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	design := u.Type == "design"
 	// A design unit's review reads no gates.
 	if !design {
-		if unrun := unrunGates(impl.Result.Gates); len(unrun) > 0 {
-			sigs = append(sigs, gateNotRunSignal(at("implement"), unrun))
+		if gs := gateSignals(at("implement"), impl.Result.Gates, nil); len(gs) > 0 {
+			sigs = append(sigs, gs...)
 			return abort("implement")
 		}
 	}
@@ -304,7 +329,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 			}
 			out := []reviewer{}
 			for i, r := range rvs {
-				v, rs := o.callSigs(site{at(r.stage), false}, res[i].cr, res[i].label, reqs[i].opts.Schema)
+				v, rs := o.callSigs(site{at(r.stage), false}, res[i].cr, res[i].label)
 				out = append(out, reviewer{r.stage, decode[findingsResult](o.rt, res[i].label, v), rs})
 			}
 			return out, nil
@@ -323,30 +348,10 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 				return nil
 			}
 			// A gate the implement stage ran and the fix did not report is
-			// not run: a dropped gate would otherwise leave the reviewers a
+			// omitted: a dropped gate would otherwise leave the reviewers a
 			// shrunken result.
-			reported := map[string]bool{}
-			for _, g := range fixed.Result.Gates {
-				reported[g.Command] = true
-			}
-			unrun := []string{}
-			seen := map[string]bool{}
-			add := func(cmd string) {
-				if !seen[cmd] {
-					seen[cmd] = true
-					unrun = append(unrun, cmd)
-				}
-			}
-			for _, cmd := range unrunGates(fixed.Result.Gates) {
-				add(cmd)
-			}
-			for _, g := range impl.Result.Gates {
-				if !reported[g.Command] {
-					add(g.Command)
-				}
-			}
-			if len(unrun) > 0 {
-				return []*plan.Signal{gateNotRunSignal(at("fix"), unrun)}
+			if gs := gateSignals(at("fix"), fixed.Result.Gates, impl.Result.Gates); len(gs) > 0 {
+				return gs
 			}
 			gr = gatesRun{by: fmt.Sprintf("The round-%d fix stage", n), gates: fixed.Result.Gates}
 			fixedGates = true

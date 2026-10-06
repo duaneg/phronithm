@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,7 +17,8 @@ import (
 
 // Runtime is what the orchestrator needs from its host: *lsfrt.Runtime, or
 // a stub in tests. Call's only error is a *lsfrt.StopError, and its nil
-// Value is null. Parallel recovers a branch's panic or non-stop error to a
+// Value is null. A non-null Value is valid against opts.Schema: an invalid
+// return is null with Violations set (D21), as *lsfrt.Runtime does. Parallel recovers a branch's panic or non-stop error to a
 // nil slot and returns the first stop after every branch finishes. Step
 // journals a code step (lsfrt.Runtime.Step). Repo is the main checkout ("" when
 // there is none); Worktree is a code step's own worktree and its branch.
@@ -70,9 +72,11 @@ func (o *orch) agent(ctx context.Context, prompt string, opts lsfrt.Opts) (lsfrt
 		o.rt.Log(opts.Label + ": seeded from args.seed; agent not spawned")
 		cr := lsfrt.CallResult{Value: stripSeedPause(s)}
 		// The runtime validates every return it makes; a seed it never saw.
-		if errs := lsfrt.ValidateOutput(opts.Schema, cr.Value); len(cr.Value) > 0 && string(cr.Value) != "null" && len(errs) > 0 {
-			o.rt.Log(fmt.Sprintf("%s: seed outside its schema (%s); treated as null", opts.Label, strings.Join(errs, "; ")))
-			cr.Value, cr.Violations = nil, errs
+		if v := bytes.TrimSpace(cr.Value); len(v) > 0 && string(v) != "null" {
+			if errs := lsfrt.ValidateOutput(opts.Schema, cr.Value); len(errs) > 0 {
+				o.rt.Log(fmt.Sprintf("%s: seed outside its schema (%s); treated as null: fix the seed, which stands in on every launch", opts.Label, strings.Join(errs, "; ")))
+				cr.Value, cr.Violations = nil, errs
+			}
 		}
 		return cr, opts.Label, nil
 	}
@@ -235,7 +239,7 @@ type site struct {
 // callSigs maps a call's CallResult to its driver-event signals (D21) and
 // returns the value to decode. Violations (the runtime's, or a seed's from
 // agent) are a schema-violation; the value is then null.
-func (o *orch) callSigs(s site, cr lsfrt.CallResult, label string, schema json.RawMessage) (json.RawMessage, []*plan.Signal) {
+func (o *orch) callSigs(s site, cr lsfrt.CallResult, label string) (json.RawMessage, []*plan.Signal) {
 	sigs, unknown := plan.SignalsFromCall(plan.CallEvents{
 		Label: label, Writer: s.writer, Flags: cr.Flags, Denials: cr.Denials, Uncommitted: cr.Uncommitted, Violations: cr.Violations,
 	}, s.at)
@@ -260,7 +264,7 @@ func call[T any](ctx context.Context, o *orch, s site, prompt string, opts lsfrt
 	if err != nil {
 		return nil, nil, err
 	}
-	v, sigs := o.callSigs(s, cr, label, opts.Schema)
+	v, sigs := o.callSigs(s, cr, label)
 	return decode[T](o.rt, label, v), sigs, nil
 }
 

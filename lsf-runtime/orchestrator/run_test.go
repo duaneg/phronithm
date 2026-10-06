@@ -430,12 +430,13 @@ func TestGateNotRunStops(t *testing.T) {
 	match(t, ledgerText(t, s, "ledger:w1"), `note from the stopped unit`, "the stopped unit keeps its discovery record")
 }
 
-// js: an implement return with no gate reported stops before review as a gate not run
+// js: an implement return with no gate reported stops before review as a
+// gate not run; Go: a gate omitted (D22)
 func TestNoGateReportedStops(t *testing.T) {
 	s := stub(t, twoWaves(), Hs{"implement": implemented(M{"gates": []any{}})}, nil)
 	out := run(t, s)
 	eq(t, out.Status, "stopped")
-	eqs(t, out.stopKinds(), []string{"gate-not-run"})
+	eqs(t, out.stopKinds(), []string{"gate-omitted"})
 	match(t, out.stops()[0].Statement, `\(no gate reported\)`)
 	if hasPrefix(s.Labels(), "critique-code") || hasPrefix(s.Labels(), "lens-review") {
 		t.Error(s.Labels())
@@ -512,15 +513,18 @@ func TestSecondFixRound(t *testing.T) {
 	noMatch(t, s.Prompt("critique-code:r3:A"), `\(r1\)|412 passed`)
 }
 
-// js: a code fix whose gate did not run, that reports none, or that drops one the implement stage ran, stops before the next review round
+// js: a code fix whose gate did not run, that reports none, or that drops
+// one the implement stage ran, stops before the next review round; Go: the
+// last two are a gate omitted (D22)
 func TestFixGateNotRun(t *testing.T) {
 	for i, gs := range [][]orchtest.Gate{gates(g("xtask ci", "not-run", "timed out")), {}, gates(g("pytest -q", "green", "1 passed"))} {
 		s := stub(t, graph("plan0", unit("A")), Hs{"critique-code": criticalOnce(), "fix-code": fixCode(gs...)}, nil)
 		out := run(t, s)
 		eq(t, out.Status, "stopped")
+		kind := []string{"gate-not-run", "gate-omitted", "gate-omitted"}[i]
 		var stop *plan.Signal
 		for _, x := range out.stops() {
-			if x.Kind == "gate-not-run" {
+			if x.Kind == kind {
 				stop = &x
 			}
 		}
@@ -528,7 +532,7 @@ func TestFixGateNotRun(t *testing.T) {
 			t.Fatalf("%d: %v", i, out.stopKinds())
 		}
 		eq(t, stop.Stage, "fix")
-		want := []string{`xtask ci`, `\(no gate reported\)`, `not run: ruff check \.$`}[i]
+		want := []string{`not run: xtask ci`, `omitted: \(no gate reported\)`, `omitted: ruff check \.$`}[i]
 		match(t, stop.Statement, want)
 		if has(s.Labels(), "critique-code:r2:A") {
 			t.Error("no round-2 review")

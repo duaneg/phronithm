@@ -99,7 +99,7 @@
 //     not resumable. A relaunch with changed input after a kill between a
 //     ledger commit and its record is not interrupted, so it appends its
 //     rows after the committed ones; the repeat is visible in the ledger.
-//   - D19. A code stage's failure is an agent-null-kind stop whose
+//   - D19. A code stage's failure is a stage-fault stop whose
 //     statement is "<stage> failed: <reason>", its referent the path, else
 //     the unit, else the stage. The reasons: a git error; HEAD off the
 //     integration branch; the path holding changes the stage did not make;
@@ -130,6 +130,12 @@
 //     stop beside agent-null: the runtime reports a live one as
 //     CallResult.Violations, and agent checks a seed itself. JS has no
 //     CallResult, validates nothing and has none of these kinds;
-//     promptparity's scenarios set no flags, and their returns (seeds
-//     included) satisfy their schemas.
+//     promptparity's scenarios set no flags, and their seeds satisfy their
+//     schemas. The validator knows type, properties, required, items and
+//     enum only: a schema using another keyword is not checked for it.
+//   - D22. A gate a stage left out of its return (none reported, or one
+//     the implement stage ran that a fix did not report) is gate-omitted;
+//     gate-not-run is a gate reported not run. JS has gate-not-run for
+//     both; promptparity maps gate-omitted back, with its statement.
+//     declared-gates raises gate-omitted for a declared gate missing.
 package orchestrator

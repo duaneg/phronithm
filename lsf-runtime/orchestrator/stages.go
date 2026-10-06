@@ -369,8 +369,8 @@ func readFile(dir, path string) ([]byte, error) {
 	return b, err
 }
 
-// stageFaultSignal is the stop for a code stage's failure (D19): an
-// agent-null-kind stop whose statement gives the reason, its referent the
+// stageFaultSignal is the stop for a code stage's failure (D19): a
+// stage-fault stop whose statement gives the reason, its referent the
 // path, else the unit, else the stage.
 func stageFaultSignal(at plan.At, reason string) *plan.Signal {
 	ref := at.Path
@@ -380,7 +380,7 @@ func stageFaultSignal(at plan.At, reason string) *plan.Signal {
 	if ref == "" {
 		ref = at.Stage
 	}
-	return plan.NewSignal(plan.Signal{Kind: "agent-null", Source: "structural", Stage: at.Stage, Unit: at.Unit, Wave: at.Wave,
+	return plan.NewSignal(plan.Signal{Kind: "stage-fault", Source: "structural", Stage: at.Stage, Unit: at.Unit, Wave: at.Wave,
 		Statement: at.Stage + " failed: " + reason, Referent: ref})
 }
 

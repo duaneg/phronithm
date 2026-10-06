@@ -239,8 +239,8 @@ func TestCallResultReachesCallSites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v0, s0 := o.callSigs(at, res[0].cr, res[0].label, nil)
-	v1, s1 := o.callSigs(at, res[1].cr, res[1].label, nil)
+	v0, s0 := o.callSigs(at, res[0].cr, res[0].label)
+	v1, s1 := o.callSigs(at, res[1].cr, res[1].label)
 	shows("parallel reviewer", "critique-code:r1:A", s0)
 	shows("parallel null reviewer", "lens-review:r1:A", s1)
 	if v0 == nil || v1 != nil {

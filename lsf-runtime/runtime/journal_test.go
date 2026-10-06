@@ -358,3 +358,18 @@ func TestWorktreeReusedOnResume(t *testing.T) {
 		t.Errorf("%d worktree creations, want 1", n)
 	}
 }
+
+// A journaled return that fails its schema now (a changed validator, an
+// edited record) re-runs the call rather than replay.
+func TestReplayRevalidates(t *testing.T) {
+	cfg, stub := testConfig(t)
+	t.Setenv("STUB_SCRIPT", "ok")
+	key := journalKey(vOpts.Label)
+	os.MkdirAll(filepath.Join(cfg.StateDir, "journal"), 0o755)
+	b, _ := json.Marshal(record{Label: vOpts.Label, Kind: "call", Hash: callHash("do the thing", "", vOpts), Ret: json.RawMessage(`{"wrong":1}`)})
+	os.WriteFile(filepath.Join(cfg.StateDir, "journal", key+".json"), b, 0o644)
+	res, _ := call(t, cfg, vOpts)
+	if res.Replayed || stubCount(t, stub) != 1 || res.Value == nil {
+		t.Fatalf("%+v, spawns %d", res, stubCount(t, stub))
+	}
+}

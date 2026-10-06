@@ -173,8 +173,8 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 		if err != nil {
 			return nil, true, false, err
 		}
-		gv, gs := l.callSigs(site{plan.At{Stage: "review-gate", Wave: plan.W(wave)}, false}, res[0].cr, res[0].label, gateSchema)
-		cv, cs := l.callSigs(site{plan.At{Stage: "cleanup", Wave: plan.W(wave)}, false}, res[1].cr, res[1].label, cleanupSchema)
+		gv, gs := l.callSigs(site{plan.At{Stage: "review-gate", Wave: plan.W(wave)}, false}, res[0].cr, res[0].label)
+		cv, cs := l.callSigs(site{plan.At{Stage: "cleanup", Wave: plan.W(wave)}, false}, res[1].cr, res[1].label)
 		waveSignals = append(append(waveSignals, gs...), cs...)
 		g := decode[plan.GateResult](l.rt, res[0].label, gv)
 		cu := decode[cleanupResult](l.rt, res[1].label, cv)

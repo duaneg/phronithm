@@ -20,6 +20,10 @@
 // are then left out of the comparison. The coverage checks count the Go
 // steps.
 //
+// The Go side's documented kind divergences are rewritten to the JS form
+// before comparing (toJSKinds): gate-omitted to gate-not-run, statement
+// included (orchestrator D22), and stage-fault to agent-null (D19).
+//
 // Node runs under precise coverage. The check fails unless every named
 // function in implement.js ran and every block that did not is listed in
 // unreachable, with the reason run() cannot reach it.
@@ -322,6 +326,34 @@ func trunc(s string) string {
 	return s
 }
 
+// jsKinds rewrites the Go side's documented kind divergences to the JS
+// form before comparing: gate-omitted is the JS's gate-not-run, statement
+// included (orchestrator D22), and stage-fault its agent-null (D19). The
+// rewrite covers the outcome, the logs, every prompt and every step input,
+// since stop text reaches the re-plan prompt and the ledger.
+var jsKinds = strings.NewReplacer(
+	"gate(s) omitted:", "gate(s) not run:",
+	"gate-omitted", "gate-not-run",
+	"stage-fault", "agent-null",
+)
+
+func toJSKinds(g result) result {
+	g.Outcome = json.RawMessage(jsKinds.Replace(string(g.Outcome)))
+	g.Logs = slices.Clone(g.Logs)
+	for i, l := range g.Logs {
+		g.Logs[i] = jsKinds.Replace(l)
+	}
+	g.Calls = slices.Clone(g.Calls)
+	for i := range g.Calls {
+		g.Calls[i].Prompt = jsKinds.Replace(g.Calls[i].Prompt)
+	}
+	g.Steps = slices.Clone(g.Steps)
+	for i := range g.Steps {
+		g.Steps[i].Input = json.RawMessage(jsKinds.Replace(string(g.Steps[i].Input)))
+	}
+	return g
+}
+
 // compare returns the differences between the two sides of one scenario.
 // The JS calls Go makes as code steps are checked against the steps'
 // inputs (stepParity) and dropped.
@@ -516,7 +548,7 @@ func run(repo string, verbose bool, w io.Writer) (failed, total int, err error) 
 			base, _, _ := strings.Cut(l, "#")
 			seen[strings.Split(base, ":")[0]] = true
 		}
-		if diffs := compare(goResults[i], js[i]); len(diffs) > 0 {
+		if diffs := compare(toJSKinds(goResults[i]), js[i]); len(diffs) > 0 {
 			failed++
 			fmt.Fprintf(w, "FAIL %s\n  %s\n", sc.name, strings.Join(diffs, "\n  "))
 		} else if verbose {
