@@ -1,0 +1,19 @@
+
+# leading comment
+units:
+  - id: a          # trailing comment
+    type: foundation
+    complete: true
+    dependencies: []
+    scope: [src/a.py, "src/b.py::Klass", 'x y']
+    gates:
+      - name: rsvg-convert
+        kind: environment
+        pin: "2.62.3"
+  - id: b
+    dependencies: [a]
+    note: 'it''s # not a comment'
+execution_order:
+  - a
+  - b
+empty:

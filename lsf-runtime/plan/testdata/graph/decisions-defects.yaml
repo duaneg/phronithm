@@ -1,0 +1,8 @@
+decisions:
+  - id: D1
+    date: x
+  - id: D1
+    date: x
+    question: q
+    decision: d
+    clears: b/legal

@@ -1,0 +1,12 @@
+
+decisions:
+  - id: D1
+    date: 2026-09-11
+    question: Is the legal review done?
+    decision: Yes, signed off by counsel.
+    clears: [b/legal]
+  - id: D2
+    date: 2026-09-11
+    question: q
+    decision: d
+    resolves: [sig-3]

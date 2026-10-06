@@ -1,0 +1,18 @@
+
+units:
+  - id: a
+    type: widget
+    complete: yes
+    dependencies: a
+    gates:
+      - name: g
+        kind: legal
+      - name: g
+        kind: release
+      - kind: data
+  - type: feature
+  - id: c
+    type: feature
+    extra: 1
+execution_order: [a, a]
+stray: 1
