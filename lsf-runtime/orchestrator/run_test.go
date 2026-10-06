@@ -7,6 +7,7 @@ import (
 
 	"github.com/duaneg/phronithm/lsf-runtime/orchestrator/orchtest"
 	"github.com/duaneg/phronithm/lsf-runtime/plan"
+	lsfrt "github.com/duaneg/phronithm/lsf-runtime/runtime"
 )
 
 var (
@@ -657,19 +658,25 @@ func TestReplanItems(t *testing.T) {
 	}
 	kinds := map[string]bool{}
 	verdicts := []string{}
+	var outside, reading []string
 	for _, r := range out.Unscribed {
 		if r.Wave != nil && *r.Wave == 1 && r.Unit == "A" {
 			kinds[r.Kind] = true
 			switch {
 			case r.Kind == "deviation" && strings.Contains(r.Statement, "outside"):
-				match(t, r.Statement, `writes outside the Scope line: CLAUDE\.md`)
+				outside = append(outside, r.Statement)
 			case r.Kind == "reading":
-				eq(t, r.Statement, "1 reading(s); see docs/plans/A-plan.md Readings")
+				reading = append(reading, r.Statement)
 			case r.Kind == "verdict":
 				verdicts = append(verdicts, r.Statement)
 			}
 		}
 	}
+	if len(outside) == 0 || len(reading) == 0 {
+		t.Fatalf("outside %v, reading %v", outside, reading)
+	}
+	match(t, outside[0], `writes outside the Scope line: CLAUDE\.md`)
+	eq(t, reading[0], "1 reading(s); see docs/plans/A-plan.md Readings")
 	eq(t, fmt.Sprint(kinds), fmt.Sprint(map[string]bool{"deferral": true, "deviation": true, "discovery": true, "execution-distress": true, "finding": true, "reading": true, "verdict": true}))
 	eqs(t, verdicts, []string{"rp-1 amended: ok", "rp-2 amended: ok", "rp-3 amended: ok"}, "a verdict row carries the item id, not its text")
 	for _, r := range out.Unscribed {
@@ -1860,4 +1867,77 @@ func TestStopAfterScribeRelabelsLedger(t *testing.T) {
 	out := run(t, s)
 	eq(t, out.Status, "stopped")
 	eqs(t, filterPrefix(s.Labels(), "ledger"), []string{"ledger:w1", "ledger:w2", "ledger:w2#2"})
+}
+
+// A unit thunk that panics is that unit's null (JS: parallel's catch); the
+// other unit in the wave still merges.
+func TestPanickingUnitIsUnitNull(t *testing.T) {
+	s := stub(t, orchtest.TwoParallel(), Hs{"implement": func(c Call, _ *State) any {
+		if c.Unit == "A" {
+			panic("boom")
+		}
+		return R(orchtest.Implemented(c.Unit, nil))
+	}}, nil)
+	s.ExpectPanic = true
+	out := run(t, s)
+	eq(t, out.Status, "stopped")
+	if st := out.stops(); len(st) != 1 || st[0].Kind != "agent-null" || st[0].Stage != "unit" || st[0].Unit != "A" {
+		t.Errorf("%+v", st)
+	}
+	match(t, s.Prompt("merge:w1"), `(?m)^- B: branch`)
+	noMatch(t, s.Prompt("merge:w1"), `(?m)^- A: branch`)
+}
+
+// A runtime stop from any call, in a unit thunk or the main lane, ends Run
+// with the stop and no outcome.
+func TestRuntimeStopPropagates(t *testing.T) {
+	stop := &lsfrt.StopError{Reason: lsfrt.StopSigint}
+	for _, at := range []string{"implement", "lens-review", "merge", "review-gate", "ledger", "obligations"} {
+		s := stub(t, twoWaves(), merged(discovering(), Hs{at: func(Call, *State) any { return stop }}), nil)
+		out, err := Run(t.Context(), s)
+		if err != stop || out != nil {
+			t.Errorf("%s: %s %v", at, out, err)
+		}
+	}
+}
+
+// Every role reaches the stages it governs.
+func TestEveryRoleTier(t *testing.T) {
+	tiers := M{}
+	for _, r := range []string{"critique", "gate", "planning", "default", "mechanical"} {
+		tiers[r] = M{"model": "m-" + r, "effort": "e-" + r}
+	}
+	round := 0
+	s := stub(t, twoWaves(), merged(discovering(), Hs{
+		"critique-plan": func(Call, *State) any {
+			round++
+			if round == 1 {
+				return critical1("plan")
+			}
+			return noFinding()
+		},
+		"critique-code": criticalOnce(),
+		"fix-code":      fixCode(g("pytest -q", "green", "1"), g("ruff check .", "green", "")),
+		"replan": func(c Call, s *State) any {
+			s.Plan = completeFrom(s, "rp")
+			return R(M{"planSha": "rp", "amendments": []any{}, "overBudget": []any{}, "verdicts": orchtest.VerdictsFor(c.Prompt, "amended"),
+				"directEdits": []orchtest.DirectEdit{{Path: "a", Description: "b"}}, "summary": "s"})
+		},
+	}), M{"tiers": tiers})
+	run(t, s)
+	role := map[string]string{
+		"critique-plan": "critique", "critique-code": "critique", "lens-review": "critique",
+		"review-gate": "gate", "plan": "planning", "replan": "planning", "termination": "planning",
+		"load": "mechanical", "ledger": "mechanical", "cleanup": "mechanical", "completion-report": "mechanical",
+		"implement": "default", "fix-plan": "default", "fix-code": "default", "merge": "default", "direct-edits": "default", "obligations": "default",
+	}
+	for _, c := range s.Calls {
+		r, ok := role[c.Prefix]
+		if !ok {
+			t.Errorf("%s: no role listed", c.Label)
+			continue
+		}
+		want := "m-" + r + "/e-" + r
+		eq(t, c.Opts.Model+"/"+c.Opts.Effort, want, c.Label)
+	}
 }

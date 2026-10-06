@@ -81,7 +81,7 @@ type Stub struct {
 	mu       sync.Mutex
 	Calls    []Call
 	Logs     []string
-	Returns  map[string]json.RawMessage // by final label
+	Returns  map[string]json.RawMessage // by final label; null included
 	Failures []string                   // harness failures: repeated label, missing handler, unexpected panic
 }
 
@@ -165,7 +165,9 @@ func (s *Stub) Agent(ctx context.Context, prompt string, o lsfrt.Opts) (json.Raw
 		}
 		raw = b
 	}
-	if raw != nil && string(raw) != "null" {
+	if raw == nil {
+		s.Returns[o.Label] = json.RawMessage("null")
+	} else {
 		s.Returns[o.Label] = raw
 	}
 	if prefix == "merge" && raw != nil {

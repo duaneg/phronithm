@@ -51,6 +51,7 @@ func decisionsFor(stops []*plan.Signal) []plan.DecisionNeeded {
 // the ledger), the text a stop carries, and its ledger referent.
 type rpItem struct {
 	id, unit, describe, stopText, referent string
+	described                              bool // describe is set, even to ""
 }
 
 func describeItem(it replanItem) string { return "[" + it.Stage + "] " + it.Kind + ": " + it.Statement }
@@ -75,7 +76,7 @@ func replanSignals(r *replanResult, items []rpItem, stage string, wave int, ledg
 		v, ok := verdicts[it.id]
 		if ok && v.Verdict != "cannot" {
 			st := it.id + " " + v.Verdict + ": " + v.Statement
-			if it.describe != "" {
+			if it.described {
 				st += " — " + it.describe
 			}
 			out = append(out, plan.NewSignal(plan.Signal{Kind: "verdict", Source: "reported", Stage: stage, Unit: it.unit, Wave: w, Statement: st, Referent: it.referent}))
@@ -442,7 +443,7 @@ func Run(ctx context.Context, rt Runtime) (json.RawMessage, error) {
 		rpItems := []rpItem{}
 		for _, d := range a.Decisions {
 			items = append(items, decisionItem{d.ID, d.Question, d.Decision})
-			rpItems = append(rpItems, rpItem{id: d.ID, describe: d.Question, stopText: d.Question, referent: d.ID})
+			rpItems = append(rpItems, rpItem{id: d.ID, describe: d.Question, described: true, stopText: d.Question, referent: d.ID})
 		}
 		t = c.tierFor("planning")
 		rp, err := call[replanResult](ctx, l.orch, decisionReplanPrompt(c, l.ref(), items),
