@@ -175,6 +175,11 @@ func newRunCtx(a *args) (*runCtx, error) {
 	}
 	if a.MaxUnitsPerWave != nil {
 		n := int(*a.MaxUnitsPerWave)
+		if n < 1 {
+			// JS takes slice(0, n): 0 runs no unit and reports complete,
+			// and a negative n drops units from the end (D16).
+			return nil, fmt.Errorf("lsf-implement: args.maxUnitsPerWave must be at least 1, not %d", n)
+		}
 		c.maxUnitsPerWave = &n
 	}
 	c.pauseRef = strOr(a.PauseRef, "refs/lsf/"+name+"/pause")

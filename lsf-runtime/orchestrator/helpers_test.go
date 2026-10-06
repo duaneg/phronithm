@@ -219,5 +219,3 @@ func schemaOf(t *testing.T, c *Call) struct {
 	}
 	return s
 }
-
-var _ = orchtest.TwoWaves

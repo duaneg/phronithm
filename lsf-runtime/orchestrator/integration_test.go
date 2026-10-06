@@ -38,9 +38,11 @@ func fakeClaude(table string) int {
 	if dir := os.Getenv("LSF_FAKE_CLAUDE_STATE"); dir != "" {
 		// Calls may run concurrently: one file per call, counted after.
 		f, err := os.CreateTemp(dir, "call-")
-		if err == nil {
-			f.Close()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "fake claude: count:", err)
+			return 3
 		}
+		f.Close()
 	}
 	prompt, err := io.ReadAll(os.Stdin)
 	if err != nil {

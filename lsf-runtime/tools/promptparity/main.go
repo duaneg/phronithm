@@ -358,9 +358,12 @@ var unreachable = map[[2]string]string{
 	{"(anonymous)", "?? { unit: u.id, type: u.type, branch: null, completionPath: nul"}: "a unit is null only on a JS exception in runUnit; Go's analogue, a panic, is TestPanickingUnitIsUnitNull",
 }
 
-func listed(name, text string) bool {
+// listed reports whether the block is on the allowlist, marking the entry
+// used.
+func listed(name, text string, used map[[2]string]bool) bool {
 	for k := range unreachable {
 		if k[0] == name && strings.HasPrefix(text, k[1]) {
+			used[k] = true
 			return true
 		}
 	}
@@ -427,12 +430,19 @@ func run(repo string, verbose bool, w io.Writer) (failed, total int, err error) 
 		fmt.Fprintf(w, "FAIL coverage: implement.js function %s (line %d) never ran\n", f.Name, f.Line)
 	}
 	fmt.Fprintf(w, "implement.js: %d named functions, all run: %t; %d uncovered block(s)\n", cov.Functions, len(cov.UncoveredFunctions) == 0, len(cov.UncoveredBlocks))
+	used := map[[2]string]bool{}
 	for _, b := range cov.UncoveredBlocks {
-		if !listed(b.Name, b.Text) {
+		if !listed(b.Name, b.Text, used) {
 			failed++
 			fmt.Fprintf(w, "FAIL coverage: implement.js line %d in %s never ran and is not listed unreachable: %s\n", b.Line, b.Name, b.Text)
 		} else if verbose {
 			fmt.Fprintf(w, "  unreachable: line %d in %s: %s\n", b.Line, b.Name, b.Text)
+		}
+	}
+	for k := range unreachable {
+		if !used[k] {
+			failed++
+			fmt.Fprintf(w, "FAIL coverage: unreachable entry %s %q now runs or no longer exists: remove it\n", k[0], k[1])
 		}
 	}
 	return failed, len(scenarios), nil

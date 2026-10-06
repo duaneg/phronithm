@@ -57,6 +57,10 @@ func config(examplePath, dir, claude, planSha string, dryRun bool) (lsfrt.Config
 func fixture(root, dir string) (string, error) {
 	out, err := exec.Command("sh", filepath.Join(root, "workflows", "lsf", "spike", "fixture.sh"), filepath.Join(dir, "repo")).Output()
 	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return "", fmt.Errorf("fixture.sh: %w: %s", err, ee.Stderr)
+		}
 		return "", fmt.Errorf("fixture.sh: %w", err)
 	}
 	lines := strings.Fields(string(out))
@@ -170,7 +174,9 @@ func run(root, claude, dir, example string, dryRun bool) error {
 		Status     string          `json:"status"`
 		Escalation json.RawMessage `json:"escalation"`
 	}
-	json.Unmarshal(sum.Outcome, &out)
+	if err := json.Unmarshal(sum.Outcome, &out); err != nil {
+		return fmt.Errorf("outcome %q: %w", sum.Outcome, err)
+	}
 	fmt.Printf("status %s\n", out.Status)
 	var problems []string
 	if out.Escalation != nil {
@@ -180,11 +186,17 @@ func run(root, claude, dir, example string, dryRun bool) error {
 	if out.Status != "complete" {
 		problems = append(problems, fmt.Sprintf("status %q (stop_reason %s %s %s)", out.Status, sum.StopReason, sum.Detail, sum.Error))
 	}
-	logText, _ := os.ReadFile(filepath.Join(cfg.StateDir, "log.txt"))
+	logText, err := os.ReadFile(filepath.Join(cfg.StateDir, "log.txt"))
+	if err != nil {
+		return err
+	}
 	if bytes.Contains(logText, []byte("label reused")) {
 		problems = append(problems, "log.txt reports a reused label")
 	}
-	tel, _ := os.ReadFile(filepath.Join(cfg.StateDir, "telemetry.jsonl"))
+	tel, err := os.ReadFile(filepath.Join(cfg.StateDir, "telemetry.jsonl"))
+	if err != nil {
+		return err
+	}
 	kinds := map[string]int{}
 	for _, line := range bytes.Split(bytes.TrimSpace(tel), []byte("\n")) {
 		var e struct {

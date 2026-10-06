@@ -1941,3 +1941,28 @@ func TestEveryRoleTier(t *testing.T) {
 		eq(t, c.Opts.Model+"/"+c.Opts.Effort, want, c.Label)
 	}
 }
+
+// A wave cap below 1 is an args error (D16).
+func TestMaxUnitsPerWaveBelowOne(t *testing.T) {
+	for _, n := range []int{0, -1} {
+		_, err := Run(t.Context(), stub(t, twoWaves(), nil, M{"maxUnitsPerWave": n}))
+		if err == nil || !strings.Contains(err.Error(), "maxUnitsPerWave must be at least 1") {
+			t.Errorf("%d: %v", n, err)
+		}
+	}
+}
+
+// A completion report with no branch or SHA aborts the unit (D17).
+func TestCompletionReportWithoutBranch(t *testing.T) {
+	for _, r := range []M{{"branch": "", "sha": "c", "path": "p"}, {"branch": "b", "sha": " ", "path": "p"}} {
+		s := stub(t, twoWaves(), Hs{"completion-report": func(Call, *State) any { return R(r) }}, nil)
+		out := run(t, s)
+		eq(t, out.Status, "stopped")
+		if st := out.stops(); len(st) != 1 || st[0].Kind != "agent-null" || st[0].Stage != "completion-report" || st[0].Referent != "docs/plans/A-completion.md" {
+			t.Errorf("%+v", st)
+		}
+		if has(s.Labels(), "merge:w1") {
+			t.Error("nothing to merge")
+		}
+	}
+}

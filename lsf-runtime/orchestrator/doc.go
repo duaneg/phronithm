@@ -52,4 +52,16 @@
 //     in a unit's stages is that unit's null (Parallel recovers it,
 //     TestPanickingUnitIsUnitNull), and a panic elsewhere ends the launch
 //     crashed.
+//
+// D16 and D17 fix JS defects, recorded rather than fixed in the frozen JS,
+// as the plan package's D1 and D2 do.
+//
+//   - D16. args.maxUnitsPerWave below 1 is an args error. JS slices the
+//     ready set with it: 0 runs no unit, finds nothing blocked, and returns
+//     complete with the plan unexecuted; a negative value drops units from
+//     the end of each wave.
+//   - D17. A completion-report return with an empty branch or no commit SHA
+//     is the stage's agent-null (a no-commit signal on the report's path),
+//     and the unit aborts. JS leaves such a unit out of the merge with no
+//     signal, so it is never completed and runs again every wave.
 package orchestrator

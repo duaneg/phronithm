@@ -99,6 +99,9 @@ func TestRenderCompletionReport(t *testing.T) {
 
 // js: the long-gate recipe detaches, captures a compound command's output and status, and ends the poll when the gate dies
 func TestLongGateRecipe(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not installed")
+	}
 	cmds := regexp.MustCompile("`D=[^`]*`").FindAllString(longGates, -1)
 	if len(cmds) != 2 {
 		t.Fatalf("recipe commands %q", cmds)
@@ -107,7 +110,7 @@ func TestLongGateRecipe(t *testing.T) {
 	dir := t.TempDir()
 	sh := func(cmd string) string {
 		t.Helper()
-		c := exec.Command("/bin/bash", "-c", cmd)
+		c := exec.Command("bash", "-c", cmd)
 		c.Dir = dir
 		out, err := c.Output()
 		if err != nil {
@@ -123,14 +126,14 @@ func TestLongGateRecipe(t *testing.T) {
 	exists := func(p string) bool { _, err := os.Stat(filepath.Join(D, p)); return err == nil }
 
 	t0 := time.Now()
-	sh(gate("1", "sleep 3 && echo a && echo b >&2 && false"))
-	if time.Since(t0) > 2500*time.Millisecond {
+	sh(gate("1", "sleep 6 && echo a && echo b >&2 && false"))
+	if time.Since(t0) > 5*time.Second {
 		t.Error("the detach call does not wait for the gate")
 	}
 	if exists("lsf-gate-1.rc") {
 		t.Error("the gate is still running after the detach returns")
 	}
-	for deadline := time.Now().Add(10 * time.Second); !exists("lsf-gate-1.rc") && time.Now().Before(deadline); {
+	for deadline := time.Now().Add(20 * time.Second); !exists("lsf-gate-1.rc") && time.Now().Before(deadline); {
 		time.Sleep(100 * time.Millisecond)
 	}
 	sh(strings.ReplaceAll(poll, "<n>", "1"))

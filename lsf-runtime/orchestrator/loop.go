@@ -441,9 +441,9 @@ func Run(ctx context.Context, rt Runtime) (json.RawMessage, error) {
 		// re-plan over the decisions, then the run loads the SHA it returns.
 		items := []decisionItem{}
 		rpItems := []rpItem{}
-		for _, d := range a.Decisions {
-			items = append(items, decisionItem{d.ID, d.Question, d.Decision})
-			rpItems = append(rpItems, rpItem{id: d.ID, describe: d.Question, described: true, stopText: d.Question, referent: d.ID})
+		for _, dec := range a.Decisions {
+			items = append(items, decisionItem{dec.ID, dec.Question, dec.Decision})
+			rpItems = append(rpItems, rpItem{id: dec.ID, describe: dec.Question, described: true, stopText: dec.Question, referent: dec.ID})
 		}
 		t = c.tierFor("planning")
 		rp, err := call[replanResult](ctx, l.orch, decisionReplanPrompt(c, l.ref(), items),

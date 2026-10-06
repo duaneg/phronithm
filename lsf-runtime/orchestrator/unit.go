@@ -359,6 +359,12 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 		sigs = append(sigs, plan.NullReturnSignal(at("completion-report")))
 		return abort("completion-report")
 	}
+	// Without a branch the unit would be left out of the merge with no
+	// signal and run again next wave (D17).
+	if jsTrim(report.Result.Branch) == "" || !committed(report.Result.Sha) {
+		sigs = append(sigs, plan.NoCommitSignal(plan.At{Stage: "completion-report", Wave: plan.W(wave), Path: completionPath(u)}))
+		return abort("completion-report")
+	}
 	res.branch = report.Result.Branch
 	res.completionPath = completionPath(u)
 	res.signals = sigs
