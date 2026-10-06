@@ -1,0 +1,18 @@
+{
+ "wave": 4,
+ "calls": [
+  {
+   "fn": "null",
+   "at": {
+    "stage": "obligations"
+   }
+  },
+  {
+   "fn": "noCommit",
+   "at": {
+    "stage": "termination",
+    "path": "p.md"
+   }
+  }
+ ]
+}

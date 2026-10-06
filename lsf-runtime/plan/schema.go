@@ -179,8 +179,17 @@ type Escalation struct {
 	Wave           *int             `json:"wave,omitempty"`
 }
 
-// NewEscalation returns e with nil lists made empty.
+// NewEscalation returns e with nil lists made empty and Wave copied.
 func NewEscalation(e Escalation) Escalation {
+	if e.Wave != nil {
+		w := *e.Wave
+		e.Wave = &w
+	}
+	for i := range e.DecisionNeeded {
+		if e.DecisionNeeded[i].Affects == nil {
+			e.DecisionNeeded[i].Affects = []string{}
+		}
+	}
 	if e.Signals == nil {
 		e.Signals = []*Signal{}
 	}

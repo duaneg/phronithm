@@ -7,7 +7,9 @@
 // parsePlanGraph, parseDecisions); every fixture plan document there,
 // paired with its decision log when one exists, and the repository's plan
 // blocks (loadGraph; then validatePlan, and on a valid plan readySet,
-// blockedUnits and wavePlan); and the exported constants.
+// blockedUnits and wavePlan); both blocks' extraction from every plan
+// document; the signal mappers, stop rule, digest and ledger over
+// plan/testdata/signals; and the exported constants.
 //
 // Inputs reach node as JSON, so invalid UTF-8 arrives there as U+FFFD while
 // Go parses the raw bytes; the fixtures are valid UTF-8.
@@ -20,6 +22,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"os"
 	"os/exec"
@@ -41,7 +44,7 @@ type jsCase struct {
 
 const snippet = `
 import { readFileSync } from 'node:fs';
-const { parseYaml, parsePlanGraph, parseDecisions, loadGraph } = await import(@GRAPH@);
+const { parseYaml, extractBlock, parsePlanGraph, parseDecisions, loadGraph, PLAN_TAG, DECISIONS_TAG } = await import(@GRAPH@);
 const S = await import(@SCHEDULING@);
 const C = await import(@SCHEMA@);
 const run = (c) => {
@@ -70,6 +73,31 @@ const run = (c) => {
           done: [...done], ready: S.readySet(plan, done).map((u) => u.id), blocked: S.blockedUnits(plan, done),
           waves: S.wavePlan(plan, done), pairs: S.overlappingPairs(plan, done), donePreserved: done.size,
         },
+      };
+    }
+    case 'extract': return [PLAN_TAG, DECISIONS_TAG].map((t) => extractBlock(c.text, t));
+    case 'signals': {
+      const f = JSON.parse(c.text);
+      const sigs = [];
+      for (const k of f.calls) {
+        const at = k.at ?? {};
+        switch (k.fn) {
+          case 'null': sigs.push(S.nullReturnSignal(at)); break;
+          case 'noCommit': sigs.push(S.noCommitSignal(at)); break;
+          case 'readings': sigs.push(...S.signalsFromReadings(k.result, at)); break;
+          case 'documentSize': sigs.push(...S.signalsFromDocumentSize(k.result, at)); break;
+          case 'implement': sigs.push(...S.signalsFromImplement(k.result, at)); break;
+          case 'findings': sigs.push(...S.signalsFromFindings(k.result, at)); break;
+          case 'gate': sigs.push(...S.signalsFromGate(k.result, at)); break;
+          case 'merge': sigs.push(...S.signalsFromMerge(k.result, at)); break;
+          case 'distress': sigs.push(...S.distressSignals(k.result, at, k.config)); break;
+          default: throw new Error('unknown fn ' + k.fn);
+        }
+      }
+      const ev = S.evaluateWave(sigs);
+      return {
+        stop: ev.stop, stops: ev.stops.length, all: ev.all, digest: S.digest(ev.all),
+        label: S.ledgerLabel(ev.all, f.wave), ledgerWave: S.ledgerWave(ev.all, f.wave), ledger: S.renderLedger(ev.all, f.wave),
       };
     }
     case 'constants': return {
@@ -127,6 +155,23 @@ func goRun(c jsCase) any {
 		return schedule(c)
 	case "constants":
 		return constants(c)
+	case "extract":
+		type block struct {
+			Body    *string `json:"body"`
+			Problem *string `json:"problem"`
+		}
+		var out []block
+		for _, tag := range []string{plan.PlanTag, plan.DecisionsTag} {
+			body, problem := plan.ExtractBlock(c.Text, tag)
+			if problem != "" {
+				out = append(out, block{Problem: &problem})
+			} else {
+				out = append(out, block{Body: &body})
+			}
+		}
+		return out
+	case "signals":
+		return signals(c)
 	}
 	panic("unknown op " + c.Op)
 }
@@ -183,7 +228,7 @@ func buildCases(repo string) ([]jsCase, error) {
 			} else if !errors.Is(err, os.ErrNotExist) {
 				return nil, err
 			}
-			cases = append(cases, c)
+			cases = append(cases, c, jsCase{Name: name + " extract", Op: "extract", Text: text})
 			s := c
 			s.Name, s.Op = strings.TrimSuffix(c.Name, " load")+" schedule", "schedule"
 			cases = append(cases, s)
@@ -195,21 +240,41 @@ func buildCases(repo string) ([]jsCase, error) {
 	if yamlFiles == 0 || planFiles == 0 {
 		return nil, fmt.Errorf("%s: %d YAML and %d plan fixtures; want some of each", dir, yamlFiles, planFiles)
 	}
-	breakdown, err := readFile(filepath.Join(repo, "docs", "plans", "lsf-improvements-breakdown.md"))
-	if err != nil {
-		return nil, fmt.Errorf("required input: %w", err)
+	sigDir := filepath.Join(repo, "lsf-runtime", "plan", "testdata", "signals")
+	sigFiles, err := filepath.Glob(filepath.Join(sigDir, "*.json"))
+	if err != nil || len(sigFiles) == 0 {
+		return nil, fmt.Errorf("%s: no signal fixtures (%v)", sigDir, err)
 	}
-	cases = append(cases,
-		jsCase{Name: "docs/plans/lsf-improvements-breakdown.md load", Op: "load", Text: breakdown},
-		jsCase{Name: "docs/plans/lsf-improvements-breakdown.md schedule", Op: "schedule", Text: breakdown})
-	example, err := readFile(filepath.Join(repo, "docs", "plan-graph.md"))
-	if err != nil {
-		return nil, fmt.Errorf("required input: %w", err)
+	for _, f := range sigFiles {
+		text, err := readFile(f)
+		if err != nil {
+			return nil, err
+		}
+		cases = append(cases, jsCase{Name: filepath.Base(f) + " signals", Op: "signals", Text: text})
 	}
-	cases = append(cases,
-		jsCase{Name: "docs/plan-graph.md load", Op: "load", Text: example, Decisions: &example},
-		jsCase{Name: "docs/plan-graph.md schedule", Op: "schedule", Text: example, Decisions: &example},
-		jsCase{Name: "constants", Op: "constants", Text: `{"type":"object","properties":{"x":{"type":"string"}},"required":["x"]}`})
+	// Live repository documents, compared when present; the pinned copy of
+	// the breakdown plan's block in testdata outlives the document.
+	for _, doc := range []struct {
+		path    string
+		withLog bool
+	}{{"docs/plans/lsf-improvements-breakdown.md", false}, {"docs/plan-graph.md", true}} {
+		text, err := readFile(filepath.Join(repo, doc.path))
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "graphparity: %s absent; not compared\n", doc.path)
+			continue
+		} else if err != nil {
+			return nil, err
+		}
+		var log *string
+		if doc.withLog {
+			log = &text
+		}
+		cases = append(cases,
+			jsCase{Name: doc.path + " load", Op: "load", Text: text, Decisions: log},
+			jsCase{Name: doc.path + " schedule", Op: "schedule", Text: text, Decisions: log},
+			jsCase{Name: doc.path + " extract", Op: "extract", Text: text})
+	}
+	cases = append(cases, jsCase{Name: "constants", Op: "constants", Text: `{"type":"object","properties":{"x":{"type":"string"}},"required":["x"]}`})
 	return cases, nil
 }
 
@@ -404,4 +469,77 @@ func constants(c jsCase) any {
 		plan.PlanSchema, plan.MergeResultSchema, plan.DistressSchema, plan.StageSchema(json.RawMessage(c.Text)),
 		plan.BlockingGateKinds, plan.ReplanItemKinds, plan.PlanSupersedingStopKinds, plan.DefaultConfig, plan.OversizeFactor,
 	}
+}
+
+// signals runs a signal fixture: mapper calls, then the stop rule, the
+// digest and the ledger.
+func signals(c jsCase) any {
+	var f struct {
+		Wave  int `json:"wave"`
+		Calls []struct {
+			Fn     string          `json:"fn"`
+			Result json.RawMessage `json:"result"`
+			At     plan.At         `json:"at"`
+			Config json.RawMessage `json:"config"`
+		} `json:"calls"`
+	}
+	must := func(err error) {
+		if err != nil {
+			panic(err)
+		}
+	}
+	must(json.Unmarshal([]byte(c.Text), &f))
+	sigs := []*plan.Signal{}
+	for _, k := range f.Calls {
+		switch k.Fn {
+		case "null":
+			sigs = append(sigs, plan.NullReturnSignal(k.At))
+		case "noCommit":
+			sigs = append(sigs, plan.NoCommitSignal(k.At))
+		case "readings":
+			var rs []json.RawMessage
+			must(json.Unmarshal(k.Result, &rs))
+			sigs = append(sigs, plan.SignalsFromReadings(len(rs), k.At)...)
+		case "documentSize":
+			bytes := math.NaN()
+			if string(k.Result) != "null" {
+				must(json.Unmarshal(k.Result, &bytes))
+			}
+			sigs = append(sigs, plan.SignalsFromDocumentSize(bytes, k.At)...)
+		case "implement":
+			var r plan.ImplementResult
+			must(json.Unmarshal(k.Result, &r))
+			sigs = append(sigs, plan.SignalsFromImplement(r, k.At)...)
+		case "findings":
+			var r []plan.Finding
+			must(json.Unmarshal(k.Result, &r))
+			sigs = append(sigs, plan.SignalsFromFindings(r, k.At)...)
+		case "gate":
+			var r plan.GateResult
+			must(json.Unmarshal(k.Result, &r))
+			sigs = append(sigs, plan.SignalsFromGate(r, k.At)...)
+		case "merge":
+			var r plan.MergeResult
+			must(json.Unmarshal(k.Result, &r))
+			sigs = append(sigs, plan.SignalsFromMerge(r, k.At)...)
+		case "distress":
+			var r plan.Distress
+			must(json.Unmarshal(k.Result, &r))
+			cfg, err := plan.ConfigFrom(k.Config)
+			must(err)
+			sigs = append(sigs, plan.DistressSignals(r, k.At, cfg)...)
+		default:
+			panic("unknown fn " + k.Fn)
+		}
+	}
+	ev := plan.EvaluateWave(sigs)
+	return struct {
+		Stop       bool              `json:"stop"`
+		Stops      int               `json:"stops"`
+		All        []*plan.Signal    `json:"all"`
+		Digest     plan.DigestResult `json:"digest"`
+		Label      string            `json:"label"`
+		LedgerWave int               `json:"ledgerWave"`
+		Ledger     string            `json:"ledger"`
+	}{ev.Stop, len(ev.Stops), ev.All, plan.Digest(ev.All), plan.LedgerLabel(ev.All, f.Wave), plan.LedgerWave(ev.All, f.Wave), plan.RenderLedger(ev.All, f.Wave)}
 }

@@ -491,3 +491,15 @@ func TestConfigFromError(t *testing.T) {
 		t.Errorf("%+v %v", cfg, err)
 	}
 }
+
+func TestFindingsRoundTripDigest(t *testing.T) {
+	sigs := SignalsFromFindings([]Finding{
+		{Severity: "Significant", Statement: "a", Location: "x", Round: 1},
+		{Severity: "Minor", Statement: "b", Location: "y"},
+		{Severity: "Minor", Statement: "c", Location: "z"},
+	}, At{Stage: "review", Unit: "U", Wave: W(1)})
+	d := Digest(EvaluateWave(sigs).All)
+	if d.Attention.UnfixedSignificant.Get("U") != 1 || d.Attention.MinorFindings.Get("U") != 2 {
+		t.Errorf("digest does not read the mapper's statements: %v %v", d.Attention.UnfixedSignificant.Map(), d.Attention.MinorFindings.Map())
+	}
+}

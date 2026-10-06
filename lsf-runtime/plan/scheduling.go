@@ -308,9 +308,12 @@ func MergeOrder(p *Plan, ids []string) []string {
 	return out
 }
 
-// WavePlan partitions the remaining plan into waves, assuming every gate
-// clears and nothing is re-planned. For narration and critical-path display
-// only. done is not modified.
+// WavePlan partitions the remaining plan into waves, assuming nothing is
+// re-planned. A unit behind an uncleared organisational or release gate,
+// and everything downstream of it, appears in no wave: the JS comment says
+// "assuming every gate clears", but its readySet already excludes gated
+// units, and the port keeps the behaviour. For narration only. done is not
+// modified.
 func WavePlan(p *Plan, done Completed) [][]string {
 	d := Completed{}
 	for id, ok := range done {

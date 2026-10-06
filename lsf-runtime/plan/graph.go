@@ -382,10 +382,7 @@ func ParseDecisions(body *string) ([]Decision, []Problem) {
 // never cleared by decision, so clearing one is a problem.
 func ApplyClearances(p *Plan, decisions []Decision) []Problem {
 	problems := []Problem{}
-	byID := map[string]*Unit{}
-	for _, u := range p.Units {
-		byID[u.ID] = u
-	}
+	byID := unitIndex(p)
 	for _, d := range decisions {
 		for _, c := range d.Clears {
 			unitID, gateName, _ := strings.Cut(c, "/")
@@ -414,7 +411,9 @@ func ApplyClearances(p *Plan, decisions []Decision) []Problem {
 
 // LoadGraph is the load stage's parse: extract both blocks, parse them and
 // apply the clearances. decisionsMarkdown is nil when there is no decision
-// log.
+// log. A non-nil Plan may come with Problems, and is not yet validated: the
+// load stage turns every problem into a stop signal and then runs
+// ValidatePlan on the Plan, as the orchestrator does.
 func LoadGraph(planMarkdown string, decisionsMarkdown *string) Graph {
 	g := Graph{Decisions: []Decision{}, Problems: []Problem{}}
 	body, prob := ExtractBlock(planMarkdown, PlanTag)

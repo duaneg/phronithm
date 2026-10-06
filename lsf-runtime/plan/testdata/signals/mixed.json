@@ -1,0 +1,335 @@
+{
+ "wave": 2,
+ "calls": [
+  {
+   "fn": "null",
+   "at": {
+    "stage": "review",
+    "unit": "10",
+    "wave": 1
+   }
+  },
+  {
+   "fn": "null",
+   "at": {
+    "stage": "load"
+   }
+  },
+  {
+   "fn": "noCommit",
+   "at": {
+    "stage": "ledger",
+    "wave": 0,
+    "path": "docs/ledger.md"
+   }
+  },
+  {
+   "fn": "readings",
+   "result": [
+    {
+     "clause": "c",
+     "reading": "r"
+    },
+    {
+     "clause": "d",
+     "reading": "s"
+    }
+   ],
+   "at": {
+    "unit": "2",
+    "wave": 1,
+    "path": "docs/plans/2-plan.md"
+   }
+  },
+  {
+   "fn": "readings",
+   "result": [],
+   "at": {
+    "unit": "2",
+    "wave": 1,
+    "path": "p"
+   }
+  },
+  {
+   "fn": "documentSize",
+   "result": 30820,
+   "at": {
+    "stage": "plan",
+    "unit": "2",
+    "wave": 1,
+    "path": "docs/plans/2-plan.md",
+    "targetKb": 12
+   }
+  },
+  {
+   "fn": "documentSize",
+   "result": 1536,
+   "at": {
+    "stage": "completion-report",
+    "unit": "2",
+    "wave": 1,
+    "path": "c.md",
+    "targetKb": 0
+   }
+  },
+  {
+   "fn": "documentSize",
+   "result": null,
+   "at": {
+    "stage": "plan",
+    "unit": "2",
+    "wave": 1,
+    "path": "p",
+    "targetKb": 1
+   }
+  },
+  {
+   "fn": "implement",
+   "result": {
+    "deviations": [
+     "wrote | a pipe\nand a newline"
+    ],
+    "writesOutsideScope": [
+     "CLAUDE.md",
+     "é/ü.md"
+    ],
+    "deferrals": [
+     {
+      "statement": "later",
+      "belongsTo": "z"
+     }
+    ],
+    "discoveries": [
+     {
+      "statement": "edge — missing",
+      "affects": "y"
+     }
+    ]
+   },
+   "at": {
+    "unit": "u",
+    "wave": 2
+   }
+  },
+  {
+   "fn": "findings",
+   "result": [
+    {
+     "severity": "Critical",
+     "statement": "c",
+     "location": "a:1"
+    },
+    {
+     "severity": "Significant",
+     "statement": "s1",
+     "location": "a:2",
+     "stage": "critique-code",
+     "round": 2
+    },
+    {
+     "severity": "Significant",
+     "statement": "s2",
+     "location": "a:3"
+    },
+    {
+     "severity": "Minor",
+     "statement": "m",
+     "location": "l1"
+    },
+    {
+     "severity": "Minor",
+     "statement": "m",
+     "location": "l2"
+    },
+    {
+     "severity": "Minor",
+     "statement": "m",
+     "location": "l3"
+    },
+    {
+     "severity": "Minor",
+     "statement": "m",
+     "location": "l4"
+    },
+    {
+     "severity": "Minor",
+     "statement": "m",
+     "location": "l5"
+    },
+    {
+     "severity": "Minor",
+     "statement": "m",
+     "location": "l6"
+    }
+   ],
+   "at": {
+    "stage": "review",
+    "unit": "10",
+    "wave": 2
+   }
+  },
+  {
+   "fn": "findings",
+   "result": [
+    {
+     "severity": "Significant",
+     "statement": "nobody's",
+     "location": "x"
+    }
+   ],
+   "at": {
+    "stage": "review",
+    "wave": 2
+   }
+  },
+  {
+   "fn": "gate",
+   "result": {
+    "invalidations": [
+     {
+      "section": "§4",
+      "decision": "d",
+      "premise": "p",
+      "evidence": "e",
+      "amendment": "a"
+     },
+     {
+      "section": "",
+      "decision": " ",
+      "premise": "p"
+     }
+    ],
+    "notes": [
+     {
+      "statement": "note <&>",
+      "referent": "§6"
+     }
+    ],
+    "amendments": [
+     {
+      "unit": "abi",
+      "section": "§7",
+      "statement": "abi: already prefixed"
+     },
+     {
+      "unit": "",
+      "statement": "no unit"
+     },
+     {
+      "unit": "x",
+      "statement": "plain"
+     }
+    ]
+   },
+   "at": {
+    "wave": 2
+   }
+  },
+  {
+   "fn": "merge",
+   "result": {
+    "integrationBranch": "lsf/x",
+    "merges": [
+     {
+      "unit": "a",
+      "status": "clean",
+      "files": []
+     },
+     {
+      "unit": "b",
+      "status": "resolved",
+      "files": [
+       "f1",
+       "f2"
+      ]
+     },
+     {
+      "unit": "c",
+      "status": "unresolvable",
+      "files": [
+       "f"
+      ]
+     },
+     {
+      "unit": "d",
+      "status": "regressed",
+      "files": [
+       "t"
+      ],
+      "sha": "abc"
+     },
+     {
+      "unit": "e",
+      "status": "weird",
+      "files": []
+     }
+    ]
+   },
+   "at": {
+    "wave": 2
+   }
+  },
+  {
+   "fn": "distress",
+   "result": {
+    "contextNearExhaustion": false,
+    "midImplementationDesignDecisions": 3,
+    "deviations": 2,
+    "deferrals": 2
+   },
+   "at": {
+    "unit": "u",
+    "wave": 2
+   }
+  },
+  {
+   "fn": "distress",
+   "result": {
+    "contextNearExhaustion": true,
+    "midImplementationDesignDecisions": 0,
+    "deviations": 3,
+    "deferrals": 0
+   },
+   "at": {
+    "unit": "v",
+    "wave": 3
+   },
+   "config": {
+    "distressDeviationThreshold": 10
+   }
+  },
+  {
+   "fn": "distress",
+   "result": {
+    "contextNearExhaustion": false,
+    "midImplementationDesignDecisions": 1,
+    "deviations": 0,
+    "deferrals": 0
+   },
+   "at": {
+    "unit": "w",
+    "wave": 3
+   }
+  },
+  {
+   "fn": "findings",
+   "result": [
+    {
+     "severity": "Significant",
+     "statement": "s3\r\n\r\nsecond line",
+     "location": "b:1"
+    },
+    {
+     "severity": "Minor",
+     "statement": "m",
+     "location": "l"
+    }
+   ],
+   "at": {
+    "stage": "review",
+    "unit": "2",
+    "wave": 2
+   }
+  }
+ ]
+}
