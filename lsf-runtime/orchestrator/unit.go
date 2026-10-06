@@ -193,13 +193,15 @@ var shaHex = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 
 // checkSha is the reported SHA of a stage that commits on branch, checked
 // against the branch's tip. A SHA that is not a prefix of the tip is
-// replaced by it, with a sha-corrected record. An unresolvable branch
-// leaves the SHA as reported, with no signal: the stages after it fail on
-// the branch itself. Another git error records that the SHA was not
-// checked. With no repository there is nothing to check; with ctx done the
-// error is the cancellation's stop.
+// replaced by it, with a sha-corrected record. Nothing reads these SHAs
+// yet: the check keeps the ledger true to git (P-C8). The SHAs later stages
+// consume, merge's, are code-merge-cleanup's to check. A branch that does
+// not resolve, or is not a plain branch name, leaves the SHA as reported
+// with no signal; the completion report stops on it. Another git error
+// records that the SHA was not checked. With no repository there is
+// nothing to check; with ctx done the error is the cancellation's stop.
 func (o *orch) checkSha(ctx context.Context, at plan.At, branch, reported string) (string, *plan.Signal, error) {
-	if o.git == nil || branch == "" || strings.HasPrefix(branch, "-") {
+	if o.git == nil || branch == "" || strings.HasPrefix(branch, "-") || strings.ContainsAny(branch, "~^:@{\\ \t\n") || strings.Contains(branch, "..") {
 		return reported, nil, nil
 	}
 	tip, err := gitOps{o.git}.out(ctx, o.repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
@@ -212,7 +214,7 @@ func (o *orch) checkSha(ctx context.Context, at plan.At, branch, reported string
 		return reported, plan.ShaCorrectedSignal(at, branch, reported, "", err.Error()), nil
 	}
 	if r := strings.ToLower(jsTrim(reported)); shaHex.MatchString(r) && strings.HasPrefix(tip, r) {
-		return reported, nil, nil
+		return r, nil, nil
 	}
 	return tip, plan.ShaCorrectedSignal(at, branch, reported, tip, ""), nil
 }

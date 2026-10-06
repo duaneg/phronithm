@@ -70,6 +70,7 @@ func realRun(t *testing.T, over ...answer) (view, string, string, *gitRepo) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	b = []byte(strings.ReplaceAll(string(b), "@workTip", workTip)) // an answer's stand-in for work-A's tip
 	if err := os.WriteFile(tablePath, b, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -106,14 +107,15 @@ func journaled(t *testing.T, stateDir, prefix string) bool {
 	return len(m) > 0
 }
 
-// S3(a), postmortem §C: an implement whose git commit is denied leaves its
-// change uncommitted and reports HEAD as its SHA. In the postmortem the
-// stage's SHA was recorded; here the run stops before review, the denial
-// in the ledger.
+// S3(a), postmortem §C, simulated from its evidence: an implement whose
+// git commit is denied leaves its change uncommitted and reports HEAD (its
+// branch's tip) as its SHA, which matches, so no SHA check can catch it. In
+// the postmortem the SHA was recorded as the stage's commit; here the run
+// stops before review, the denial in the ledger.
 func TestOnRuntimeDeniedCommit(t *testing.T) {
 	out, ledger, state, _ := realRun(t, answer{
 		Contains: "Implementation plan: docs/plans/",
-		Return:   R(orchtest.Implemented("A", M{"branch": "work-A"})),
+		Return:   R(orchtest.Implemented("A", M{"branch": "work-A", "sha": "@workTip"})),
 		Shell:    "echo 'package a // more' > a2.go",
 		Denials:  []string{"git commit -m 'feat(A): implement'"},
 	})
@@ -124,6 +126,7 @@ func TestOnRuntimeDeniedCommit(t *testing.T) {
 	if journaled(t, state, "critique-code") || journaled(t, state, "lens-review") {
 		t.Error("reviewed after the stop")
 	}
+	noMatch(t, ledger, `sha-corrected`, "HEAD is the tip: the SHA matches")
 }
 
 // S3(b), postmortem §C: a cleanup whose git branch -d is denied. In the
@@ -168,11 +171,13 @@ func TestCheckSha(t *testing.T) {
 	}{
 		{"short prefix", "integration", tip[:7], tip[:7], "", ""},
 		{"full", "integration", tip, tip, "", ""},
-		{"upper case", "integration", strings.ToUpper(tip[:8]), strings.ToUpper(tip[:8]), "", ""},
+		{"upper case", "integration", strings.ToUpper(tip[:8]), tip[:8], "", ""},
 		{"mismatch", "integration", "deadbee", tip, "sha-corrected", "integration: reported deadbee, tip " + tip + "; corrected"},
 		{"empty", "integration", "", tip, "sha-corrected", "integration: reported , tip " + tip + "; corrected"},
 		{"too short", "integration", tip[:4], tip, "sha-corrected", ""},
+		{"longer than the tip", "integration", tip + "0", tip, "sha-corrected", ""},
 		{"unresolvable branch", "nope", "deadbee", "deadbee", "", ""},
+		{"revision syntax", "integration~1", "deadbee", "deadbee", "", ""},
 	} {
 		got, sig, err := o.checkSha(ctx, at, tc.branch, tc.reported)
 		if err != nil || got != tc.want || (sig == nil) != (tc.kind == "") || (sig != nil && (sig.Kind != tc.kind || (tc.stmt != "" && sig.Statement != tc.stmt))) {
