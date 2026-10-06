@@ -121,11 +121,11 @@ All probes ran with haiku/low, the prompt on stdin, `--strict-mcp-config` and `-
 - `lsf-runtime/testdata/`: `claude` (the stub), `config.example.json`, and `streams/` (six streams plus a README).
 - Docs: `docs/design/lsf-runtime.md` (the Runtime section), and `docs/plans/runtime-core-plan.md` and this file.
 
-**Size:** about 2,080 lines of code and 1,640 of tests, against the spike's estimate of 1,500–2,500 for the whole runtime including tests (`conjectured`). The estimate's scope also included code stages, signals and the CLI.
+**Size:** 2,190 lines of code and 1,730 of tests, against the spike's estimate of 1,500–2,500 for the whole runtime including tests (`conjectured`). The estimate's scope also included code stages, signals and the CLI.
 
 ## Success criteria verification
 
-51 tests pass under `go test -race` from `lsf-runtime/`. They are stable over repeated runs (`-count=3` before the step-5 fixes, `-count=2` after), and `go vet` is clean.
+55 tests pass under `go test -race` from `lsf-runtime/` and are stable over repeated runs (`-count=2` after the Phase 5 fixes). `go vet` and `gofmt -l` are clean; `staticcheck` is not installed.
 
 | # | Status | Target → achieved | Evidence |
 |---|---|---|---|
@@ -147,5 +147,41 @@ All probes ran with haiku/low, the prompt on stdin, `--strict-mcp-config` and `-
 | S16 vet and test pass | pass | proven → proven | `go vet ./...`; `go test -race ./...` |
 | S17 Runtime section | pass | evidenced → evidenced | `docs/design/lsf-runtime.md` §Runtime |
 
+## Phase 5 — review
+
+**Full-diff review** (phronithm:review, seven lenses, `go vet` and `gofmt` pre-scan) and **full-diff critique** (critique-code, round 1). Neither found anything Critical. Fixed in `5d61691`:
+
+- **Found by both.** `children.json` lost a killed launch's orphan records whenever `ps` failed, because the next launch's first spawn rewrote the file. Unreaped records are now carried forward, and a test makes `ps` fail.
+- **Found by both.** A guard timeout after a valid result event discarded the result. The value now stands, flagged `guard-killed-after-result`. This refines the requester's guard decision, which covered a hung call (one without a result). **Requester to confirm.**
+- **Review.** A hung git command could block the run with no way to signal it. Git now runs under a timeout and ends on a repeated signal, and a semaphore that yields to a stop replaces the mutex.
+- **Review and critique.** A worktree was created before admission. It is now created at the first admitted attempt.
+- **Minor:**
+  - the slot is released on panic;
+  - the schema must be a JSON object;
+  - an integration branch may not begin with `-`;
+  - `prune` runs only after a failed add;
+  - the hash covers the skill and isolation;
+  - an unreadable step record stops the run;
+  - the reaper treats zombies as gone and is tested with TERM-ignoring orphans;
+  - state files are 0644;
+  - a panic outranks cancellation;
+  - child bookkeeping lives in `children.go`;
+  - `CLAUDE.md` gains an `lsf-runtime/` entry.
+- **Noted, not changed:**
+  - `Call`'s size: the attempt loop was split into `attempt`, but the verdict switch remains;
+  - a session-limit wait is unbounded except by the wall-clock cap (now logged with its length);
+  - a normal exit whose descendant holds stdout costs `killGrace` and leaves the descendant running;
+  - `is_error` subtypes such as `error_max_turns` are unprobed.
+
+  The last three are in the design's Known limits.
+
+**End to end.** One launch ran against the real 2.1.289 binary, using the example roles narrowed to `Read` and `Read,Grep,Glob,Skill`:
+- an isolated haiku call ran in its worktree on `lsf/01234567/<key>`;
+- a `critique-code:` call was sent as `/phronithm:critique`, and its init event listed the command;
+- both returned `ok` on attempt 1, for $0.013;
+- a second launch replayed both with 0 spawns.
+
+The same check ran before the Phase 5 fixes ($0.06). Rigour: `evidenced`.
+
 ## Remaining phases
-Complete Phase 5 (Review) as defined in the phronithm:feature skill.
+Phase 5 complete. The completion report is `docs/plans/runtime-core-completion.md`.
