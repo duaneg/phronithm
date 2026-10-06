@@ -284,7 +284,7 @@ var scenarios = []scenario{
 		seeded["result"].(M)["pauseRequested"] = true
 		return orchtest.TwoWaves(), Hs{"ledger": null}, M{
 			"unscribed": []M{{"kind": "deviation", "source": "reported", "stage": "implement", "unit": "Z", "wave": 3, "statement": "dev-Z", "referent": "src/Z", "raisedBy": "implement", "disposition": "recorded"}},
-			"seed":      M{"plan:A": R(M{"branch": "salvaged-A", "sha": "s", "path": "docs/plans/A-plan.md", "readings": []any{}}), "merge:w1": seeded},
+			"seed":      M{"plan:A": R(M{"branch": "salvaged-A", "sha": "s", "path": "docs/plans/A-plan.md", "bytes": 0, "readings": []any{}}), "merge:w1": seeded},
 		}
 	}},
 	{"pause at merge with a null scribe", func() (*plan.Plan, Hs, M) {

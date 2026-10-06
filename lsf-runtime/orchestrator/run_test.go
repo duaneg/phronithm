@@ -1438,7 +1438,7 @@ func TestAppendStagePrompts(t *testing.T) {
 
 // js: a seeded stage return stands in for the agent, matched by label
 func TestSeededReturn(t *testing.T) {
-	planned := R(M{"branch": "salvaged-A", "sha": "s", "path": "docs/plans/A-plan.md", "readings": []any{}})
+	planned := R(M{"branch": "salvaged-A", "sha": "s", "path": "docs/plans/A-plan.md", "bytes": 0, "readings": []any{}})
 	s := stub(t, twoWaves(), nil, M{"seed": M{"plan:A": planned}})
 	out := run(t, s)
 	eq(t, out.Status, "complete")

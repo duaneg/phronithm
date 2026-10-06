@@ -195,9 +195,9 @@ func TestDecodeNullsAndMissingResult(t *testing.T) {
 	}
 }
 
-// S7: the flags and denials a call returns become its driver-event
-// signals at the call site: a plain call, a null call, and a parallel
-// reviewer, including one whose branch returned null.
+// call and callSigs turn a CallResult's flags and denials into signals,
+// for a value, a null, and parallelAgents slots (a value and a null).
+// Each real call site's wiring is TestUncommittedPerSite's.
 func TestCallResultReachesCallSites(t *testing.T) {
 	flagged := func(v any) H {
 		return func(Call, *State) any {

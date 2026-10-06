@@ -68,7 +68,13 @@ func newOrch(rt Runtime, c *runCtx, seed map[string]json.RawMessage) *orch {
 func (o *orch) agent(ctx context.Context, prompt string, opts lsfrt.Opts) (lsfrt.CallResult, string, error) {
 	if s, ok := o.seed[opts.Label]; ok {
 		o.rt.Log(opts.Label + ": seeded from args.seed; agent not spawned")
-		return lsfrt.CallResult{Value: stripSeedPause(s)}, opts.Label, nil
+		cr := lsfrt.CallResult{Value: stripSeedPause(s)}
+		// The runtime validates every return it makes; a seed it never saw.
+		if errs := lsfrt.ValidateOutput(opts.Schema, cr.Value); len(cr.Value) > 0 && string(cr.Value) != "null" && len(errs) > 0 {
+			o.rt.Log(fmt.Sprintf("%s: seed outside its schema (%s); treated as null", opts.Label, strings.Join(errs, "; ")))
+			cr.Value, cr.Violations = nil, errs
+		}
+		return cr, opts.Label, nil
 	}
 	opts.Label = o.unique(opts.Label)
 	cr, err := o.rt.Call(ctx, prompt, opts)
@@ -227,13 +233,17 @@ type site struct {
 }
 
 // callSigs maps a call's CallResult to its driver-event signals (D21) and
-// returns the value to decode.
+// returns the value to decode. Violations (the runtime's, or a seed's from
+// agent) are a schema-violation; the value is then null.
 func (o *orch) callSigs(s site, cr lsfrt.CallResult, label string, schema json.RawMessage) (json.RawMessage, []*plan.Signal) {
 	sigs, unknown := plan.SignalsFromCall(plan.CallEvents{
-		Label: label, Writer: s.writer, Flags: cr.Flags, Denials: cr.Denials, Uncommitted: cr.Uncommitted,
+		Label: label, Writer: s.writer, Flags: cr.Flags, Denials: cr.Denials, Uncommitted: cr.Uncommitted, Violations: cr.Violations,
 	}, s.at)
 	if len(unknown) > 0 {
 		o.rt.Log(label + ": unknown call flag(s): " + strings.Join(unknown, ", "))
+	}
+	if len(cr.Violations) > 0 {
+		return nil, sigs
 	}
 	return cr.Value, sigs
 }

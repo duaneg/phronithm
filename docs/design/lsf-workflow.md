@@ -437,8 +437,8 @@ declare are only those whose consequence the script can check.
    its pin; an invalid plan at load. Structural signals also include the
    driver-detected events: what the runtime observes about a call, rather
    than reads from its result. These are permission denials, changes left
-   uncommitted at a call's return, a skill that did not load, and a guard
-   kill after a valid result.
+   uncommitted at a call's return, a skill that did not load, a guard
+   kill after a valid result, and a result outside its stage's schema.
 2. **Adjudicated** — one judgement per wave, in a form the script checks: the
    wave gate's complete invalidation, and the re-plan's verdict on each item
    it was handed. Measured recall on premise- and requirements-level defects
@@ -491,7 +491,11 @@ STOP (return an escalation record):
 - a stage that commits returning with changes no commit holds, or whose
   uncommitted check failed. In the main checkout a requester's own edit
   during the call counts too: the statement names the paths;
-- a skill that did not load after the runtime's retry.
+- a skill that did not load after the runtime's retry;
+- a stage result outside its schema (an enum value, a missing field), even
+  where its mapping would otherwise record it: an unknown merge status is
+  not a claimed-disjoint conflict, and an unknown finding severity is not
+  dropped.
 
 There are no volume or recurrence rules; counting reported signals measures
 verbosity, not trouble in the work.
@@ -554,7 +558,7 @@ A stop does not always relaunch the workflow. Per STOP kind:
 | STOP kind | Relaunch | Inputs |
 |-----------|----------|--------|
 | Architecture invalidated; a re-plan item unabsorbed because the answer changes a decision in the architecture document or the request record | `phronithm:large-scale-feature` Phase 2, re-entry sub-procedure (fresh session; the skill's startup prompt carries the inputs) | Per `phronithm:lsf-drive`'s *Return to Phase 2* prompt: plan SHA, architecture document and request record, integration branch, ledger path, the stop with the gate's five fields, the requester's decision, unscribed ledger rows |
-| Everything else: done condition unevaluable as written (the requester's rewrite is a decision the decision re-plan applies); cycle or unrepairable budget excess; gate non-convergence; unresolvable merge conflict or regression; environment drift; gated units; null agent; load failure; undischarged obligation; uncommitted at return; skill not loaded | Same workflow | Decision log SHA |
+| Everything else: done condition unevaluable as written (the requester's rewrite is a decision the decision re-plan applies); cycle or unrepairable budget excess; gate non-convergence; unresolvable merge conflict or regression; environment drift; gated units; null agent; load failure; undischarged obligation; uncommitted at return; skill not loaded; schema violation | Same workflow | Decision log SHA |
 
 For an uncommitted-at-return stop, the requester commits or removes the named paths and relaunches. A relaunch without decisions replays the call, which re-checks the paths and passes once they are clean. With decisions, every prompt changes and the stage runs again. An isolated writer's worktree is reused, so dirt still in it is reported again.
 

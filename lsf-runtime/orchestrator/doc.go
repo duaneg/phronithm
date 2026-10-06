@@ -115,4 +115,21 @@
 //     guard's, on every launch until it exempts the paths: the bytes must
 //     be exact. JS reports these only as a null or an empty SHA, without
 //     the reason.
+//
+// D20 to D22 are the driver-event signals (unit runtime-signals). D20, the
+// fail-closed mappers, is the plan package's.
+//
+//   - D21. Every agent call's CallResult becomes signals at its call site
+//     (site, callSigs; plan.SignalsFromCall). Uncommitted changes at return
+//     stop a writer (uncommitted-at-return) and are recorded for a reader
+//     (residue-at-return); a skill not loaded stops; permission denials and
+//     a guard kill after a result are recorded. Unit stages check the
+//     call's stops once, after the stage's own records; loop stages add
+//     them to their existing evaluation, so a merge stop still re-plans
+//     over what merged. A return outside its schema is a schema-violation
+//     stop beside agent-null: the runtime reports a live one as
+//     CallResult.Violations, and agent checks a seed itself. JS has no
+//     CallResult, validates nothing and has none of these kinds;
+//     promptparity's scenarios set no flags, and their returns (seeds
+//     included) satisfy their schemas.
 package orchestrator
