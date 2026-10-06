@@ -14,9 +14,10 @@
   - `doc.go`
   - `schema.go`, `jsvalue.go`, `yaml.go`, `graph.go`, `scheduling.go`, `signals.go`
   - `schema_test.go`, `yaml_test.go`, `graph_test.go`, `scheduling_test.go`, `signals_test.go`
-  - `testdata/graph/`: 49 fixtures
+  - `testdata/graph/`: 50 fixtures; `testdata/signals/`: 3
 - `lsf-runtime/tools/graphparity/main.go`, `main_test.go`
 - `docs/plans/orchestrator-port-plan-plan.md`, this file
+- `CLAUDE.md` (the `lsf-runtime` entry; outside the unit's Scope)
 
 ## Per step
 
@@ -67,12 +68,33 @@ Two of the critics had no Bash, so their findings came from reading alone. One o
 | S2 graph.js ported | proven | proven, pass | `yaml_test.go`, `graph_test.go`; parity |
 | S3 scheduling.js ported | proven | proven, pass | `scheduling_test.go`, `signals_test.go`; parity scheduling cases |
 | S4 every JS test ported | proven / evidenced | proven (tests pass), evidenced (titles) | 8/13/29 JS titles. All 50 appear verbatim in `// js:` comments (one-off Python check using `ast.literal_eval` titles, run at `58e0967`) |
-| S5 done condition, parity | proven | proven, pass | `go run ./tools/graphparity` reports "124 cases identical". This includes `loadGraph` on the live breakdown plan and every `graph.test.js` fixture through parseYaml, parsePlanGraph, parseDecisions and loadGraph. `TestParity` runs it under `go test` when node is present. Mutation checks: a changed problem message, the cycle/overlap/order messages, and removing the completed-unit skip each fail it |
+| S5 done condition, parity | proven | proven, pass | `go run ./tools/graphparity` reports "145 cases identical" at `0f4313b`. This includes `loadGraph` on the live breakdown plan and every `graph.test.js` fixture through parseYaml, parsePlanGraph, parseDecisions and loadGraph. `TestParity` runs it under `go test` when node is present. Mutation checks: a changed problem message, the cycle/overlap/order messages, and removing the completed-unit skip each fail it |
 | S6 parity extras | proven | proven, pass | Constants case (kind lists, schemas, stageSchema, DEFAULT_CONFIG, OVERSIZE_FACTOR). `validatePlan` on every loaded plan. Ready/blocked/waves/mergeOrder, and the same after the first wave, on valid plans |
 | S7 divergences tested and listed | proven | proven, pass | D1 `TestDivergenceD1PrototypeKeys`; D2 `TestDivergenceD2`, `TestSchedulingDuplicatesAndSelfDependency`; D3 `TestDivergenceD3LineTerminators`; D4 `TestDivergenceD4NonStringFields` and the `*.d4.yaml` parity normalisation; D7 `TestDivergenceD7Encoding`. D5 and D6 are not representable, as planned. All are listed in `plan/doc.go` |
 | S8 vet and race tests; no dependency | proven | proven, pass | `go vet ./...`, `go test -race ./...` (plan, runtime, graphparity). `go.mod` unchanged since `d88f63b` |
 | S9 `workflows/` unchanged | evidenced | evidenced, pass | `git diff --stat d88f63b -- workflows/` is empty |
 
-## Remaining phases
+## Phase 5
 
-Complete Phase 5 (Review) as defined in the phronithm:feature skill.
+The gates ran in subagents at the sonnet pin: `phronithm:review` on `d88f63b..HEAD` (all lenses; `go vet` clean; staticcheck not installed), plus the critique gate on the full diff. Neither had Critical findings. The critique had one Significant finding: the `doc.go` divergence register overclaimed and was incomplete. Fixes are in `0f4313b`:
+- The register was rewritten. D1–D4 arise only on a plan that loads with problems; D5–D8 can arise on any run. D8, input typing, is new.
+- Panics and concurrency are now stated.
+- Parity now covers the signal layer and block extraction (145 cases). Mutation checks on the new cases first left Counts key order and the CRLF regex undetected. Two fixture additions fixed that, and every applied mutation now fails.
+- The live documents are optional.
+- `WavePlan` comment corrected. `NewEscalation` copies Wave. `LoadGraph` documents the validate step. `ApplyClearances` uses `unitIndex`. A findings→digest round-trip test was added.
+- `CLAUDE.md` updated.
+
+Accepted:
+- the zero-value `Config` hazard (documented; `ConfigFrom` required);
+- exported mutable lists;
+- quadratic `OverlappingPairs`;
+- the `*string`/`string` asymmetry between ParseDecisions and ParsePlanGraph.
+
+Carried to the completion report as discoveries:
+- fail-open on an unknown merge status or finding severity (JS-faithful);
+- panics at the stage boundary;
+- typed-decode failure mapping to `agent-null`;
+- the mapper structs being narrower than the stage results;
+- `WavePlan` stopping at gates (the JS comment disagrees with the JS code).
+
+End-to-end: graphparity is the end-to-end check. It runs the real breakdown plan, `docs/plan-graph.md` and every fixture through both languages.
