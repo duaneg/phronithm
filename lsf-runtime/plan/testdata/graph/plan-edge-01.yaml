@@ -1,0 +1,25 @@
+units:
+  - id: true
+    type: feature
+    1: y
+    gates:
+      - name: ""
+        kind: data
+        pin: ""
+      - name: g
+        kind: data
+        pin: [x]
+      - plain
+  - id: [a, b]
+    type: feature
+    gates: g
+  - id: dup
+    type: design
+    complete: ~
+    scope: ["", a]
+  - id: dup
+    type: meta
+    publishes: p
+  - x
+execution_order: [dup, b, dup, b]
+10: z

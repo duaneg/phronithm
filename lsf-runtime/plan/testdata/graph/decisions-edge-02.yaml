@@ -1,0 +1,14 @@
+decisions:
+  - plain
+  - id: []
+    date: true
+    question: ""
+    decision: d
+    2: extra
+    clears: [a/b, ""]
+    resolves: r
+  - id: D9
+    date: d
+    question: q
+    decision: d
+other: 1

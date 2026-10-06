@@ -1,0 +1,14 @@
+units:
+  - id: a
+    type:
+      b: 1
+      2: [x, ~, "q\"t"]
+    gates:
+      - name: g
+        kind: [a, b]
+      - name: h
+        kind: true
+  - id: b
+    type: ""
+  - id: c
+execution_order: [a, b, c]
