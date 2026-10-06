@@ -117,7 +117,7 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 	if len(order) > 0 {
 		t := c.tierFor("default")
 		label := "merge:w" + itoa(wave)
-		m, err := call[mergeResult](ctx, l.orch, mergePrompt(c, l.ref(), wave, order), lsfrt.Opts{Label: label, Model: t.Model, Effort: t.Effort, Phase: "Merge", Schema: mergeSchema})
+		m, _, err := call[mergeResult](ctx, l.orch, mergePrompt(c, l.ref(), wave, order), lsfrt.Opts{Label: label, Model: t.Model, Effort: t.Effort, Phase: "Merge", Schema: mergeSchema})
 		if err != nil {
 			return nil, true, false, err
 		}
@@ -163,24 +163,15 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 	if len(merged) > 0 {
 		gt, mt := c.tierFor("gate"), c.tierFor("mechanical")
 		gl, cl := "review-gate:w"+itoa(wave), "cleanup:w"+itoa(wave)
-		labels := make([]string, 2)
-		raws, err := l.rt.Parallel(ctx, []func(context.Context) (json.RawMessage, error){
-			func(ctx context.Context) (json.RawMessage, error) {
-				raw, label, err := l.agent(ctx, gatePrompt(c, l.ref(), wave, merged, prevArch), lsfrt.Opts{Label: gl, Model: gt.Model, Effort: gt.Effort, Phase: "Gate", Schema: gateSchema})
-				labels[0] = label
-				return raw, err
-			},
-			func(ctx context.Context) (json.RawMessage, error) {
-				raw, label, err := l.agent(ctx, cleanupPrompt(c, l.ref(), wave), lsfrt.Opts{Label: cl, Model: mt.Model, Effort: mt.Effort, Phase: "Merge", Schema: cleanupSchema})
-				labels[1] = label
-				return raw, err
-			},
+		res, err := l.parallelAgents(ctx, []agentReq{
+			{gatePrompt(c, l.ref(), wave, merged, prevArch), lsfrt.Opts{Label: gl, Model: gt.Model, Effort: gt.Effort, Phase: "Gate", Schema: gateSchema}},
+			{cleanupPrompt(c, l.ref(), wave), lsfrt.Opts{Label: cl, Model: mt.Model, Effort: mt.Effort, Phase: "Merge", Schema: cleanupSchema}},
 		})
 		if err != nil {
 			return nil, true, false, err
 		}
-		g := decode[plan.GateResult](l.rt, labels[0], raws[0])
-		cu := decode[cleanupResult](l.rt, labels[1], raws[1])
+		g := decode[plan.GateResult](l.rt, res[0].label, res[0].cr.Value)
+		cu := decode[cleanupResult](l.rt, res[1].label, res[1].cr.Value)
 		if g == nil {
 			waveSignals = append(waveSignals, plan.NullReturnSignal(plan.At{Stage: "review-gate", Wave: plan.W(wave)}))
 		} else {
@@ -244,7 +235,7 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 		return nil, false, false, nil
 	}
 	pt := c.tierFor("planning")
-	rp, err := call[replanResult](ctx, l.orch, replanPrompt(c, l.ref(), wave, merged, conflicts, items, evalA.Stops),
+	rp, _, err := call[replanResult](ctx, l.orch, replanPrompt(c, l.ref(), wave, merged, conflicts, items, evalA.Stops),
 		lsfrt.Opts{Label: "replan:w" + itoa(wave), Model: pt.Model, Effort: pt.Effort, Schema: replanSchema, Phase: "Re-plan"})
 	if err != nil {
 		return nil, true, false, err
@@ -305,7 +296,7 @@ func (l *launch) terminate(ctx context.Context) (json.RawMessage, bool, error) {
 	c := l.ctx
 	l.terminationRan = true
 	t := c.tierFor("planning")
-	term, err := call[terminationResult](ctx, l.orch, terminationPrompt(c, l.ref()), lsfrt.Opts{Label: "termination", Model: t.Model, Effort: t.Effort, Phase: "Termination", Schema: terminationSchema})
+	term, _, err := call[terminationResult](ctx, l.orch, terminationPrompt(c, l.ref()), lsfrt.Opts{Label: "termination", Model: t.Model, Effort: t.Effort, Phase: "Termination", Schema: terminationSchema})
 	if err != nil {
 		return nil, true, err
 	}
@@ -347,7 +338,7 @@ func (l *launch) terminate(ctx context.Context) (json.RawMessage, bool, error) {
 func (l *launch) finish(ctx context.Context) (json.RawMessage, error) {
 	c := l.ctx
 	t := c.tierFor("default")
-	ob, err := call[obligationsResult](ctx, l.orch, obligationsPrompt(c, l.ref()), lsfrt.Opts{Label: "obligations", Model: t.Model, Effort: t.Effort, Phase: "Termination", Schema: obligationsSchema})
+	ob, _, err := call[obligationsResult](ctx, l.orch, obligationsPrompt(c, l.ref()), lsfrt.Opts{Label: "obligations", Model: t.Model, Effort: t.Effort, Phase: "Termination", Schema: obligationsSchema})
 	if err != nil {
 		return nil, err
 	}

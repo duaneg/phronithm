@@ -2,7 +2,6 @@ package orchestrator
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -179,7 +178,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	}
 
 	// 1. plan
-	planned, err := call[unitPlanResult](ctx, o, unitPlanPrompt(c, pr, u), o.unitOpts(u, "plan", "planning", lsfrt.Opts{Isolation: "worktree", Schema: unitPlanSchema}))
+	planned, _, err := call[unitPlanResult](ctx, o, unitPlanPrompt(c, pr, u), o.unitOpts(u, "plan", "planning", lsfrt.Opts{Isolation: "worktree", Schema: unitPlanSchema}))
 	if err != nil {
 		return nil, err
 	}
@@ -197,13 +196,14 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	// 2. critique gate over the plan
 	planGate, err := critiqueLoop(at, &sigs,
 		func(n int) ([]reviewer, error) {
-			r, err := call[findingsResult](ctx, o, planCritiquePrompt(c, pr, u, branch, n),
+			r, _, err := call[findingsResult](ctx, o, planCritiquePrompt(c, pr, u, branch, n),
 				o.unitOpts(u, fmt.Sprintf("critique-plan:r%d", n), "critique", lsfrt.Opts{AgentType: "phronithm:critic", Schema: findingsSchema}))
 			return []reviewer{{"critique-plan", r}}, err
 		},
 		func(n int, criticals []critical) (*ret[fixResult], error) {
-			return call[fixResult](ctx, o, fixPrompt(c, pr, u, branch, "plan", criticals, n, nil),
+			r, _, err := call[fixResult](ctx, o, fixPrompt(c, pr, u, branch, "plan", criticals, n, nil),
 				o.unitOpts(u, fmt.Sprintf("fix-plan:r%d", n), "", lsfrt.Opts{Isolation: "worktree", Schema: fixSchema}))
+			return r, err
 		},
 		func(fixed *ret[fixResult], n int) []*plan.Signal { branch = fixed.Result.Branch; return nil },
 	)
@@ -216,7 +216,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	}
 
 	// 3. implement
-	impl, err := call[implementResult](ctx, o, implementPrompt(c, pr, u, branch), o.unitOpts(u, "implement", "", lsfrt.Opts{Isolation: "worktree", Schema: implementSchema}))
+	impl, _, err := call[implementResult](ctx, o, implementPrompt(c, pr, u, branch), o.unitOpts(u, "implement", "", lsfrt.Opts{Isolation: "worktree", Schema: implementSchema}))
 	if err != nil {
 		return nil, err
 	}
@@ -270,22 +270,17 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 					rvs = append(rvs, rv{"lens-review", lensReviewPrompt(c, pr, u, branch, lenses, n, gr)})
 				}
 			}
-			labels := make([]string, len(rvs))
-			thunks := []func(context.Context) (json.RawMessage, error){}
-			for i, r := range rvs {
-				thunks = append(thunks, func(ctx context.Context) (json.RawMessage, error) {
-					raw, label, err := o.agent(ctx, r.prompt, o.unitOpts(u, fmt.Sprintf("%s:r%d", r.stage, n), "critique", lsfrt.Opts{Isolation: "worktree", Schema: findingsSchema}))
-					labels[i] = label
-					return raw, err
-				})
+			reqs := []agentReq{}
+			for _, r := range rvs {
+				reqs = append(reqs, agentReq{r.prompt, o.unitOpts(u, fmt.Sprintf("%s:r%d", r.stage, n), "critique", lsfrt.Opts{Isolation: "worktree", Schema: findingsSchema})})
 			}
-			raws, err := o.rt.Parallel(ctx, thunks)
+			res, err := o.parallelAgents(ctx, reqs)
 			if err != nil {
 				return nil, err
 			}
 			out := []reviewer{}
 			for i, r := range rvs {
-				out = append(out, reviewer{r.stage, decode[findingsResult](o.rt, labels[i], raws[i])})
+				out = append(out, reviewer{r.stage, decode[findingsResult](o.rt, res[i].label, res[i].cr.Value)})
 			}
 			return out, nil
 		},
@@ -294,8 +289,9 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 			if design {
 				schema = fixSchema
 			}
-			return call[fixResult](ctx, o, fixPrompt(c, pr, u, branch, "code", criticals, n, impl.Result.Gates),
+			r, _, err := call[fixResult](ctx, o, fixPrompt(c, pr, u, branch, "code", criticals, n, impl.Result.Gates),
 				o.unitOpts(u, fmt.Sprintf("fix-code:r%d", n), "", lsfrt.Opts{Isolation: "worktree", Schema: schema}))
+			return r, err
 		},
 		func(fixed *ret[fixResult], n int) []*plan.Signal {
 			branch = fixed.Result.Branch
@@ -350,7 +346,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	ca := at("completion-report")
 	ca.Path, ca.TargetKB = completionPath(u), completionReportTargetKB
 	sigs = append(sigs, plan.SignalsFromDocumentSize(float64(len(text)), ca)...)
-	report, err := call[completionResult](ctx, o, completionScribePrompt(c, pr, u, branch, text),
+	report, _, err := call[completionResult](ctx, o, completionScribePrompt(c, pr, u, branch, text),
 		o.unitOpts(u, "completion-report", "mechanical", lsfrt.Opts{Isolation: "worktree", Schema: completionSchema}))
 	if err != nil {
 		return nil, err

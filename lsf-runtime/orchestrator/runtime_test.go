@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -107,13 +108,13 @@ func TestSeedStandsInOnEveryUseAndDropsPauseReport(t *testing.T) {
 	}
 	o := newOrch(t, s, seed)
 	for range 2 {
-		raw, label, err := o.agent(context.Background(), "p", lsfrt.Opts{Label: "merge:w1"})
+		cr, label, err := o.agent(context.Background(), "p", lsfrt.Opts{Label: "merge:w1"})
 		if err != nil || label != "merge:w1" {
 			t.Fatal(err, label)
 		}
-		r := decode[mergeResult](s, label, raw)
+		r := decode[mergeResult](s, label, cr.Value)
 		if r == nil || r.Result.PlanSha != "s" || r.Result.PauseRequested {
-			t.Errorf("%s", raw)
+			t.Errorf("%s", cr.Value)
 		}
 	}
 	if len(s.Calls) != 0 || len(s.Logs) != 2 || s.Logs[0] != "merge:w1: seeded from args.seed; agent not spawned" {
@@ -195,5 +196,96 @@ func TestDecodeNullsAndMissingResult(t *testing.T) {
 		if decode[unitPlanResult](s, "plan:A", json.RawMessage(bad)) != nil {
 			t.Errorf("%s decodes", bad)
 		}
+	}
+}
+
+// S4: the flags and denials a call returns reach the call site with its
+// value: a plain call, a null call, and a parallel reviewer.
+func TestCallResultReachesCallSites(t *testing.T) {
+	flagged := func(v any) H {
+		return func(Call, *State) any {
+			cr := lsfrt.CallResult{Flags: []string{"skill-not-loaded"}, Denials: []string{"Bash: git push"}}
+			if v != nil {
+				b, _ := json.Marshal(v)
+				cr.Value = b
+			}
+			return cr
+		}
+	}
+	s := orchtest.New(t, orchtest.TwoWaves(), Hs{"implement": flagged(orchtest.Ret(orchtest.Implemented("A", nil))), "plan": flagged(nil),
+		"critique-code": flagged(orchtest.NoFindings()), "lens-review": flagged(nil)}, nil)
+	o := newOrch(t, s, nil)
+	ctx := context.Background()
+	shows := func(what string, cr lsfrt.CallResult) {
+		t.Helper()
+		if !slices.Equal(cr.Flags, []string{"skill-not-loaded"}) || !slices.Equal(cr.Denials, []string{"Bash: git push"}) {
+			t.Errorf("%s: %+v", what, cr)
+		}
+	}
+
+	r, cr, err := call[implementResult](ctx, o, "p", lsfrt.Opts{Label: "implement:A"})
+	if err != nil || r == nil {
+		t.Fatal(r, err)
+	}
+	shows("plain call", cr)
+	r2, cr, err := call[unitPlanResult](ctx, o, "p", lsfrt.Opts{Label: "plan:A"})
+	if err != nil || r2 != nil {
+		t.Fatal(r2, err)
+	}
+	shows("null call", cr)
+	res, err := o.parallelAgents(ctx, []agentReq{{"p", lsfrt.Opts{Label: "critique-code:r1:A"}}, {"p", lsfrt.Opts{Label: "lens-review:r1:A"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shows("parallel reviewer", res[0].cr)
+	shows("parallel null reviewer", res[1].cr)
+	if res[0].cr.Value == nil || res[1].cr.Value != nil || res[0].label != "critique-code:r1:A" {
+		t.Errorf("%+v", res)
+	}
+}
+
+// Calls and code steps share the label counter, so a label used by both
+// stays launch-unique; a seed naming a step is logged and not used.
+func TestStepSharesLabelCounterAndIgnoresSeed(t *testing.T) {
+	s := orchtest.New(t, orchtest.TwoWaves(), nil, nil)
+	o := newOrch(t, s, map[string]json.RawMessage{"ledger:w1": json.RawMessage(`{"result":{"sha":"seeded"}}`)})
+	ctx := context.Background()
+	if _, _, err := o.runStep(ctx, "ledger:w2", M{"a": 1}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := o.agent(ctx, "p", lsfrt.Opts{Label: "ledger:w2"}); err != nil {
+		t.Fatal(err)
+	}
+	r, fault, err := step[scribeResult](ctx, o, "ledger:w1", M{}, nil)
+	if err != nil || fault != "" || r == nil || r.Result.Sha != "l" {
+		t.Fatalf("%+v %q %v: the seed stood in", r, fault, err)
+	}
+	eqs(t, s.Labels(), []string{"ledger:w2", "ledger:w2#2", "ledger:w1"})
+	if !s.Calls[0].Step || s.Calls[1].Step || string(s.Input("ledger:w2")) != `{"a":1}` {
+		t.Errorf("%+v", s.Calls)
+	}
+	eqs(t, s.Logs, []string{"ledger:w1: args.seed ignored; code stage"})
+}
+
+// A step's stop propagates; any other error is the stage's fault, unless
+// the context has ended, when it is a cancellation.
+func TestStepErrors(t *testing.T) {
+	stop := &lsfrt.StopError{Reason: lsfrt.StopMaxCalls}
+	s := orchtest.New(t, orchtest.TwoWaves(), Hs{
+		"ledger": func(Call, *State) any { return errors.New("git: boom") },
+		"load":   func(Call, *State) any { return stop },
+	}, nil)
+	o := newOrch(t, s, nil)
+	if _, fault, err := step[scribeResult](context.Background(), o, "ledger:w1", M{}, nil); err != nil || fault != "git: boom" {
+		t.Errorf("fault %q err %v", fault, err)
+	}
+	if _, fault, err := step[copyResult](context.Background(), o, "load", M{}, nil); err != stop || fault != "" {
+		t.Errorf("fault %q err %v", fault, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, fault, err := step[scribeResult](ctx, o, "ledger:w1", M{}, nil)
+	if r, ok := lsfrt.IsStop(err); !ok || r != lsfrt.StopCancelled || fault != "" {
+		t.Errorf("fault %q err %v", fault, err)
 	}
 }

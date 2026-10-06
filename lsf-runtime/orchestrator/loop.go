@@ -202,7 +202,7 @@ func (l *launch) scribeLedger(ctx context.Context, label string) error {
 		return nil
 	}
 	t := l.ctx.tierFor("mechanical")
-	r, err := call[scribeResult](ctx, l.orch, ledgerPrompt(l.ctx, l.ref(), l.wave, fresh),
+	r, _, err := call[scribeResult](ctx, l.orch, ledgerPrompt(l.ctx, l.ref(), l.wave, fresh),
 		lsfrt.Opts{Label: label, Model: t.Model, Effort: t.Effort, Phase: "Ledger", Schema: ledgerSchema})
 	if err != nil {
 		return err
@@ -281,7 +281,7 @@ func (l *launch) applyDirectEdits(ctx context.Context, at planRef, edits []direc
 		label = "direct-edits:w" + itoa(*wave)
 	}
 	t := l.ctx.tierFor("default")
-	r, err := call[scribeResult](ctx, l.orch, directEditsPrompt(l.ctx, at, what, edits),
+	r, _, err := call[scribeResult](ctx, l.orch, directEditsPrompt(l.ctx, at, what, edits),
 		lsfrt.Opts{Label: label, Model: t.Model, Effort: t.Effort, Phase: phase, Schema: scribeSchema})
 	if err != nil {
 		return nil, err
@@ -315,7 +315,7 @@ type loaded struct {
 
 func (l *launch) loadPlan(ctx context.Context, sha, label string, wave *int) (loaded, error) {
 	t := l.ctx.tierFor("mechanical")
-	cp, err := call[copyResult](ctx, l.orch, copyPrompt(l.ctx, sha), lsfrt.Opts{Label: label, Model: t.Model, Effort: t.Effort, Phase: "Load", Schema: copySchema})
+	cp, _, err := call[copyResult](ctx, l.orch, copyPrompt(l.ctx, sha), lsfrt.Opts{Label: label, Model: t.Model, Effort: t.Effort, Phase: "Load", Schema: copySchema})
 	if err != nil {
 		return loaded{}, err
 	}
@@ -423,7 +423,7 @@ func Run(ctx context.Context, rt Runtime) (json.RawMessage, error) {
 	// SHA can appear in every prompt they affect.
 	if len(a.Decisions) > 0 {
 		t := c.tierFor("mechanical")
-		d, err := call[scribeResult](ctx, l.orch, decisionLogPrompt(c, a.Decisions),
+		d, _, err := call[scribeResult](ctx, l.orch, decisionLogPrompt(c, a.Decisions),
 			lsfrt.Opts{Label: "decision-log", Model: t.Model, Effort: t.Effort, Phase: "Load", Schema: decisionLogSchema})
 		if err != nil {
 			return nil, err
@@ -446,7 +446,7 @@ func Run(ctx context.Context, rt Runtime) (json.RawMessage, error) {
 			rpItems = append(rpItems, rpItem{id: dec.ID, describe: dec.Question, described: true, stopText: dec.Question, referent: dec.ID})
 		}
 		t = c.tierFor("planning")
-		rp, err := call[replanResult](ctx, l.orch, decisionReplanPrompt(c, l.ref(), items),
+		rp, _, err := call[replanResult](ctx, l.orch, decisionReplanPrompt(c, l.ref(), items),
 			lsfrt.Opts{Label: "decision-replan", Model: t.Model, Effort: t.Effort, Phase: "Load", Schema: replanSchema})
 		if err != nil {
 			return nil, err

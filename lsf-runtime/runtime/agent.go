@@ -131,7 +131,7 @@ func (rt *Runtime) attempt(ctx context.Context, c *callState) (*attempt, verdict
 		return nil, verdict{}, err
 	}
 	if c.cwd == "" {
-		cwd, err := rt.cwdFor(ctx, c.o, c.key)
+		cwd, _, err := rt.cwdFor(ctx, c.o, c.key)
 		if err != nil {
 			return nil, verdict{}, err
 		}

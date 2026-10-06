@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -11,12 +12,17 @@ import (
 )
 
 // Runtime is what the orchestrator needs from its host: *lsfrt.Runtime, or
-// a stub in tests. Agent's only error is a *lsfrt.StopError, and its nil
-// value is null. Parallel recovers a branch's panic or non-stop error to a
-// nil slot and returns the first stop after every branch finishes.
+// a stub in tests. Call's only error is a *lsfrt.StopError, and its nil
+// Value is null. Parallel recovers a branch's panic or non-stop error to a
+// nil slot and returns the first stop after every branch finishes. Step
+// journals a code step (lsfrt.Runtime.Step). Repo is the main checkout ("" when
+// there is none); Worktree is a code step's own worktree and its branch.
 type Runtime interface {
-	Agent(ctx context.Context, prompt string, o lsfrt.Opts) (json.RawMessage, error)
+	Call(ctx context.Context, prompt string, o lsfrt.Opts) (lsfrt.CallResult, error)
 	Parallel(ctx context.Context, thunks []func(context.Context) (json.RawMessage, error)) ([]json.RawMessage, error)
+	Step(ctx context.Context, label string, input []byte, fn func(ctx context.Context, interrupted bool) (json.RawMessage, error)) (json.RawMessage, error)
+	Repo() string
+	Worktree(ctx context.Context, label string) (path, branch string, err error)
 	Log(msg string)
 	Args() json.RawMessage
 }
@@ -40,21 +46,101 @@ type orch struct {
 // agent is the orchestrator's agent call (D10). A seeded label stands in
 // for the agent on every use, as JS's seed wrapper does; a seed reports the
 // pause ref as it stood when salvaged, so its report is dropped. A real call
-// gets a launch-unique label: the nth use of a label is `label#n`.
-// It returns the label used.
-func (o *orch) agent(ctx context.Context, prompt string, opts lsfrt.Opts) (json.RawMessage, string, error) {
+// gets a launch-unique label (unique): the nth use of a label is `label#n`.
+// It returns the call's result and the label used.
+func (o *orch) agent(ctx context.Context, prompt string, opts lsfrt.Opts) (lsfrt.CallResult, string, error) {
 	if s, ok := o.seed[opts.Label]; ok {
 		o.rt.Log(opts.Label + ": seeded from args.seed; agent not spawned")
-		return stripSeedPause(s), opts.Label, nil
+		return lsfrt.CallResult{Value: stripSeedPause(s)}, opts.Label, nil
 	}
+	opts.Label = o.unique(opts.Label)
+	cr, err := o.rt.Call(ctx, prompt, opts)
+	return cr, opts.Label, err
+}
+
+// unique is label for its first use in the launch and `label#n` for its
+// nth. Calls and code steps share the count, so their labels never collide.
+func (o *orch) unique(label string) string {
 	o.mu.Lock()
-	o.uses[opts.Label]++
-	if n := o.uses[opts.Label]; n > 1 {
-		opts.Label = fmt.Sprintf("%s#%d", opts.Label, n)
+	defer o.mu.Unlock()
+	o.uses[label]++
+	if n := o.uses[label]; n > 1 {
+		return fmt.Sprintf("%s#%d", label, n)
 	}
-	o.mu.Unlock()
-	raw, err := o.rt.Agent(ctx, prompt, opts)
-	return raw, opts.Label, err
+	return label
+}
+
+// agentReq is one agent call in a parallel batch.
+type agentReq struct {
+	prompt string
+	opts   lsfrt.Opts
+}
+
+// agentRes is one parallel call's result and the label it ran under. Its
+// Value is null when the branch failed.
+type agentRes struct {
+	cr    lsfrt.CallResult
+	label string
+}
+
+// parallelAgents runs the calls on rt.Parallel; each branch's CallResult
+// lands in its own slot.
+func (o *orch) parallelAgents(ctx context.Context, reqs []agentReq) ([]agentRes, error) {
+	out := make([]agentRes, len(reqs))
+	thunks := []func(context.Context) (json.RawMessage, error){}
+	for i, r := range reqs {
+		thunks = append(thunks, func(ctx context.Context) (json.RawMessage, error) {
+			cr, label, err := o.agent(ctx, r.prompt, r.opts)
+			out[i] = agentRes{cr, label}
+			return cr.Value, err
+		})
+	}
+	raws, err := o.rt.Parallel(ctx, thunks)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].cr.Value = raws[i]
+	}
+	return out, nil
+}
+
+// stageErr is a code step's failure: the reason its stop states.
+type stageErr struct{ reason string }
+
+func (e *stageErr) Error() string { return e.reason }
+
+// runStep is the orchestrator's code step (D18): input, marshalled, is the
+// journal's hash; fn runs only when no record replays. A seed for the label
+// is logged and not used: a code stage has no agent to stand in for. The
+// label counter is the agent calls'. An error is a *lsfrt.StopError, or a
+// *stageErr for the stage's own failure; an error while ctx is done is the
+// cancellation reaching git, so a stop.
+func (o *orch) runStep(ctx context.Context, label string, input any, fn func(ctx context.Context, interrupted bool) (json.RawMessage, error)) (json.RawMessage, string, error) {
+	if _, ok := o.seed[label]; ok {
+		o.rt.Log(label + ": args.seed ignored; code stage")
+	}
+	label = o.unique(label)
+	in, err := plan.MarshalJS(input, "")
+	if err != nil {
+		return nil, label, &stageErr{fmt.Sprintf("input: %v", err)}
+	}
+	raw, err := o.rt.Step(ctx, label, in, fn)
+	switch {
+	case err == nil:
+		return raw, label, nil
+	case isStop(err):
+		return nil, label, err
+	case ctx.Err() != nil:
+		return nil, label, &lsfrt.StopError{Reason: lsfrt.StopCancelled}
+	default:
+		return nil, label, &stageErr{err.Error()}
+	}
+}
+
+func isStop(err error) bool {
+	_, ok := lsfrt.IsStop(err)
+	return ok
 }
 
 // stripSeedPause sets a seed's result.pauseRequested false when it is true.
@@ -103,11 +189,25 @@ func decode[T any](rt Runtime, label string, raw json.RawMessage) *ret[T] {
 	return &ret[T]{Result: *r.Result}
 }
 
-// call is agent plus decode.
-func call[T any](ctx context.Context, o *orch, prompt string, opts lsfrt.Opts) (*ret[T], error) {
-	raw, label, err := o.agent(ctx, prompt, opts)
+// call is agent plus decode. The CallResult is returned with the value.
+func call[T any](ctx context.Context, o *orch, prompt string, opts lsfrt.Opts) (*ret[T], lsfrt.CallResult, error) {
+	cr, label, err := o.agent(ctx, prompt, opts)
 	if err != nil {
-		return nil, err
+		return nil, cr, err
 	}
-	return decode[T](o.rt, label, raw), nil
+	return decode[T](o.rt, label, cr.Value), cr, nil
+}
+
+// step is runStep plus decode. fault is the stage's failure reason, "" when
+// it ran; err is a stop.
+func step[T any](ctx context.Context, o *orch, label string, input any, fn func(ctx context.Context, interrupted bool) (json.RawMessage, error)) (r *ret[T], fault string, err error) {
+	raw, final, err := o.runStep(ctx, label, input, fn)
+	var se *stageErr
+	if errors.As(err, &se) {
+		return nil, se.reason, nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	return decode[T](o.rt, final, raw), "", nil
 }

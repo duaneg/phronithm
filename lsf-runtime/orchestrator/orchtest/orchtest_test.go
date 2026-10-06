@@ -12,8 +12,8 @@ import (
 )
 
 func agent(s *Stub, label, prompt string) json.RawMessage {
-	raw, _ := s.Agent(context.Background(), prompt, lsfrt.Opts{Label: label})
-	return raw
+	cr, _ := s.Call(context.Background(), prompt, lsfrt.Opts{Label: label})
+	return cr.Value
 }
 
 func TestRepeatedLabelAndMissingHandlerFail(t *testing.T) {

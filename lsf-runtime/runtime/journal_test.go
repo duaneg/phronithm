@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -51,6 +52,65 @@ func TestFlagsSurviveReplay(t *testing.T) {
 	r, _ := call(t, cfg, o)
 	if !r.Replayed || len(r.Flags) != 1 || r.Flags[0] != "skill-not-loaded" {
 		t.Fatalf("replay %+v", r)
+	}
+}
+
+func TestDenialsSurviveReplay(t *testing.T) {
+	cfg, _ := testConfig(t)
+	stream := filepath.Join(t.TempDir(), "denied.jsonl")
+	lines := `{"type":"system","subtype":"init","session_id":"s","tools":["Read","Bash"],"slash_commands":[]}` + "\n" +
+		`{"type":"result","subtype":"success","is_error":false,"structured_output":{"verdict":"pass","n":3},"total_cost_usd":0.01,"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"git push"}}]}` + "\n"
+	if err := os.WriteFile(stream, []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("STUB_SCRIPT", "file:"+stream)
+	first, _ := call(t, cfg, vOpts)
+	second, _ := call(t, cfg, vOpts)
+	want := []string{`Bash: {"command":"git push"}`}
+	if !slices.Equal(first.Denials, want) || !second.Replayed || !slices.Equal(second.Denials, want) {
+		t.Fatalf("first %+v, replay %+v", first, second)
+	}
+}
+
+func TestStepWorktree(t *testing.T) {
+	cfg, _ := testConfig(t)
+	cfg.Repo = gitRepo(t)
+	cfg.Args = json.RawMessage(`{"planSha":"0123456789ab","integrationBranch":"main"}`)
+	const label = "completion-report:A"
+	key := journalKey(label)
+	var paths, branches []string
+	for range 2 {
+		launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+			if rt.Repo() != cfg.Repo {
+				t.Errorf("repo %s", rt.Repo())
+			}
+			p, b, err := rt.Worktree(ctx, label)
+			if err != nil {
+				t.Fatal(err)
+			}
+			paths, branches = append(paths, p), append(branches, b)
+			return nil, nil
+		})
+	}
+	wantPath, wantBranch := filepath.Join(cfg.StateDir, "wt", key), "lsf/01234567/"+key
+	if !slices.Equal(paths, []string{wantPath, wantPath}) || !slices.Equal(branches, []string{wantBranch, wantBranch}) {
+		t.Fatalf("paths %v branches %v", paths, branches)
+	}
+	if git(t, wantPath, "rev-parse", "--abbrev-ref", "HEAD") != wantBranch {
+		t.Fatalf("worktree not on %s", wantBranch)
+	}
+	if n := countEvents(telemetry(t, cfg), "worktree"); n != 1 {
+		t.Errorf("%d worktree creations, want 1 (reused on the second launch)", n)
+	}
+
+	cfg.Args = json.RawMessage(`{"integrationBranch":"main"}`)
+	cfg.StateDir = t.TempDir()
+	s := launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		_, _, err := rt.Worktree(ctx, label)
+		return nil, err
+	})
+	if s.StopReason != StopRuntimeError {
+		t.Fatalf("missing args: %s", s.StopReason)
 	}
 }
 

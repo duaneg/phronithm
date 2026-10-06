@@ -46,9 +46,11 @@ type call struct {
 	Opts   json.RawMessage `json:"opts"`
 }
 
-// result is one scenario's run on one side.
+// result is one scenario's run on one side. Steps are the Go side's code
+// steps' labels, which are not calls.
 type result struct {
 	Calls   []call          `json:"calls"`
+	Steps   []string        `json:"-"`
 	Logs    []string        `json:"logs"`
 	Outcome json.RawMessage `json:"outcome"` // null on error
 	Error   string          `json:"error"`
@@ -90,6 +92,10 @@ func runGo(sc scenario) (result, jsScenario, []string) {
 		r.Outcome = out
 	}
 	for _, c := range s.Calls {
+		if c.Step {
+			r.Steps = append(r.Steps, c.Label)
+			continue
+		}
 		o, _ := plan.MarshalJS(opts{c.Opts.Label, c.Opts.Phase, c.Opts.Model, c.Opts.Effort, c.Opts.AgentType, c.Opts.Isolation, c.Opts.Schema}, "")
 		r.Calls = append(r.Calls, call{c.Label, c.Prompt, o})
 	}
@@ -370,12 +376,22 @@ func listed(name, text string, used map[[2]string]bool) bool {
 	return false
 }
 
-// prefixes are the label prefixes every scenario together must reach.
+// labels are the labels of r's calls and steps.
+func (r result) labels() []string {
+	out := slices.Clone(r.Steps)
+	for _, c := range r.Calls {
+		out = append(out, c.Label)
+	}
+	return out
+}
+
+// prefixes are the label prefixes every scenario together must reach, by
+// a call or a step.
 var prefixes = append(append([]string{}, unitStages...), "decision-log", "decision-replan", "load", "merge", "review-gate", "cleanup",
 	"replan", "ledger", "termination", "direct-edits", "obligations")
 
-// labels are exact label shapes some scenario must reach: the variants a
-// prefix alone does not show.
+// labels are exact label shapes some scenario must reach, by a call or a
+// step: the variants a prefix alone does not show.
 var labels = []string{"direct-edits", "direct-edits:w0", "direct-edits:w1", "ledger:w0", "ledger:carried", "load:termination", "load:w1",
 	"fix-plan:r1:A", "fix-code:r1:A", "fix-code:r1:D", "critique-design:r1:D"}
 
@@ -394,10 +410,12 @@ func run(repo string, verbose bool, w io.Writer) (failed, total int, err error) 
 	if err != nil {
 		return 0, 0, err
 	}
-	seen := map[string]bool{}
+	seen := map[string]bool{}      // prefixes reached, by calls and steps
+	seenLabel := map[string]bool{} // labels reached, by calls and steps
 	for i, sc := range scenarios {
-		for _, c := range goResults[i].Calls {
-			base, _, _ := strings.Cut(c.Label, "#")
+		for _, l := range goResults[i].labels() {
+			seenLabel[l] = true
+			base, _, _ := strings.Cut(l, "#")
 			seen[strings.Split(base, ":")[0]] = true
 		}
 		if diffs := compare(goResults[i], js[i]); len(diffs) > 0 {
@@ -405,12 +423,6 @@ func run(repo string, verbose bool, w io.Writer) (failed, total int, err error) 
 			fmt.Fprintf(w, "FAIL %s\n  %s\n", sc.name, strings.Join(diffs, "\n  "))
 		} else if verbose {
 			fmt.Fprintf(w, "ok   %s (%d calls)\n", sc.name, len(goResults[i].Calls))
-		}
-	}
-	seenLabel := map[string]bool{}
-	for _, r := range goResults {
-		for _, c := range r.Calls {
-			seenLabel[c.Label] = true
 		}
 	}
 	for _, l := range labels {

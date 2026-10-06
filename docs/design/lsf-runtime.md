@@ -179,9 +179,11 @@ Unit `runtime-core`, plan `docs/plans/runtime-core-plan.md`. Package `lsfrt` in 
 
 - **`Run(ctx, cfg, body)`** is one launch. It takes an `flock` on the state dir, reaps orphans, installs the signal handlers, runs `body(ctx, rt)`, and writes `summary.json`. Its error is for setup failures only; how the body ended is the summary's `stop_reason`.
 - **`rt.Agent(ctx, prompt, opts)`** is the orchestrator's `agent()`. `(nil, nil)` is null. The only error is a `*StopError`, which the orchestrator propagates.
-- **`rt.Call`** is the same call, returning a `CallResult`: the value, the last attempt's class, flags such as `skill-not-loaded`, permission denials, attempts, cost, and whether it was replayed. It is the channel through which `runtime-signals` reads driver events.
+- **`rt.Call`** is the same call, returning a `CallResult`: the value, the last attempt's class, flags such as `skill-not-loaded`, permission denials, attempts, cost, and whether it was replayed. A replay returns the flags and denials journaled with the call. It is the channel through which `runtime-signals` reads driver events; the orchestrator calls agents through it.
 - **`rt.Parallel(ctx, thunks)`** runs every thunk. A branch's error or panic becomes a nil slot. A stop in any branch is returned once all branches finish.
 - **`rt.Step(ctx, label, input, fn)`** journals a code step (see Journal).
+- **`rt.Repo()`** is the config's `repo`, the main checkout.
+- **`rt.Worktree(ctx, label)`** is a code step's own worktree and its branch: the worktree an agent call with that label and isolation `worktree` gets, created or reused the same way.
 - **`rt.Log`** and **`rt.Args`**: `Args` is the config's `args`, passed through.
 
 `opts` mirrors the JavaScript: `label`, `phase` (telemetry only), `model`, `effort`, `agentType`, `isolation`, `schema`.

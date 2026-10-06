@@ -11,17 +11,26 @@ import (
 	"time"
 )
 
+// Repo is the main checkout.
+func (rt *Runtime) Repo() string { return rt.cfg.Repo }
+
+// Worktree is a code step's own worktree and branch: the ones an agent call
+// with this label and isolation "worktree" gets.
+func (rt *Runtime) Worktree(ctx context.Context, label string) (path, branch string, err error) {
+	return rt.cwdFor(ctx, Opts{Label: label, Isolation: "worktree"}, journalKey(label))
+}
+
 // cwdFor is a call's working directory: the repo, or for isolation
 // "worktree" the call's own worktree on lsf/<plan8>/<key>, created from the
-// integration branch and reused on resume. A failure is a runtime-error stop,
-// never a silent fallback to the repo.
-func (rt *Runtime) cwdFor(ctx context.Context, o Opts, key string) (string, error) {
+// integration branch and reused on resume, with its branch. A failure is a
+// runtime-error stop, never a silent fallback to the repo.
+func (rt *Runtime) cwdFor(ctx context.Context, o Opts, key string) (path, branch string, err error) {
 	if o.Isolation == "" {
-		return rt.cfg.Repo, nil
+		return rt.cfg.Repo, "", nil
 	}
 	args, err := rt.isolationArgs(o)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	// Concurrent `git worktree add` calls contend on git's locks, so worktree
@@ -29,18 +38,18 @@ func (rt *Runtime) cwdFor(ctx context.Context, o Opts, key string) (string, erro
 	select {
 	case rt.wtSem <- struct{}{}:
 	case <-rt.stopCh:
-		return "", rt.stopErr()
+		return "", "", rt.stopErr()
 	case <-ctx.Done():
-		return "", &StopError{Reason: StopCancelled}
+		return "", "", &StopError{Reason: StopCancelled}
 	}
 	defer func() { <-rt.wtSem }()
 	if err := rt.boundary(ctx); err != nil {
-		return "", err
+		return "", "", err
 	}
 	gctx, cancel := rt.gitContext(ctx)
 	defer cancel()
-	path := filepath.Join(rt.cfg.StateDir, "wt", key)
-	branch := "lsf/" + args.PlanSha[:8] + "/" + refSafe(key)
+	path = filepath.Join(rt.cfg.StateDir, "wt", key)
+	branch = "lsf/" + args.PlanSha[:8] + "/" + refSafe(key)
 	if fi, err := os.Stat(path); err == nil && fi.IsDir() {
 		// Reuse only a worktree of this branch: a directory left by a crash
 		// mid-add, or one whose metadata was pruned, is not one.
@@ -48,9 +57,9 @@ func (rt *Runtime) cwdFor(ctx context.Context, o Opts, key string) (string, erro
 		head, err2 := gitStdout(gctx, path, "symbolic-ref", "--short", "HEAD")
 		resolved, _ := filepath.EvalSymlinks(path)
 		if err1 != nil || err2 != nil || strings.TrimSpace(string(top)) != resolved || strings.TrimSpace(string(head)) != branch {
-			return "", rt.setStop(StopRuntimeError, fmt.Sprintf("%s: %s exists but is not a worktree on %s; remove it and relaunch", o.Label, path, branch))
+			return "", "", rt.setStop(StopRuntimeError, fmt.Sprintf("%s: %s exists but is not a worktree on %s; remove it and relaunch", o.Label, path, branch))
 		}
-		return path, nil
+		return path, branch, nil
 	}
 	add := []string{"worktree", "add", "-b", branch, path, args.IntegrationBranch}
 	if gitRun(gctx, rt.cfg.Repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch) == nil {
@@ -64,10 +73,10 @@ func (rt *Runtime) cwdFor(ctx context.Context, o Opts, key string) (string, erro
 		out, err = gitOut(gctx, rt.cfg.Repo, add...)
 	}
 	if err != nil {
-		return "", rt.setStop(StopRuntimeError, fmt.Sprintf("%s: git %s: %v: %s", o.Label, strings.Join(add[:2], " "), err, strings.TrimSpace(string(out))))
+		return "", "", rt.setStop(StopRuntimeError, fmt.Sprintf("%s: git %s: %v: %s", o.Label, strings.Join(add[:2], " "), err, strings.TrimSpace(string(out))))
 	}
 	rt.event("worktree", map[string]any{"label": o.Label, "path": path, "branch": branch})
-	return path, nil
+	return path, branch, nil
 }
 
 // gitTimeout bounds one worktree git command; a hung git (a stale lock, a

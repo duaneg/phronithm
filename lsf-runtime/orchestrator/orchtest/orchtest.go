@@ -42,13 +42,15 @@ func Ret(result any, extra ...M) M {
 	return r
 }
 
-// Call is one agent call as the stub saw it.
+// Call is one agent call or code step as the stub saw it.
 type Call struct {
 	Label  string // final label
 	Prefix string // before the first ':', with any #n suffix dropped
 	Unit   string // last ':' component, with any #n suffix dropped
-	Prompt string
+	Prompt string // agent calls only
 	Opts   lsfrt.Opts
+	Step   bool            // a code step
+	Input  json.RawMessage // a step's input
 }
 
 // State is what handlers share across a run: the plan the stub's copy stage
@@ -60,16 +62,20 @@ type State struct {
 	Seq        int // SHA counter for merge and re-plan
 }
 
-// Handler answers one call: nil is null; json.RawMessage is sent as is; an
-// error is returned from Agent (a *lsfrt.StopError to stop the run);
-// anything else is marshalled.
+// Handler answers one call or step: nil is null; json.RawMessage is sent as
+// is; an lsfrt.CallResult is a call's whole result, flags and denials
+// included; an error is returned from Call or Step (a *lsfrt.StopError to
+// stop the run; from Step, any other error is the stage's failure);
+// anything else is marshalled. A step's fn is never run: its handler is its
+// value.
 type Handler func(c Call, s *State) any
 
-// Stub is the runtime. Agent holds the stub's lock while a handler runs, so
-// Concurrent branches serialise inside the stub (the orchestrator code
-// between calls still runs concurrently), and a handler must not call the
-// stub's methods. Labels, Prompt and CallOf read without the lock: call them
-// after the run.
+// Stub is the runtime. Call and Step hold the stub's lock while a handler
+// runs, so Concurrent branches serialise inside the stub (the orchestrator
+// code between calls still runs concurrently), and a handler must not call
+// the stub's methods. Labels, Prompt, Input and CallOf read without the
+// lock: call them after the run. The stub has no repository: Repo is "" and
+// Worktree fails.
 type Stub struct {
 	Handlers   map[string]Handler
 	ArgsJSON   json.RawMessage
@@ -81,7 +87,7 @@ type Stub struct {
 	mu       sync.Mutex
 	Calls    []Call
 	Logs     []string
-	Returns  map[string]json.RawMessage // by final label; null included
+	Returns  map[string]json.RawMessage // by final label, calls and steps; null included
 	Failures []string                   // harness failures: repeated label, missing handler, unexpected panic
 }
 
@@ -123,54 +129,70 @@ func (s *Stub) fail(format string, a ...any) {
 
 var mergeLine = regexp.MustCompile(`(?m)^- (\S+): branch`)
 
-// Agent answers from the handler for the label's prefix.
-func (s *Stub) Agent(ctx context.Context, prompt string, o lsfrt.Opts) (json.RawMessage, error) {
-	base, _, _ := strings.Cut(o.Label, "#")
+// newCall is a call record for label, with its prefix and unit.
+func newCall(label string) Call {
+	base, _, _ := strings.Cut(label, "#")
 	parts := strings.Split(base, ":")
-	prefix := parts[0]
-	c := Call{Label: o.Label, Prefix: prefix, Unit: parts[len(parts)-1], Prompt: prompt, Opts: o}
+	return Call{Label: label, Prefix: parts[0], Unit: parts[len(parts)-1]}
+}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// answer records c and runs its handler; the caller holds s.mu. The value
+// is recorded in Returns unless the handler errs.
+func (s *Stub) answer(c Call) (lsfrt.CallResult, error) {
 	for _, prev := range s.Calls {
-		if prev.Label == o.Label {
-			s.fail("label %q repeated within the launch", o.Label)
+		if prev.Label == c.Label {
+			s.fail("label %q repeated within the launch", c.Label)
 		}
 	}
 	s.Calls = append(s.Calls, c)
-	if prefix == "merge" {
+	h := s.Handlers[c.Prefix]
+	if h == nil {
+		s.fail("no stub for %s", c.Label)
+		return lsfrt.CallResult{}, nil
+	}
+	var cr lsfrt.CallResult
+	switch v := h(c, s.State).(type) {
+	case nil:
+	case error:
+		return lsfrt.CallResult{}, v
+	case lsfrt.CallResult:
+		cr = v
+	case json.RawMessage:
+		cr.Value = v
+	default:
+		b, err := plan.MarshalJS(v, "")
+		if err != nil {
+			s.fail("%s: marshal return: %v", c.Label, err)
+			return lsfrt.CallResult{}, nil
+		}
+		cr.Value = b
+	}
+	if cr.Value == nil {
+		s.Returns[c.Label] = json.RawMessage("null")
+	} else {
+		s.Returns[c.Label] = cr.Value
+	}
+	return cr, nil
+}
+
+// Call answers from the handler for the label's prefix.
+func (s *Stub) Call(ctx context.Context, prompt string, o lsfrt.Opts) (lsfrt.CallResult, error) {
+	c := newCall(o.Label)
+	c.Prompt, c.Opts = prompt, o
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if c.Prefix == "merge" {
 		s.State.MergeOrder = nil
 		for _, m := range mergeLine.FindAllStringSubmatch(prompt, -1) {
 			s.State.MergeOrder = append(s.State.MergeOrder, m[1])
 		}
 	}
-	h := s.Handlers[prefix]
-	if h == nil {
-		s.fail("no stub for %s", o.Label)
-		return nil, nil
+	cr, err := s.answer(c)
+	if err != nil {
+		return cr, err
 	}
-	out := h(c, s.State)
-	var raw json.RawMessage
-	switch v := out.(type) {
-	case nil:
-	case error:
-		return nil, v
-	case json.RawMessage:
-		raw = v
-	default:
-		b, err := plan.MarshalJS(v, "")
-		if err != nil {
-			s.fail("%s: marshal return: %v", o.Label, err)
-			return nil, nil
-		}
-		raw = b
-	}
-	if raw == nil {
-		s.Returns[o.Label] = json.RawMessage("null")
-	} else {
-		s.Returns[o.Label] = raw
-	}
-	if prefix == "merge" && raw != nil {
+	if c.Prefix == "merge" && cr.Value != nil {
 		var r struct {
 			Result *struct {
 				Merges []struct {
@@ -179,7 +201,7 @@ func (s *Stub) Agent(ctx context.Context, prompt string, o lsfrt.Opts) (json.Raw
 				} `json:"merges"`
 			} `json:"result"`
 		}
-		if json.Unmarshal(raw, &r) == nil && r.Result != nil {
+		if json.Unmarshal(cr.Value, &r) == nil && r.Result != nil {
 			for _, m := range r.Result.Merges {
 				if m.Status != "unresolvable" {
 					s.State.Completed[m.Unit] = true
@@ -187,7 +209,26 @@ func (s *Stub) Agent(ctx context.Context, prompt string, o lsfrt.Opts) (json.Raw
 			}
 		}
 	}
-	return raw, nil
+	return cr, nil
+}
+
+// Step answers a code step from the handler for the label's prefix; fn is
+// not run.
+func (s *Stub) Step(ctx context.Context, label string, input []byte, fn func(context.Context, bool) (json.RawMessage, error)) (json.RawMessage, error) {
+	c := newCall(label)
+	c.Step, c.Input = true, append(json.RawMessage{}, input...)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cr, err := s.answer(c)
+	return cr.Value, err
+}
+
+// Repo is "": the stub has no repository.
+func (s *Stub) Repo() string { return "" }
+
+// Worktree fails: the stub has no repository.
+func (s *Stub) Worktree(ctx context.Context, label string) (string, string, error) {
+	return "", "", fmt.Errorf("orchtest: no worktree for %s", label)
 }
 
 // Parallel runs the thunks in order, or on goroutines when Concurrent. A
@@ -252,6 +293,15 @@ func (s *Stub) Labels() []string {
 		out = append(out, c.Label)
 	}
 	return out
+}
+
+// Input is the input of the step with label, or nil with a failure.
+func (s *Stub) Input(label string) json.RawMessage {
+	if c := s.CallOf(label); c != nil && c.Step {
+		return c.Input
+	}
+	s.fail("no step labelled %s", label)
+	return nil
 }
 
 // Prompt is the prompt of the call with label, or "" with a failure.

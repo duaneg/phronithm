@@ -18,12 +18,13 @@ import (
 // A journal record is a completed call or code step, keyed by label and
 // checked by hash, so a resume replays it instead of running it again.
 type record struct {
-	Label string          `json:"label"`
-	Kind  string          `json:"kind"` // call | step
-	Hash  string          `json:"hash"`
-	Ret   json.RawMessage `json:"ret"`
-	Flags []string        `json:"flags,omitempty"`
-	At    time.Time       `json:"at"`
+	Label   string          `json:"label"`
+	Kind    string          `json:"kind"` // call | step
+	Hash    string          `json:"hash"`
+	Ret     json.RawMessage `json:"ret"`
+	Flags   []string        `json:"flags,omitempty"`
+	Denials []string        `json:"denials,omitempty"`
+	At      time.Time       `json:"at"`
 }
 
 var unsafeChars = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
@@ -114,13 +115,13 @@ func (rt *Runtime) replayCall(key, hash, label string) (CallResult, bool) {
 	}
 	rt.event("cache-hit", map[string]any{"label": label, "flags": r.Flags})
 	rt.Log(label + ": replayed from the journal")
-	return CallResult{Value: r.Ret, Class: string(classOK), Flags: r.Flags, Replayed: true}, true
+	return CallResult{Value: r.Ret, Class: string(classOK), Flags: r.Flags, Denials: r.Denials, Replayed: true}, true
 }
 
 // recordCall journals a call's non-null return. A null is not recorded, so a
 // resume retries it. A failed write is logged: the call's result still stands.
 func (rt *Runtime) recordCall(key, hash, label string, res CallResult) {
-	if err := rt.writeRecord(key, record{Label: label, Kind: "call", Hash: hash, Ret: res.Value, Flags: res.Flags}); err != nil {
+	if err := rt.writeRecord(key, record{Label: label, Kind: "call", Hash: hash, Ret: res.Value, Flags: res.Flags, Denials: res.Denials}); err != nil {
 		rt.Log(fmt.Sprintf("%s: journal write failed, a resume will re-run the call: %v", label, err))
 	}
 }
