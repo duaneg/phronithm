@@ -91,7 +91,7 @@ func ToBlock(p *plan.Plan) string {
 
 // Copied is the copy stage's return for p.
 func Copied(p *plan.Plan, extra M) M {
-	r := M{"planBlock": ToBlock(p), "decisionsBlock": "", "headBranch": "integration", "architectureSha": "arch1"}
+	r := M{"planBlock": ToBlock(p), "decisionsBlock": "", "headBranch": "integration", "architectureSha": "arch1", "pauseRequested": false}
 	for k, v := range extra {
 		r[k] = v
 	}
