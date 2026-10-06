@@ -117,7 +117,7 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 	if len(order) > 0 {
 		t := c.tierFor("default")
 		label := "merge:w" + itoa(wave)
-		m, cs, err := call[mergeResult](ctx, l.orch, site{plan.At{Stage: "merge", Wave: plan.W(wave)}, true}, mergePrompt(c, l.ref(), wave, order), lsfrt.Opts{Label: label, Model: t.Model, Effort: t.Effort, Phase: "Merge", Schema: mergeSchema})
+		m, cs, err := call[mergeResult](ctx, l.orch, site{at: plan.At{Stage: "merge", Wave: plan.W(wave)}, writer: true}, mergePrompt(c, l.ref(), wave, order), lsfrt.Opts{Label: label, Model: t.Model, Effort: t.Effort, Phase: "Merge", Schema: mergeSchema})
 		if err != nil {
 			return nil, true, false, err
 		}
@@ -173,8 +173,8 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 		if err != nil {
 			return nil, true, false, err
 		}
-		gv, gs := l.callSigs(site{plan.At{Stage: "review-gate", Wave: plan.W(wave)}, false}, res[0].cr, res[0].label)
-		cv, cs := l.callSigs(site{plan.At{Stage: "cleanup", Wave: plan.W(wave)}, false}, res[1].cr, res[1].label)
+		gv, gs := l.callSigs(site{at: plan.At{Stage: "review-gate", Wave: plan.W(wave)}, writer: false}, res[0].cr, res[0].label)
+		cv, cs := l.callSigs(site{at: plan.At{Stage: "cleanup", Wave: plan.W(wave)}, writer: false}, res[1].cr, res[1].label)
 		waveSignals = append(append(waveSignals, gs...), cs...)
 		g := decode[plan.GateResult](l.rt, res[0].label, gv)
 		cu := decode[cleanupResult](l.rt, res[1].label, cv)
@@ -241,7 +241,7 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 		return nil, false, false, nil
 	}
 	pt := c.tierFor("planning")
-	rp, cs, err := call[replanResult](ctx, l.orch, site{plan.At{Stage: "replan", Wave: plan.W(wave)}, true}, replanPrompt(c, l.ref(), wave, merged, conflicts, items, evalA.Stops),
+	rp, cs, err := call[replanResult](ctx, l.orch, site{at: plan.At{Stage: "replan", Wave: plan.W(wave)}, writer: true}, replanPrompt(c, l.ref(), wave, merged, conflicts, items, evalA.Stops),
 		lsfrt.Opts{Label: "replan:w" + itoa(wave), Model: pt.Model, Effort: pt.Effort, Schema: replanSchema, Phase: "Re-plan"})
 	if err != nil {
 		return nil, true, false, err
@@ -302,12 +302,12 @@ func (l *launch) terminate(ctx context.Context) (json.RawMessage, bool, error) {
 	c := l.ctx
 	l.terminationRan = true
 	t := c.tierFor("planning")
-	term, cs, err := call[terminationResult](ctx, l.orch, site{plan.At{Stage: "termination"}, true}, terminationPrompt(c, l.ref()), lsfrt.Opts{Label: "termination", Model: t.Model, Effort: t.Effort, Phase: "Termination", Schema: terminationSchema})
+	term, cs, err := call[terminationResult](ctx, l.orch, site{at: plan.At{Stage: "termination"}, writer: true}, terminationPrompt(c, l.ref()), lsfrt.Opts{Label: "termination", Model: t.Model, Effort: t.Effort, Phase: "Termination", Schema: terminationSchema})
 	if err != nil {
 		return nil, true, err
 	}
 	if term == nil {
-		ev := plan.EvaluateWave(append(cs, plan.NullReturnSignal(plan.At{Stage: "termination"})))
+		ev := plan.EvaluateWave(slices.Concat(cs, []*plan.Signal{plan.NullReturnSignal(plan.At{Stage: "termination"})}))
 		l.record(ev)
 		out, err := l.stopped(ctx, "termination", ev.Stops, nil)
 		return out, true, err
@@ -319,7 +319,7 @@ func (l *launch) terminate(ctx context.Context) (json.RawMessage, bool, error) {
 	if re.copy != nil {
 		l.refreshPin(re.copy.Result.ArchitectureSha)
 	}
-	termEval := plan.EvaluateWave(append(cs, re.stops...))
+	termEval := plan.EvaluateWave(slices.Concat(cs, re.stops))
 	l.record(termEval)
 	if termEval.Stop {
 		out, err := l.stopped(ctx, "termination", termEval.Stops, nil)
@@ -346,12 +346,12 @@ func (l *launch) terminate(ctx context.Context) (json.RawMessage, bool, error) {
 func (l *launch) finish(ctx context.Context) (json.RawMessage, error) {
 	c := l.ctx
 	t := c.tierFor("default")
-	ob, cs, err := call[obligationsResult](ctx, l.orch, site{plan.At{Stage: "obligations"}, false}, obligationsPrompt(c, l.ref()), lsfrt.Opts{Label: "obligations", Model: t.Model, Effort: t.Effort, Phase: "Termination", Schema: obligationsSchema})
+	ob, cs, err := call[obligationsResult](ctx, l.orch, site{at: plan.At{Stage: "obligations"}, writer: false}, obligationsPrompt(c, l.ref()), lsfrt.Opts{Label: "obligations", Model: t.Model, Effort: t.Effort, Phase: "Termination", Schema: obligationsSchema})
 	if err != nil {
 		return nil, err
 	}
 	if ob == nil {
-		ev := plan.EvaluateWave(append(cs, plan.NullReturnSignal(plan.At{Stage: "obligations"})))
+		ev := plan.EvaluateWave(slices.Concat(cs, []*plan.Signal{plan.NullReturnSignal(plan.At{Stage: "obligations"})}))
 		l.record(ev)
 		return l.stopped(ctx, "obligations", ev.Stops, nil)
 	}

@@ -479,7 +479,7 @@ func firstDiff(a, b string) (int, string, string) {
 // run(), keyed by function and the block's opening text, each with why.
 // A block not listed here that no scenario runs fails the check.
 var unreachable = map[[2]string]string{
-	{"renderGates", ": '- none reported'"}:                        "a stage with no gates stops before review (gate-not-run); a design review renders none",
+	{"renderGates", ": '- none reported'"}:                        "a stage with no gates stops before review (Go: gate-omitted, D22); a design review renders none",
 	{"byteLength", ": text.length"}:                               "node has TextEncoder",
 	{"renderCompletionReport", "?? {}"}:                           "doneCondition is schema-required; Go decodes absent as zero (D9)",
 	{"renderCompletionReport", "?? []"}:                           "writesOutsideScope and gateProbe are schema-required (D9)",
@@ -492,7 +492,7 @@ var unreachable = map[[2]string]string{
 	{"runUnit", "?? LENSES_BY_TYPE.feature"}:                      "validatePlan rejects an unknown unit type",
 	{"round", ": []"}:                                             "the design branch builds no lens reviewer",
 	{"(anonymous)", "?? null"}:                                    "a reviewer slot is null only on a JS exception in agent(); the Go runtime's Call errors are stops",
-	{"onFix", "?? []"}:                                            "an implement return without gates stops before review (gate-not-run)",
+	{"onFix", "?? []"}:                                            "an implement return without gates stops before review (Go: gate-omitted, D22)",
 	{"run", "?? {}"}:                                              "every runtime supplies args; Go reads nil args as {} (runtime_test.go)",
 	{"(anonymous)", "?? { unit: u.id, type: u.type, branch: null, completionPath: nul"}: "a unit is null only on a JS exception in runUnit; Go's analogue, a panic, is TestPanickingUnitIsUnitNull",
 }

@@ -258,8 +258,8 @@ Every call that spawned and returns a value or a null reports the paths it left 
 - **What is compared.** For a repo call, each dirty path's status, plus its content: a hash and mode for a regular file, or the target for a symlink. The status runs with `--no-optional-locks`, so it never takes the index lock from an agent's git.
 - **A repo call** snapshots the main checkout at its first admitted attempt, with a content hash for each dirty file. It reports only the paths that are new, or whose status or content changed, by its return. Dirt from a failed attempt before a retry is the call's.
 - **Excluded:** paths under the state dir, which are neither reported nor hashed.
-- **A stop or a dry run** gets no check.
-- **A failed check** (git error or timeout, before or after) sets `uncommitted-unchecked`. The record keeps the failure as `unchecked`, not the flag, and a replay checks afresh. For a repo call, with no before-state to compare, it reports every dirty path.
+- **A call ended by a stop or a repeated signal, or a dry run,** gets no check. Every other return after a spawn, null included, is checked. A check that the stop itself cut short is not a failure.
+- **A failed check** (git error or timeout, before or after) sets `uncommitted-unchecked`. The record keeps the failure as `unchecked`, not the flag, and a replay checks afresh. For a repo call, with no before-state to compare, it reports every dirty path, the requester's own included, so a writer's stop then clears only once the main checkout is clean.
 - **The journal** keeps the paths. A replay re-checks them:
   - an isolated call checks its worktree as it now stands; a removed worktree is clean;
   - a repo call keeps the journaled paths that are still dirty.
@@ -271,7 +271,8 @@ Every call that spawned and returns a value or a null reports the paths it left 
 | Path | Holds |
 |---|---|
 | `lock` | the launch's `flock` |
-| `journal/<key>.json` | a completed call's or step's record: label, kind, input hash, return, flags |
+| `journal/<key>.json` | a completed call's or step's record: label, kind, input hash, return, flags, denials, uncommitted paths, whether the uncommitted check failed |
+| `journal/<key>.dirt` | a repo call's uncommitted paths from a null return, until the call is recorded |
 | `journal/<key>.intent` | a step's input hash while it runs |
 | `calls/<key>.<launch>.a<n>.<session>.jsonl` | each attempt's stream |
 | `children.json` | session id → pid of live calls |
@@ -306,7 +307,9 @@ Every call that spawned and returns a value or a null reports the paths it left 
 ### Known limits
 
 - **Uncommitted attribution.** A requester edit to the main checkout during a repo call is attributed to that call. The review gate and cleanup run in parallel in the main checkout, so a change made during them is attributed to both.
-- **A repo call's re-run.** A repo call with no journal record re-runs on resume with any dirt it left in its before-state, so that dirt is not reported again. This covers a call that returned null, was stopped or killed, crashed before its record, or failed to write it.
+- **A repo call's re-run.** A repo call that returned null keeps its uncommitted paths in `<key>.dirt`, and its re-run's before-state leaves them out, so they are reported again. A call that was stopped, killed, or crashed before returning keeps nothing: its re-run takes any dirt it left into its before-state.
+- **A replay that fails its schema** (a changed validator, an edited record) re-runs the call. For a writer, the re-run can repeat a commit the first run made.
+- **Large files.** A dirty file over 64 MiB is compared by size and modification time, not content.
 - **Session limits.** The shape of a session limit under `-p` is built from the binary's schema and interactive transcripts, not observed. The first real limit's stream is kept under `calls/`.
 - **Retries in a dirty worktree.** A retry after a worker made partial changes reruns in the same worktree.
 - **Group kill after reaping.** After the leader of a cancelled call is reaped, its pgid could in principle be reused before the group SIGKILL. Sequential pid allocation makes this need a wrapped pid space.

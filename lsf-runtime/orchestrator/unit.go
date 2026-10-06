@@ -194,8 +194,10 @@ var shaHex = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 // checkSha is the reported SHA of a stage that commits on branch, checked
 // against the branch's tip. A SHA that is not a prefix of the tip is
 // replaced by it, with a sha-corrected record. Nothing reads these SHAs
-// yet: the check keeps the ledger true to git (P-C8). The SHAs later stages
-// consume, merge's, are code-merge-cleanup's to check. A branch that does
+// yet: the check keeps the ledger's SHAs git's. The SHAs later stages
+// consume, merge's, are code-merge-cleanup's to check. The branch is the
+// one the stage reports, not checked against the worktree branch the
+// runtime gave it. A branch that does
 // not resolve, or is not a plain branch name, leaves the SHA as reported
 // with no signal; the completion report stops on it. Another git error
 // records that the SHA was not checked. With no repository there is
@@ -247,7 +249,7 @@ func (o *orch) unitOpts(u *plan.Unit, label, role string, opts lsfrt.Opts) lsfrt
 
 // fixCall is a plan or code fix's call, its SHA checked against its branch.
 func (o *orch) fixCall(ctx context.Context, at plan.At, prompt string, opts lsfrt.Opts) (*ret[fixResult], []*plan.Signal, error) {
-	r, sigs, err := call[fixResult](ctx, o, site{at, true}, prompt, opts)
+	r, sigs, err := call[fixResult](ctx, o, site{at: at, writer: true}, prompt, opts)
 	if err != nil || r == nil {
 		return r, sigs, err
 	}
@@ -274,7 +276,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	}
 
 	// 1. plan
-	planned, cs, err := call[unitPlanResult](ctx, o, site{at("plan"), true}, unitPlanPrompt(c, pr, u), o.unitOpts(u, "plan", "planning", lsfrt.Opts{Isolation: "worktree", Schema: unitPlanSchema}))
+	planned, cs, err := call[unitPlanResult](ctx, o, site{at: at("plan"), writer: true}, unitPlanPrompt(c, pr, u), o.unitOpts(u, "plan", "planning", lsfrt.Opts{Isolation: "worktree", Schema: unitPlanSchema}))
 	if err != nil {
 		return nil, err
 	}
@@ -299,7 +301,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	// 2. critique gate over the plan
 	planGate, err := critiqueLoop(at, &sigs,
 		func(n int) ([]reviewer, error) {
-			r, rs, err := call[findingsResult](ctx, o, site{at("critique-plan"), false}, planCritiquePrompt(c, pr, u, branch, n),
+			r, rs, err := call[findingsResult](ctx, o, site{at: at("critique-plan"), writer: false}, planCritiquePrompt(c, pr, u, branch, n),
 				o.unitOpts(u, fmt.Sprintf("critique-plan:r%d", n), "critique", lsfrt.Opts{AgentType: "phronithm:critic", Schema: findingsSchema}))
 			return []reviewer{{"critique-plan", r, rs}}, err
 		},
@@ -319,7 +321,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	}
 
 	// 3. implement
-	impl, cs, err := call[implementResult](ctx, o, site{at("implement"), true}, implementPrompt(c, pr, u, branch), o.unitOpts(u, "implement", "", lsfrt.Opts{Isolation: "worktree", Schema: implementSchema}))
+	impl, cs, err := call[implementResult](ctx, o, site{at: at("implement"), writer: true}, implementPrompt(c, pr, u, branch), o.unitOpts(u, "implement", "", lsfrt.Opts{Isolation: "worktree", Schema: implementSchema}))
 	if err != nil {
 		return nil, err
 	}
@@ -390,7 +392,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 			}
 			out := []reviewer{}
 			for i, r := range rvs {
-				v, rs := o.callSigs(site{at(r.stage), false}, res[i].cr, res[i].label)
+				v, rs := o.callSigs(site{at: at(r.stage), writer: false}, res[i].cr, res[i].label)
 				out = append(out, reviewer{r.stage, decode[findingsResult](o.rt, res[i].label, v), rs})
 			}
 			return out, nil

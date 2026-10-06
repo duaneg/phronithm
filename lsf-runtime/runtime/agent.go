@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"time"
 )
 
@@ -62,12 +63,12 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 			}
 			res.Value, _ = compactJSON(v.output) // validated, so JSON
 			if v.class == classSkillMissing {
-				res.Flags = append(res.Flags, "skill-not-loaded")
+				res.Flags = append(res.Flags, FlagSkillNotLoaded)
 				rt.event("skill-not-loaded", map[string]any{"label": o.Label, "skill": skill})
 				rt.Log(fmt.Sprintf("%s: skill %s not loaded after %d attempt(s); return accepted and flagged", o.Label, skill, res.Attempts))
 			}
 			if v.guardKilled {
-				res.Flags = append(res.Flags, "guard-killed-after-result")
+				res.Flags = append(res.Flags, FlagGuardKilledAfterResult)
 				rt.Log(o.Label + ": the guard timeout killed the call after its result; the result stands")
 			}
 			rt.checkUncommitted(ctx, c, res)
@@ -76,7 +77,7 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 		case classStopped:
 			return *res, rt.stopErr()
 		case classTimeout, classPermanent, classSpawnError:
-			rt.checkUncommitted(ctx, c, res)
+			rt.checkNull(ctx, c, res)
 			return *res, nil
 		case classInvalid:
 			if retried == 0 {
@@ -85,7 +86,7 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 			}
 			rt.Log(fmt.Sprintf("%s: no valid return after %d attempt(s) (%s); null", o.Label, res.Attempts, firstOr(v.errors, "invalid")))
 			res.Violations = v.errors
-			rt.checkUncommitted(ctx, c, res)
+			rt.checkNull(ctx, c, res)
 			return *res, nil
 		case classTransient:
 			if transient < len(rt.cfg.Backoff) {
@@ -98,7 +99,7 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 				continue
 			}
 			rt.Log(fmt.Sprintf("%s: transient failure persisted over %d attempt(s); null", o.Label, res.Attempts))
-			rt.checkUncommitted(ctx, c, res)
+			rt.checkNull(ctx, c, res)
 			return *res, nil
 		case classSessionLimit:
 			if waits < rt.cfg.MaxSessionWaits {
@@ -106,7 +107,7 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 				continue
 			}
 			rt.Log(fmt.Sprintf("%s: session limit persisted over %d wait(s); null", o.Label, waits))
-			rt.checkUncommitted(ctx, c, res)
+			rt.checkNull(ctx, c, res)
 			return *res, nil
 		}
 		panic("unreachable: class " + v.class)
@@ -146,7 +147,10 @@ func (rt *Runtime) attempt(ctx context.Context, c *callState) (*attempt, verdict
 		}
 		c.cwd = cwd
 		if c.o.Isolation == "" && rt.cfg.Repo != "" {
-			c.before, c.beforeErr = rt.snapshot(ctx, cwd, true)
+			c.before, c.beforeErr = rt.takeSnapshot(ctx, cwd, true)
+			for _, p := range rt.priorDirt(c.key) { // left by an earlier null of this call
+				delete(c.before, p)
+			}
 		}
 	}
 	sid := newUUID()
@@ -161,7 +165,11 @@ func (rt *Runtime) attempt(ctx context.Context, c *callState) (*attempt, verdict
 	c.res.Attempts++
 	if r := a.acc.Result; r != nil {
 		c.res.CostUSD += r.CostUSD
-		c.res.Denials = r.Denials
+		for _, d := range r.Denials { // across attempts: a retried attempt's denial still happened
+			if !slices.Contains(c.res.Denials, d) {
+				c.res.Denials = append(c.res.Denials, d)
+			}
+		}
 		rt.addCost(r.CostUSD)
 	}
 	if a.cause != nil && !errors.Is(a.cause, errGuard) && !errors.Is(a.cause, errKilled) {

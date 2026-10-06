@@ -19,9 +19,9 @@ func ValidateOutput(schema, raw json.RawMessage) []string {
 	return validateOutput(schema, raw)
 }
 
-// noOutput is the violation for a result with no structured output; the
+// NoOutput is the violation for a result with no structured output; the
 // orchestrator's mapper (plan.SignalsFromCall) words it as a missing return.
-const noOutput = "no structured_output"
+const NoOutput = "no structured_output"
 
 // validateOutput checks raw JSON against the JSON Schema subset the stage
 // schemas use: type, properties, required, items, enum (the spike's

@@ -293,7 +293,7 @@ func (l *launch) applyDirectEdits(ctx context.Context, at planRef, edits []direc
 		label = "direct-edits:w" + itoa(*wave)
 	}
 	t := l.ctx.tierFor("default")
-	r, out, err := call[scribeResult](ctx, l.orch, site{plan.At{Stage: "direct-edits", Wave: wave}, true}, directEditsPrompt(l.ctx, at, what, edits),
+	r, out, err := call[scribeResult](ctx, l.orch, site{at: plan.At{Stage: "direct-edits", Wave: wave}, writer: true}, directEditsPrompt(l.ctx, at, what, edits),
 		lsfrt.Opts{Label: label, Model: t.Model, Effort: t.Effort, Phase: phase, Schema: scribeSchema})
 	if err != nil {
 		return nil, err
@@ -474,17 +474,17 @@ func Run(ctx context.Context, rt Runtime) (json.RawMessage, error) {
 			rpItems = append(rpItems, rpItem{id: dec.ID, describe: dec.Question, described: true, stopText: dec.Question, referent: dec.ID})
 		}
 		t := c.tierFor("planning")
-		rp, cs, err := call[replanResult](ctx, l.orch, site{plan.At{Stage: "decision-replan", Wave: plan.W(0)}, true}, decisionReplanPrompt(c, l.ref(), items),
+		rp, cs, err := call[replanResult](ctx, l.orch, site{at: plan.At{Stage: "decision-replan", Wave: plan.W(0)}, writer: true}, decisionReplanPrompt(c, l.ref(), items),
 			lsfrt.Opts{Label: "decision-replan", Model: t.Model, Effort: t.Effort, Phase: "Load", Schema: replanSchema})
 		if err != nil {
 			return nil, err
 		}
 		if rp == nil {
-			ev := plan.EvaluateWave(append(cs, plan.NullReturnSignal(plan.At{Stage: "decision-replan"})))
+			ev := plan.EvaluateWave(slices.Concat(cs, []*plan.Signal{plan.NullReturnSignal(plan.At{Stage: "decision-replan"})}))
 			l.record(ev)
 			return l.stopped(ctx, "decision-replan", ev.Stops, nil)
 		}
-		sigs := append(cs, replanSignals(&rp.Result, rpItems, "decision-replan", 0, l.ledger)...)
+		sigs := slices.Concat(cs, replanSignals(&rp.Result, rpItems, "decision-replan", 0, l.ledger))
 		edits, err := l.applyDirectEdits(ctx, planRef{l.plan.Path, rp.Result.PlanSha}, rp.Result.DirectEdits, "decision re-plan", "decision-replan", plan.W(0), "Load")
 		if err != nil {
 			return nil, err

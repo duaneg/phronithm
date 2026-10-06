@@ -59,7 +59,7 @@ var RecordKinds = []string{
 	// Go only (orchestrator D21): driver-detected records.
 	"residue-at-return",         // driver: a read-only stage returned with changes in its checkout
 	"permission-denied",         // driver: the call had permission denials
-	"sha-corrected",             // driver: a returned SHA was not its branch's tip and was replaced by it
+	"sha-corrected",             // driver: a returned SHA was not its branch's tip and was replaced by it; also a SHA git could not check (the statement says "not checked")
 	"guard-killed-after-result", // driver: the guard timeout killed the call after its result; the result stands
 }
 

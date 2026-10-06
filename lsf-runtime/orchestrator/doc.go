@@ -28,9 +28,10 @@
 //     encoding/json matches keys case-insensitively. Under the runtime,
 //     schema validation rejects such returns before the orchestrator sees
 //     them (retried, then an unjournaled null), so, past ±2^53, this
-//     arises from args.seed returns, which bypass validation in both
-//     languages (a journal replay was validated when recorded): a seed is
-//     trusted, as the caller vouches for it.
+//     arises from args.seed returns: JS trusts a seed, and Go validates
+//     it against its schema (D21), so a seed outside it is a
+//     schema-violation on every launch until it is fixed. A journal replay
+//     is validated again when replayed.
 //   - D10. The nth real call (n ≥ 2) with a label in a launch is label#n,
 //     so the journal keeps one record per call. JS reuses ledger:w<n> when a
 //     stop or pause scribes after the wave's own scribe, and at wave 0 after

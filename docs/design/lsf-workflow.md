@@ -300,8 +300,9 @@ the plan, so a re-plan can change the order of later waves; the merge stage
 never chooses.
 
 A cleanup agent on the mechanical tier runs beside the wave gate and removes
-the worktrees whose branches merged. It never signals; a failure leaves
-residue, not risk.
+the worktrees whose branches merged. Its null is logged, not signalled,
+though its call's driver events are (a denial, residue it left); a failure
+leaves residue, not risk.
 
 **The merge archives what it completes.** In the commit that marks a unit
 `complete: true`, the merge stage moves the unit's `### <id>` entry to

@@ -100,7 +100,7 @@ func classifyResult(a *attempt, schema json.RawMessage, skill string, prefixed b
 		return verdict{}
 	}
 	if len(r.StructuredOutput) == 0 || string(r.StructuredOutput) == "null" {
-		return verdict{class: classInvalid, errors: []string{noOutput}}
+		return verdict{class: classInvalid, errors: []string{NoOutput}}
 	}
 	if errs := validateOutput(schema, r.StructuredOutput); len(errs) > 0 {
 		return verdict{class: classInvalid, errors: errs}

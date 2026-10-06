@@ -213,7 +213,7 @@ func TestCallResultReachesCallSites(t *testing.T) {
 		"critique-code": flagged(orchtest.NoFindings()), "lens-review": flagged(nil)}, nil)
 	o := stubOrch(t, s, nil)
 	ctx := context.Background()
-	at := site{plan.At{Stage: "implement", Unit: "A", Wave: plan.W(1)}, true}
+	at := site{at: plan.At{Stage: "implement", Unit: "A", Wave: plan.W(1)}, writer: true}
 	shows := func(what, label string, sigs []*plan.Signal) {
 		t.Helper()
 		var got []string

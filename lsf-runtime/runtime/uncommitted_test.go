@@ -46,7 +46,7 @@ func TestUncommittedIsolated(t *testing.T) {
 		res, err = rt.Call(ctx, "do the thing", o)
 		return nil, err
 	})
-	if !slices.Equal(res.Uncommitted, []string{"new.txt", "tracked.txt"}) || slices.Contains(res.Flags, flagUnchecked) {
+	if !slices.Equal(res.Uncommitted, []string{"new.txt", "tracked.txt"}) || slices.Contains(res.Flags, FlagUncommittedUnchecked) {
 		t.Fatalf("%+v", res)
 	}
 
@@ -115,7 +115,7 @@ func TestUncommittedRenameIsOneEntry(t *testing.T) {
 	commitFile(t, cfg.Repo, "old.txt", "a\n")
 	git(t, cfg.Repo, "mv", "old.txt", "new.txt")
 	rt := &Runtime{cfg: cfg, killCh: make(chan struct{})}
-	snap, err := rt.snapshot(context.Background(), cfg.Repo, true)
+	snap, err := rt.takeSnapshot(context.Background(), cfg.Repo, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestUncommittedSkipsStateDir(t *testing.T) {
 	o.Label = "plan:u1"
 	o.Isolation = "worktree"
 	iso, _ := call(t, cfg, o)
-	if len(res.Uncommitted) != 0 || len(iso.Uncommitted) != 0 || slices.Contains(res.Flags, flagUnchecked) {
+	if len(res.Uncommitted) != 0 || len(iso.Uncommitted) != 0 || slices.Contains(res.Flags, FlagUncommittedUnchecked) {
 		t.Fatalf("repo %+v isolated %+v", res, iso)
 	}
 	rt := &Runtime{cfg: cfg, killCh: make(chan struct{})}
@@ -151,7 +151,7 @@ func TestUncommittedUncheckedNotJournaled(t *testing.T) {
 	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(cfg.Repo))
 	t.Setenv("STUB_SCRIPT", "ok")
 	res, _ := call(t, cfg, vOpts)
-	if !slices.Contains(res.Flags, flagUnchecked) || len(res.Uncommitted) != 0 {
+	if !slices.Contains(res.Flags, FlagUncommittedUnchecked) || len(res.Uncommitted) != 0 {
 		t.Fatalf("%+v", res)
 	}
 	b, err := os.ReadFile(filepath.Join(cfg.StateDir, "journal", journalKey(vOpts.Label)+".json"))
@@ -159,12 +159,12 @@ func TestUncommittedUncheckedNotJournaled(t *testing.T) {
 		t.Fatal(err)
 	}
 	var r record
-	if err := json.Unmarshal(b, &r); err != nil || slices.Contains(r.Flags, flagUnchecked) || !r.Unchecked {
+	if err := json.Unmarshal(b, &r); err != nil || slices.Contains(r.Flags, FlagUncommittedUnchecked) || !r.Unchecked {
 		t.Fatalf("record %s", b)
 	}
 	// A replay checks afresh: still not a repository, still unchecked.
 	again, _ := call(t, cfg, vOpts)
-	if !again.Replayed || !slices.Contains(again.Flags, flagUnchecked) {
+	if !again.Replayed || !slices.Contains(again.Flags, FlagUncommittedUnchecked) {
 		t.Fatalf("replay %+v", again)
 	}
 }
@@ -217,7 +217,9 @@ func TestUncommittedSkipsSymlinkedStateDir(t *testing.T) {
 	cfg, _ := testConfig(t)
 	commitFile(t, cfg.Repo, ".keep", "")
 	real := filepath.Join(cfg.Repo, "state")
-	os.Mkdir(real, 0o755)
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	link := filepath.Join(t.TempDir(), "state-link")
 	if err := os.Symlink(real, link); err != nil {
 		t.Skip(err)
@@ -225,7 +227,7 @@ func TestUncommittedSkipsSymlinkedStateDir(t *testing.T) {
 	cfg.StateDir = link
 	t.Setenv("STUB_SCRIPT", "ok")
 	res, _ := call(t, cfg, vOpts)
-	if len(res.Uncommitted) != 0 || slices.Contains(res.Flags, flagUnchecked) {
+	if len(res.Uncommitted) != 0 || slices.Contains(res.Flags, FlagUncommittedUnchecked) {
 		t.Fatalf("%+v", res)
 	}
 }
@@ -241,7 +243,7 @@ func TestViolationsOnInvalidNull(t *testing.T) {
 	o := vOpts
 	o.Label = "implement:u2"
 	res, _ = call(t, cfg, o)
-	if !slices.Equal(res.Violations, []string{noOutput}) {
+	if !slices.Equal(res.Violations, []string{NoOutput}) {
 		t.Fatalf("no output %+v", res)
 	}
 }
@@ -258,16 +260,19 @@ func TestValidateOutputEmptySchema(t *testing.T) {
 func TestStepCtxEndsOnKill(t *testing.T) {
 	cfg, _ := testConfig(t)
 	done := make(chan error, 1)
-	t0 := time.Now()
+	ready := make(chan struct{})
+	var t0 time.Time
 	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
 		go func() {
-			time.Sleep(50 * time.Millisecond)
+			<-ready // the step is running
+			t0 = time.Now()
 			rt.mu.Lock()
 			rt.killed = true
 			close(rt.killCh)
 			rt.mu.Unlock()
 		}()
 		_, err := rt.Step(ctx, "ledger:w1", []byte("in"), func(sctx context.Context, _ bool) (json.RawMessage, error) {
+			close(ready)
 			select {
 			case <-sctx.Done():
 				done <- sctx.Err()
@@ -284,5 +289,41 @@ func TestStepCtxEndsOnKill(t *testing.T) {
 	}
 	if d := time.Since(t0); d > 2*time.Second {
 		t.Fatalf("the step took %v to end", d)
+	}
+}
+
+// A repo call that returned null with dirt is not journaled; its re-run on
+// resume still reports the dirt, which its before-state would otherwise
+// hold. Once recorded, the kept paths are forgotten.
+func TestUncommittedNullReRunKeepsDirt(t *testing.T) {
+	cfg, _ := testConfig(t)
+	t.Setenv("STUB_SCRIPT", "invalid")
+	t.Setenv("STUB_DIRTY", "half.txt")
+	first, _ := call(t, cfg, vOpts)
+	if first.Value != nil || !slices.Equal(first.Uncommitted, []string{"half.txt"}) {
+		t.Fatalf("first %+v", first)
+	}
+	t.Setenv("STUB_SCRIPT", "ok")
+	t.Setenv("STUB_DIRTY", "")
+	again, _ := call(t, cfg, vOpts)
+	if again.Replayed || !slices.Equal(again.Uncommitted, []string{"half.txt"}) {
+		t.Fatalf("re-run %+v", again)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.StateDir, "journal", journalKey(vOpts.Label)+".dirt")); !os.IsNotExist(err) {
+		t.Errorf("kept paths not forgotten after the record: %v", err)
+	}
+}
+
+// Denials from a retried attempt are kept with the final one's.
+func TestDenialsAcrossAttempts(t *testing.T) {
+	cfg, _ := testConfig(t)
+	dir := t.TempDir()
+	denied := filepath.Join(dir, "denied.jsonl")
+	os.WriteFile(denied, []byte(`{"type":"system","subtype":"init","session_id":"s","tools":["Read"],"slash_commands":[]}`+"\n"+
+		`{"type":"result","subtype":"success","is_error":false,"structured_output":{"wrong":1},"total_cost_usd":0,"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"git commit"}}]}`+"\n"), 0o644)
+	t.Setenv("STUB_SCRIPT", "file:"+denied+",ok")
+	res, _ := call(t, cfg, vOpts)
+	if res.Value == nil || !slices.Equal(res.Denials, []string{`Bash: {"command":"git commit"}`}) {
+		t.Fatalf("%+v", res)
 	}
 }

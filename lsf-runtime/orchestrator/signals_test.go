@@ -319,3 +319,21 @@ func TestFixGateOmittedAndNotRun(t *testing.T) {
 	eq(t, out.stops()[0].Statement, "gate(s) omitted: ruff check .")
 	eq(t, out.stops()[1].Statement, "gate(s) not run: pytest -q")
 }
+
+// The runtime's flag names and its no-output violation are the ones
+// plan.SignalsFromCall maps: a rename on either side fails here.
+func TestRuntimeFlagsAreMapped(t *testing.T) {
+	at := plan.At{Stage: "implement", Unit: "A", Wave: plan.W(1)}
+	for flag, kind := range map[string]string{
+		lsfrt.FlagSkillNotLoaded:         "skill-not-loaded",
+		lsfrt.FlagGuardKilledAfterResult: "guard-killed-after-result",
+		lsfrt.FlagUncommittedUnchecked:   "uncommitted-at-return",
+	} {
+		sigs, unknown := plan.SignalsFromCall(plan.CallEvents{Label: "x", Writer: true, Flags: []string{flag}}, at)
+		if len(unknown) != 0 || len(sigs) != 1 || sigs[0].Kind != kind {
+			t.Errorf("%s: %v %v", flag, sigs, unknown)
+		}
+	}
+	sigs, _ := plan.SignalsFromCall(plan.CallEvents{Label: "x", Violations: []string{lsfrt.NoOutput}}, at)
+	contains(t, sigs[0].Statement, "no structured output after retry")
+}

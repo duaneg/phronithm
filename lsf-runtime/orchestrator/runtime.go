@@ -18,10 +18,11 @@ import (
 // Runtime is what the orchestrator needs from its host: *lsfrt.Runtime, or
 // a stub in tests. Call's only error is a *lsfrt.StopError, and its nil
 // Value is null. A non-null Value is valid against opts.Schema: an invalid
-// return is null with Violations set (D21), as *lsfrt.Runtime does. Parallel recovers a branch's panic or non-stop error to a
-// nil slot and returns the first stop after every branch finishes. Step
-// journals a code step (lsfrt.Runtime.Step). Repo is the main checkout ("" when
-// there is none); Worktree is a code step's own worktree and its branch.
+// return is null with Violations set (D21), as *lsfrt.Runtime does.
+// Parallel recovers a branch's panic or non-stop error to a nil slot and
+// returns the first stop after every branch finishes. Step journals a code
+// step (lsfrt.Runtime.Step). Repo is the main checkout ("" when there is
+// none); Worktree is a code step's own worktree and its branch.
 type Runtime interface {
 	Call(ctx context.Context, prompt string, o lsfrt.Opts) (lsfrt.CallResult, error)
 	Parallel(ctx context.Context, thunks []func(context.Context) (json.RawMessage, error)) ([]json.RawMessage, error)

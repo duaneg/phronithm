@@ -471,6 +471,9 @@ var callFlags = []string{"skill-not-loaded", "uncommitted-unchecked", "guard-kil
 // ShaCorrectedSignal records a returned SHA that was not branch's tip.
 // tip "" means the check could not be made; err says why.
 func ShaCorrectedSignal(at At, branch, reported, tip, err string) *Signal {
+	if reported == "" {
+		reported = "no SHA"
+	}
 	statement := fmt.Sprintf("%s: reported %s, tip %s; corrected", branch, reported, tip)
 	if tip == "" {
 		if err == "" {

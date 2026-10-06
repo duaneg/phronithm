@@ -173,7 +173,7 @@ func TestCheckSha(t *testing.T) {
 		{"full", "integration", tip, tip, "", ""},
 		{"upper case", "integration", strings.ToUpper(tip[:8]), tip[:8], "", ""},
 		{"mismatch", "integration", "deadbee", tip, "sha-corrected", "integration: reported deadbee, tip " + tip + "; corrected"},
-		{"empty", "integration", "", tip, "sha-corrected", "integration: reported , tip " + tip + "; corrected"},
+		{"empty", "integration", "", tip, "sha-corrected", "integration: reported no SHA, tip " + tip + "; corrected"},
 		{"too short", "integration", tip[:4], tip, "sha-corrected", ""},
 		{"longer than the tip", "integration", tip + "0", tip, "sha-corrected", ""},
 		{"unresolvable branch", "nope", "deadbee", "deadbee", "", ""},

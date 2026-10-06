@@ -56,6 +56,13 @@ func IsStop(err error) (StopReason, bool) {
 	return "", false
 }
 
+// CallResult flags. plan.SignalsFromCall maps them by these names.
+const (
+	FlagSkillNotLoaded         = "skill-not-loaded"
+	FlagGuardKilledAfterResult = "guard-killed-after-result"
+	FlagUncommittedUnchecked   = "uncommitted-unchecked"
+)
+
 // CallResult is one logical call's outcome. Value nil is null.
 type CallResult struct {
 	Value       json.RawMessage
