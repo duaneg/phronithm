@@ -912,3 +912,31 @@ func TestLedgerRerunAfterFailedVerification(t *testing.T) {
 	eq(t, r.head(), bad)
 	eq(t, strings.Count(r.read(ledgerPath), "| one |"), 1)
 }
+
+// Without an intent (a lost state dir), rows already at the tip are not
+// appended again; content already committed is not committed again; a
+// unit branch that moved since the step's input was taken is refused.
+func TestRefusalsWithoutIntent(t *testing.T) {
+	r := newGitRepo(t)
+	o := gitOrch(t, r, nil)
+	b := ledgerBlock(1, "one")
+	if _, err := runStage(t, o.ledgerAppend(ledgerIn(b)), "ledger:w1", false); err != nil {
+		t.Fatal(err)
+	}
+	tip := r.head()
+	_, err := runStage(t, o.ledgerAppend(ledgerIn(b)), "ledger:w1", false)
+	errMatch(t, err, `already holds these rows`)
+	eq(t, r.head(), tip)
+
+	_, err = gitOps{execGit{}}.writeAndCommit(context.Background(), r.dir, "integration", "README.md", "s", "l", []byte("readme\n"), tip)
+	errMatch(t, err, `README\.md already holds this content at `+tip+`; nothing to commit`)
+
+	r.git("branch", "unit-A")
+	in := reportIn("# A — completion report\n")
+	in.BaseSha = r.head()
+	r.git("checkout", "-q", "unit-A")
+	r.commit("src/A.go", "package a\n", "more work")
+	r.git("checkout", "-q", "integration")
+	_, err = reportLaunch(t, r, nil).completionReport(in)(context.Background(), "completion-report:A", false)
+	errMatch(t, err, `unit branch unit-A moved from `)
+}

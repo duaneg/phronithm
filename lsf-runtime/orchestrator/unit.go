@@ -347,6 +347,19 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	ca.Path, ca.TargetKB = completionPath(u), completionReportTargetKB
 	sigs = append(sigs, plan.SignalsFromDocumentSize(float64(len(text)), ca)...)
 	in := completionInput{Unit: u.ID, Base: branch, Path: completionPath(u), Text: text, Subject: "docs(" + c.name + "): " + u.ID + " completion report"}
+	if o.git != nil {
+		// The tip is in the step's input, so a replay is a report on the
+		// branch as it stands: a moved branch reruns the step.
+		sha, err := gitOps{o.git}.out(ctx, o.repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
+		if err != nil && ctx.Err() != nil {
+			return nil, &lsfrt.StopError{Reason: lsfrt.StopCancelled}
+		}
+		if err != nil || strings.HasPrefix(branch, "-") {
+			sigs = append(sigs, stageFaultSignal(plan.At{Stage: "completion-report", Unit: u.ID, Wave: plan.W(wave), Path: completionPath(u)}, fmt.Sprintf("unit branch %q does not resolve", branch)))
+			return abort("completion-report")
+		}
+		in.BaseSha = sha
+	}
 	report, fault, err := step[completionResult](ctx, o, "completion-report:"+u.ID, in, o.completionReport(in))
 	if err != nil {
 		return nil, err

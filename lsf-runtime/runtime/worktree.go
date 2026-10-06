@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -136,7 +137,7 @@ func gitRun(ctx context.Context, dir string, args ...string) error {
 func gitCmd(ctx context.Context, dir string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = append(scrubbedEnv(), "GIT_TERMINAL_PROMPT=0")
 	return cmd
 }
 
@@ -148,4 +149,17 @@ func refSafe(key string) string {
 	}
 	key = strings.TrimLeft(key, ".-")
 	return strings.TrimSuffix(key, ".lock")
+}
+
+// scrubbedEnv is the environment without the variables that would point
+// git at another repository or index (set when run from inside a hook).
+func scrubbedEnv() []string {
+	return slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		for _, k := range []string{"GIT_DIR=", "GIT_INDEX_FILE=", "GIT_WORK_TREE=", "GIT_COMMON_DIR=", "GIT_OBJECT_DIRECTORY="} {
+			if strings.HasPrefix(kv, k) {
+				return true
+			}
+		}
+		return false
+	})
 }

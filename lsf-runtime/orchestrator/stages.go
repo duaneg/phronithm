@@ -453,6 +453,9 @@ func (o *orch) ledgerAppend(in ledgerInput) stageFn {
 				// commit that failed verification).
 				return nil, fmt.Errorf("%s already holds these rows, but not in an intact commit of %s; check the ledger and relaunch with args.unscribed emptied of them", path, label)
 			}
+		} else if priorOK && bytes.Contains(prior, []byte(in.Block)) {
+			// No intent, as after a lost state dir: the rows are there already.
+			return nil, fmt.Errorf("%s already holds these rows; check the ledger and relaunch with args.unscribed emptied of them", path)
 		}
 		sha, err := g.writeAndCommit(ctx, o.repo, branch, path, in.Subject, label, next, pre)
 		if err != nil {
@@ -465,6 +468,7 @@ func (o *orch) ledgerAppend(in ledgerInput) stageFn {
 type completionInput struct {
 	Unit    string `json:"unit"`
 	Base    string `json:"base"`
+	BaseSha string `json:"baseSha,omitempty"` // Base's tip, when the orchestrator has a repository
 	Path    string `json:"path"`
 	Text    string `json:"text"`
 	Subject string `json:"subject"`
@@ -490,6 +494,9 @@ func (o *orch) completionReport(in completionInput) stageFn {
 		base, err := g.out(ctx, wt, "rev-parse", "--verify", "--quiet", "refs/heads/"+in.Base+"^{commit}")
 		if err != nil {
 			return nil, fmt.Errorf("unit branch %s does not resolve: %w", in.Base, err)
+		}
+		if in.BaseSha != "" && base != in.BaseSha {
+			return nil, fmt.Errorf("unit branch %s moved from %s to %s", in.Base, in.BaseSha, base)
 		}
 		done := func(sha string) (json.RawMessage, error) {
 			return stageValue(completionResult{Branch: branch, Sha: sha, Path: in.Path})

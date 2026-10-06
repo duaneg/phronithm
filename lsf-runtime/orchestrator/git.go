@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -21,18 +22,32 @@ type gitRunner interface {
 	run(ctx context.Context, dir string, args ...string) ([]byte, error)
 }
 
-// gitStageTimeout bounds one code-stage git command. A commit runs the
-// project's hooks, which may run its tests.
-const gitStageTimeout = 30 * time.Minute
+// Bounds on one code-stage git command: a commit runs the project's hooks,
+// which may run its tests; anything else is quick unless a lock is stuck.
+const (
+	gitCommitTimeout = 30 * time.Minute
+	gitTimeout       = 5 * time.Minute
+)
 
 type execGit struct{}
 
+// run runs git in its own process group, so a timeout or cancellation
+// kills a hook's children with it.
 func (execGit) run(ctx context.Context, dir string, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, gitStageTimeout)
+	d := gitTimeout
+	if len(args) > 0 && args[0] == "commit" {
+		d = gitCommitTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, d)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	cmd.Env = append(scrubbedEnv(), "GIT_TERMINAL_PROMPT=0")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// SIGTERM lets git remove its own lock files; WaitDelay then kills git
+	// if it lingers.
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
+	cmd.WaitDelay = 10 * time.Second
 	var out, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &stderr
 	if err := cmd.Run(); err != nil {
@@ -104,6 +119,9 @@ func (g gitOps) status(ctx context.Context, dir string, args ...string) (bool, e
 
 // blob is path's content at rev; ok is false when rev has no such path.
 func (g gitOps) blob(ctx context.Context, dir, rev, path string) (b []byte, ok bool, err error) {
+	if rev == "" { // an unborn branch; ":path" would read the index
+		return nil, false, nil
+	}
 	oid, err := g.out(ctx, dir, "rev-parse", "--verify", "--quiet", rev+":"+path)
 	if exitCode(err) == 1 {
 		return nil, false, nil
@@ -317,7 +335,15 @@ func (g gitOps) checkReachable(ctx context.Context, dir, sha, branch, path strin
 // changed are the paths sha changes against its first parent (all its
 // paths for a root commit).
 func (g gitOps) changed(ctx context.Context, dir, sha string) ([]string, error) {
-	b, err := g.r.run(ctx, dir, "diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "-z", sha)
+	parents, err := g.out(ctx, dir, "log", "-1", "--format=%P", sha, "--")
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "-z", sha}
+	if ps := strings.Fields(parents); len(ps) > 0 {
+		args = []string{"diff-tree", "--no-commit-id", "--name-only", "-r", "-z", ps[0], sha} // a merge too
+	}
+	b, err := g.r.run(ctx, dir, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -377,6 +403,13 @@ func (g gitOps) writeAndCommit(ctx context.Context, dir, branch, path, subject, 
 		return "", err
 	} else if cur != pre {
 		return "", fmt.Errorf("%s moved from %s to %s while the stage ran; relaunch", branch, pre, cur)
+	}
+	if pre != "" {
+		if b, ok, err := g.blob(ctx, dir, pre, path); err != nil {
+			return "", err
+		} else if ok && bytes.Equal(b, want) {
+			return "", fmt.Errorf("%s already holds this content at %s; nothing to commit", path, pre)
+		}
 	}
 	file := filepath.Join(dir, path)
 	prior, readErr := os.ReadFile(file)

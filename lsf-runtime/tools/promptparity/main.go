@@ -14,9 +14,11 @@
 // fixed in both.
 //
 // Load, the decision log, ledger appends and completion reports are code
-// steps in Go (orchestrator D18) and agent calls in the JS: the JS calls are answered from the Go step's
-// recorded value and left out of the comparison; the coverage checks count
-// the Go steps.
+// steps in Go (orchestrator D18) and agent calls in the JS: the JS calls are
+// answered from the Go step's recorded value; each Go step's input must
+// appear verbatim in the JS prompt it replaces (stepParity), and the calls
+// are then left out of the comparison. The coverage checks count the Go
+// steps.
 //
 // Node runs under precise coverage. The check fails unless every named
 // function in implement.js ran and every block that did not is listed in
@@ -51,11 +53,17 @@ type call struct {
 	Opts   json.RawMessage `json:"opts"`
 }
 
+// step is a Go code step: its label and input.
+type step struct {
+	Label string
+	Input json.RawMessage
+}
+
 // result is one scenario's run on one side. Steps are the Go side's code
-// steps' labels, which are not calls.
+// steps, which are not calls.
 type result struct {
 	Calls   []call          `json:"calls"`
-	Steps   []string        `json:"-"`
+	Steps   []step          `json:"-"`
 	Logs    []string        `json:"logs"`
 	Outcome json.RawMessage `json:"outcome"` // null on error
 	Error   string          `json:"error"`
@@ -98,7 +106,7 @@ func runGo(sc scenario) (result, jsScenario, []string) {
 	}
 	for _, c := range s.Calls {
 		if c.Step {
-			r.Steps = append(r.Steps, c.Label)
+			r.Steps = append(r.Steps, step{c.Label, c.Input})
 			continue
 		}
 		o, _ := plan.MarshalJS(opts{c.Opts.Label, c.Opts.Phase, c.Opts.Model, c.Opts.Effort, c.Opts.AgentType, c.Opts.Isolation, c.Opts.Schema}, "")
@@ -263,12 +271,84 @@ func codeStep(label string) bool {
 		strings.HasPrefix(base, "load:") || strings.HasPrefix(base, "ledger:") || strings.HasPrefix(base, "completion-report:")
 }
 
+// stepParity checks a Go step's input against the JS prompt for the same
+// label: each field the JS embeds in its prompt — the block or report it
+// copies, the commit subject, the SHA it reads, the decisions — appears
+// there verbatim. It returns what is missing.
+func stepParity(s step, prompt string) []string {
+	var in struct {
+		Sha, PlanPath, DecisionLogSha, DecisionLogPath, PauseRef string
+		Path, Subject, Block, Text, Base                         string
+		Decisions                                                json.RawMessage
+	}
+	if err := json.Unmarshal(s.Input, &in); err != nil {
+		return []string{"input: " + err.Error()}
+	}
+	base, _, _ := strings.Cut(s.Label, "#")
+	var want []string
+	subject := `subject line "` + in.Subject + `"`
+	switch {
+	case base == "load" || strings.HasPrefix(base, "load:"):
+		want = []string{"Run `git show " + in.Sha + ":" + in.PlanPath + "`", "git show-ref --verify --quiet " + in.PauseRef + " "}
+		if in.DecisionLogSha != "" {
+			want = append(want, "Run `git show "+in.DecisionLogSha+":"+in.DecisionLogPath+"`")
+		} else {
+			want = append(want, "There is no decision log")
+		}
+	case base == "decision-log":
+		var b bytes.Buffer
+		if err := json.Indent(&b, in.Decisions, "", "  "); err != nil {
+			return []string{"decisions: " + err.Error()}
+		}
+		want = []string{"Append the following requester decisions to " + in.Path + " ", "Decisions to append:\n" + b.String() + "\n\n", subject}
+	case strings.HasPrefix(base, "ledger:"):
+		want = []string{"<<<LEDGER\n" + in.Block + "LEDGER>>>", "to the end of " + in.Path + ",", subject, "git show-ref --verify --quiet " + in.PauseRef + " "}
+	case strings.HasPrefix(base, "completion-report:"):
+		want = []string{"<<<REPORT\n" + in.Text + "REPORT>>>", "below to " + in.Path + ",", subject, "git reset --hard " + in.Base + " &&"}
+	}
+	missing := []string{}
+	for _, w := range want {
+		if !strings.Contains(prompt, w) {
+			missing = append(missing, trunc(w))
+		}
+	}
+	return missing
+}
+
+func trunc(s string) string {
+	if len(s) > 120 {
+		return s[:120] + "…"
+	}
+	return s
+}
+
 // compare returns the differences between the two sides of one scenario.
-// The JS calls Go makes as code steps are dropped first.
+// The JS calls Go makes as code steps are checked against the steps'
+// inputs (stepParity) and dropped.
 func compare(g result, j jsResult) []string {
-	j.Calls = slices.DeleteFunc(slices.Clone(j.Calls), func(c call) bool { return codeStep(c.Label) })
 	var diffs []string
 	add := func(f string, a ...any) { diffs = append(diffs, fmt.Sprintf(f, a...)) }
+	jsSteps := map[string]string{}
+	for _, c := range j.Calls {
+		if codeStep(c.Label) {
+			jsSteps[c.Label] = c.Prompt
+		}
+	}
+	for _, s := range g.Steps {
+		prompt, ok := jsSteps[s.Label]
+		if !ok {
+			add("step %s: go only", s.Label)
+			continue
+		}
+		delete(jsSteps, s.Label)
+		if missing := stepParity(s, prompt); len(missing) > 0 {
+			add("step %s: the JS prompt lacks the step's input: %q", s.Label, missing)
+		}
+	}
+	for l := range jsSteps {
+		add("step %s: js only", l)
+	}
+	j.Calls = slices.DeleteFunc(slices.Clone(j.Calls), func(c call) bool { return codeStep(c.Label) })
 	if g.Error != j.Error {
 		add("error: go %q, js %q", g.Error, j.Error)
 	}
@@ -393,7 +473,10 @@ func listed(name, text string, used map[[2]string]bool) bool {
 
 // labels are the labels of r's calls and steps.
 func (r result) labels() []string {
-	out := slices.Clone(r.Steps)
+	out := []string{}
+	for _, s := range r.Steps {
+		out = append(out, s.Label)
+	}
 	for _, c := range r.Calls {
 		out = append(out, c.Label)
 	}

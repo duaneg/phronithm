@@ -106,7 +106,9 @@ func (o *orch) parallelAgents(ctx context.Context, reqs []agentReq) ([]agentRes,
 	for i, r := range reqs {
 		thunks = append(thunks, func(ctx context.Context) (json.RawMessage, error) {
 			cr, label, err := o.agent(ctx, r.prompt, r.opts)
-			out[i] = agentRes{cr, label}
+			if err == nil { // a failed branch's slot stays empty: no flags without a call
+				out[i] = agentRes{cr, label}
+			}
 			return cr.Value, err
 		})
 	}

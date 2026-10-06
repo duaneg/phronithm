@@ -87,7 +87,13 @@
 //     carries Lsf-Step: <label> and Lsf-Content: sha256:<digest of the
 //     bytes written> trailers; a stage commit whose content no longer
 //     matches its digest is not intact. An interrupted rerun adopts its own
-//     intact commit instead of committing again. Returned SHAs are full.
+//     intact commit instead of committing again; without an intent, a
+//     ledger whose tip already holds the block refuses to append it again.
+//     The completion report's input carries the unit branch's tip, so a
+//     moved branch reruns the step instead of replaying a stale report.
+//     Returned SHAs are full, and checked when made or adopted; a replayed
+//     SHA is not re-checked, so a history rewrite between launches can leave
+//     the outcome naming a commit that no longer exists.
 //     A state dir journaled before this unit holds call records for these
 //     labels, which Step treats as stale and reruns: such a state dir is
 //     not resumable. A relaunch with changed input after a kill between a
@@ -100,7 +106,10 @@
 //     a broken existing decision block; a rejected commit (the file is
 //     restored and unstaged); an earlier stage commit that is not intact
 //     (the guard: repair it with a new commit without an Lsf-Content
-//     trailer); a commit that fails verification (it stays, named). A
+//     trailer); a commit that fails verification (it stays, named);
+//     content already committed; ledger rows already at the tip. The
+//     completion report has no guard: its branch is its own, so a relaunch
+//     resets a bad tip away and commits again (the reflog keeps it). A
 //     project whose hooks rewrite these files (formatters, whitespace
 //     fixers) or stage other paths gets the verification stop, and then the
 //     guard's, on every launch until it exempts the paths: the bytes must

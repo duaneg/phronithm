@@ -252,11 +252,16 @@ func TestOnRuntimeLabelsUniqueAndReplay(t *testing.T) {
 
 // scriptedSteps is the real runtime with each code step's value scripted:
 // the step is journaled and replayed by rt.Step, but its fn returns the
-// stub run's value instead of touching git.
+// stub run's value instead of touching git. Agent calls still run in the
+// runtime's repository.
 type scriptedSteps struct {
 	*lsfrt.Runtime
 	values map[string]json.RawMessage
 }
+
+// Repo is "": the scripted values name branches and SHAs the repository
+// does not have, so the orchestrator must not read git around the steps.
+func (r scriptedSteps) Repo() string { return "" }
 
 func (r scriptedSteps) Step(ctx context.Context, label string, input []byte, fn func(context.Context, bool) (json.RawMessage, error)) (json.RawMessage, error) {
 	v, ok := r.values[label]

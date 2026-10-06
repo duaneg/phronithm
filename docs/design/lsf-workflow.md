@@ -705,6 +705,4 @@ return, the obligation dispositions — runs opus at low effort. The load
 (the plan and decision-log reads), the decision-log and ledger appends and
 the completion-report commit are code in the Go orchestrator, not agent
 calls, and take no tier (`lsf-runtime/orchestrator`, D18). The JavaScript
-keeps them as mechanical-tier agents until `script-retirement`, since the
-script has already rendered what they write and the parser checks it on
-the next load.
+keeps them as mechanical-tier agents until `script-retirement`.
