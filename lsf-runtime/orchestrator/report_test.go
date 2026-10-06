@@ -146,7 +146,10 @@ func TestLongGateRecipe(t *testing.T) {
 
 	sh(gate("2", "sleep 30"))
 	pid, _ := os.ReadFile(filepath.Join(D, "lsf-gate-2.pid"))
-	sh("pkill -KILL -P " + strings.TrimSpace(string(pid)) + "; kill -KILL " + strings.TrimSpace(string(pid)))
+	// Stop the subshell first, so it cannot write the status file between
+	// its child's death and its own.
+	p := strings.TrimSpace(string(pid))
+	sh("kill -STOP " + p + "; pkill -KILL -P " + p + "; kill -KILL " + p)
 	t1 := time.Now()
 	sh(strings.ReplaceAll(poll, "<n>", "2"))
 	if time.Since(t1) > 20*time.Second {

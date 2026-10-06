@@ -75,11 +75,6 @@ func header(c *runCtx, p planRef) string {
 // is not there.
 const entrySemantics = "The entry's Scope line declares the files this unit writes that another unit in flight might also write; the scheduler reads it for overlap. It does not limit what the work may edit. A file the work needs to change outside the Scope line is changed, and reported as such where a stage asks for it — never treated as a question. A clause of the entry or of the architecture document that admits more than one reading, or names something that does not exist as named (a file, a test, a function), is read the plainest way consistent with the code; the unit plan records the reading and later stages hold to it."
 
-// unitBlock gives the unit entry and the obligations naming the unit by
-// extraction command rather than a read of the whole plan: the plan is
-// large and the stage needs one section of it. The prompt embeds the SHA,
-// so the commands are stable across a wave.
-
 // copyPrompt is the load stage: the plan block, and the decision log's.
 func copyPrompt(c *runCtx, sha string) string {
 	decisions := "There is no decision log; return an empty string in `decisionsBlock`."
@@ -223,6 +218,10 @@ func worktree(base string) string {
 	return "You are running in a git worktree of the repository. Before anything else run `git reset --hard " + base + " && git clean -fd` so the worktree matches that branch exactly, with no leftover untracked files from an earlier attempt. Make all changes and commits here; never touch other worktrees or the main checkout. Report your branch (`git rev-parse --abbrev-ref HEAD`) and HEAD SHA in `result`."
 }
 
+// unitBlock gives the unit entry and the obligations naming the unit by
+// extraction command rather than a read of the whole plan: the plan is
+// large and the stage needs one section of it. The prompt embeds the SHA,
+// so the commands are stable across a wave.
 func unitBlock(p planRef, u *plan.Unit) string {
 	return "Work unit: " + u.ID + " (type: " + u.Type + ")\nUnit entry: the `### " + u.ID + "` section under `## Work Units` in " + p.path + " @ " + p.sha + ". Read it first, with this command verbatim, and take it as requirement text:\n`git show " + p.sha + ":" + p.path + " | sed -n '/^### " + u.ID + "$/,/^##/p'`\nStanding obligations naming the unit, with this command:\n`git show " + p.sha + ":" + p.path + " | sed -n '/^## Standing Obligations/,/^## /p' | grep -n '" + u.ID + "'`\nDo not read the rest of the plan; the entry and the obligations are what this stage needs from it. " + entrySemantics
 }

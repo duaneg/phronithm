@@ -94,12 +94,19 @@ func decode[T any](rt Runtime, label string, raw json.RawMessage) *ret[T] {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil
 	}
-	var r ret[T]
-	if err := json.Unmarshal(raw, &r); err != nil {
+	var r struct {
+		Result  *T       `json:"result"`
+		Commits []commit `json:"commits"`
+	}
+	err := json.Unmarshal(raw, &r)
+	if err == nil && r.Result == nil {
+		err = fmt.Errorf("no result")
+	}
+	if err != nil {
 		rt.Log(fmt.Sprintf("%s: return does not decode (%v); treated as null", label, err))
 		return nil
 	}
-	return &r
+	return &ret[T]{Result: *r.Result, Commits: r.Commits}
 }
 
 // call is agent plus decode.

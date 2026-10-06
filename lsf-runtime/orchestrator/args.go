@@ -85,7 +85,7 @@ type args struct {
 	ArchivePath       *string                    `json:"archivePath"`
 	Config            json.RawMessage            `json:"config"`
 	MaxWaves          *float64                   `json:"maxWaves"`
-	MaxUnitsPerWave   *int                       `json:"maxUnitsPerWave"`
+	MaxUnitsPerWave   *jsInt                     `json:"maxUnitsPerWave"`
 	PauseRef          *string                    `json:"pauseRef"`
 	Unscribed         json.RawMessage            `json:"unscribed"`
 	Seed              map[string]json.RawMessage `json:"seed"`
@@ -173,7 +173,10 @@ func newRunCtx(a *args) (*runCtx, error) {
 	if a.MaxWaves != nil {
 		c.maxWaves = *a.MaxWaves
 	}
-	c.maxUnitsPerWave = a.MaxUnitsPerWave
+	if a.MaxUnitsPerWave != nil {
+		n := int(*a.MaxUnitsPerWave)
+		c.maxUnitsPerWave = &n
+	}
 	c.pauseRef = strOr(a.PauseRef, "refs/lsf/"+name+"/pause")
 	c.tiers = defaultTiers()
 	for role, t := range a.Tiers {

@@ -12,10 +12,14 @@ import (
 // schemas; unknown fields are ignored, as in JS.
 
 // jsInt is a schema `integer`: what the runtime validator accepts, a finite
-// integral number, 3.0 included.
+// integral number, 3.0 included, within ±2^53 (an int an agent might report;
+// past it float64 is not exact).
 type jsInt int
 
 func (n *jsInt) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		return fmt.Errorf("null is not an integer")
+	}
 	var f float64
 	if err := json.Unmarshal(b, &f); err != nil {
 		return err

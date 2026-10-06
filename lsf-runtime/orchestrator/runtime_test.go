@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/duaneg/phronithm/lsf-runtime/orchestrator/orchtest"
+	"github.com/duaneg/phronithm/lsf-runtime/plan"
 	lsfrt "github.com/duaneg/phronithm/lsf-runtime/runtime"
 )
 
@@ -174,6 +175,25 @@ func TestJSSlice(t *testing.T) {
 	}{{nil, xs}, {n(2), []int{1, 2}}, {n(0), []int{}}, {n(5), xs}, {n(-1), []int{1, 2}}, {n(-5), []int{}}} {
 		if got := jsSlice(xs, c.n); !slices.Equal(got, c.want) {
 			t.Errorf("%v: %v", c.n, got)
+		}
+	}
+}
+
+func TestMergeResultSchemaHasTwoProperties(t *testing.T) {
+	// mergeResultSchema copies these by name; a new property must be added.
+	var m struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(plan.MergeResultSchema, &m); err != nil || len(m.Properties) != 2 {
+		t.Errorf("%v %v", m.Properties, err)
+	}
+}
+
+func TestDecodeNullsAndMissingResult(t *testing.T) {
+	s := orchtest.New(t, orchtest.TwoWaves(), nil, nil)
+	for _, bad := range []string{`{"result":{"bytes":null}}`, `{"commits":[]}`, `{"result":null}`} {
+		if decode[unitPlanResult](s, "plan:A", json.RawMessage(bad)) != nil {
+			t.Errorf("%s decodes", bad)
 		}
 	}
 }

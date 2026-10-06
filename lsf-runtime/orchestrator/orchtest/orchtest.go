@@ -45,8 +45,8 @@ func Ret(result any, extra ...M) M {
 // Call is one agent call as the stub saw it.
 type Call struct {
 	Label  string // final label
-	Prefix string // before the first ':' (and any #n)
-	Unit   string // last ':' component
+	Prefix string // before the first ':', with any #n suffix dropped
+	Unit   string // last ':' component, with any #n suffix dropped
 	Prompt string
 	Opts   lsfrt.Opts
 }
@@ -65,7 +65,11 @@ type State struct {
 // anything else is marshalled.
 type Handler func(c Call, s *State) any
 
-// Stub is the runtime.
+// Stub is the runtime. Agent holds the stub's lock while a handler runs, so
+// Concurrent branches serialise inside the stub (the orchestrator code
+// between calls still runs concurrently), and a handler must not call the
+// stub's methods. Labels, Prompt and CallOf read without the lock: call them
+// after the run.
 type Stub struct {
 	Handlers   map[string]Handler
 	ArgsJSON   json.RawMessage
@@ -121,8 +125,9 @@ var mergeLine = regexp.MustCompile(`(?m)^- (\S+): branch`)
 
 // Agent answers from the handler for the label's prefix.
 func (s *Stub) Agent(ctx context.Context, prompt string, o lsfrt.Opts) (json.RawMessage, error) {
-	parts := strings.Split(o.Label, ":")
-	prefix, _, _ := strings.Cut(parts[0], "#")
+	base, _, _ := strings.Cut(o.Label, "#")
+	parts := strings.Split(base, ":")
+	prefix := parts[0]
 	c := Call{Label: o.Label, Prefix: prefix, Unit: parts[len(parts)-1], Prompt: prompt, Opts: o}
 
 	s.mu.Lock()
