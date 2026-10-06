@@ -26,6 +26,7 @@ type record struct {
 	Flags       []string        `json:"flags,omitempty"`
 	Denials     []string        `json:"denials,omitempty"`
 	Uncommitted []string        `json:"uncommitted,omitempty"`
+	Unchecked   bool            `json:"unchecked,omitempty"` // the uncommitted check failed; a replay checks afresh
 	At          time.Time       `json:"at"`
 }
 
@@ -101,31 +102,34 @@ func (rt *Runtime) writeRecord(key string, r record) error {
 	return writeFileAtomic(rt.recordPath(key), append(b, '\n'))
 }
 
-// replayCall returns a completed call's recorded return. A replay costs
-// nothing and does not count against the caps.
-func (rt *Runtime) replayCall(key, hash, label string) (CallResult, bool) {
+// replayCall returns a completed call's recorded return, and whether its
+// uncommitted check failed. A replay costs nothing and does not count
+// against the caps.
+func (rt *Runtime) replayCall(key, hash, label string) (CallResult, bool, bool) {
 	r, err := rt.readRecord(key)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return CallResult{}, false
+		return CallResult{}, false, false
 	case err != nil:
 		rt.Log(fmt.Sprintf("%s: journal record unreadable, call re-runs: %v", label, err))
-		return CallResult{}, false
+		return CallResult{}, false, false
 	case r.Kind != "call" || r.Hash != hash:
 		rt.event("cache-stale", map[string]any{"label": label})
-		return CallResult{}, false
+		return CallResult{}, false, false
 	}
 	rt.event("cache-hit", map[string]any{"label": label, "flags": r.Flags})
 	rt.Log(label + ": replayed from the journal")
-	return CallResult{Value: r.Ret, Class: string(classOK), Flags: r.Flags, Denials: r.Denials, Uncommitted: r.Uncommitted, Replayed: true}, true
+	return CallResult{Value: r.Ret, Class: string(classOK), Flags: r.Flags, Denials: r.Denials, Uncommitted: r.Uncommitted, Replayed: true}, r.Unchecked, true
 }
 
 // recordCall journals a call's non-null return. A null is not recorded, so a
 // resume retries it. A failed write is logged: the call's result still stands.
-// The unchecked flag is left out: a replay re-checks.
+// The unchecked flag is kept as Unchecked, not a flag: a replay checks
+// afresh rather than replay the failure.
 func (rt *Runtime) recordCall(key, hash, label string, res CallResult) {
 	flags := slices.DeleteFunc(slices.Clone(res.Flags), func(f string) bool { return f == flagUnchecked })
-	if err := rt.writeRecord(key, record{Label: label, Kind: "call", Hash: hash, Ret: res.Value, Flags: flags, Denials: res.Denials, Uncommitted: res.Uncommitted}); err != nil {
+	unchecked := len(flags) != len(res.Flags)
+	if err := rt.writeRecord(key, record{Label: label, Kind: "call", Hash: hash, Ret: res.Value, Flags: flags, Denials: res.Denials, Uncommitted: res.Uncommitted, Unchecked: unchecked}); err != nil {
 		rt.Log(fmt.Sprintf("%s: journal write failed, a resume will re-run the call: %v", label, err))
 	}
 }

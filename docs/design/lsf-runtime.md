@@ -255,10 +255,11 @@ Classification reads the `result` event first, because the CLI can recover from 
 Every call that spawned and returns a value or a null reports the paths it left uncommitted: modified, staged or untracked, but not ignored. The check comes from `git status --porcelain=v1 -z --untracked-files=all`, run at the work tree's toplevel.
 
 - **An isolated call** reports every dirty path in its worktree. The worktree is the call's own.
+- **What is compared.** For a repo call, each dirty path's status, plus its content: a hash and mode for a regular file, or the target for a symlink. The status runs with `--no-optional-locks`, so it never takes the index lock from an agent's git.
 - **A repo call** snapshots the main checkout at its first admitted attempt, with a content hash for each dirty file. It reports only the paths that are new, or whose status or content changed, by its return. Dirt from a failed attempt before a retry is the call's.
 - **Excluded:** paths under the state dir, which are neither reported nor hashed.
 - **A stop or a dry run** gets no check.
-- **A failed check** (git error or timeout, before or after) sets `uncommitted-unchecked`. That flag is not journaled.
+- **A failed check** (git error or timeout, before or after) sets `uncommitted-unchecked`. The record keeps the failure as `unchecked`, not the flag, and a replay checks afresh. For a repo call, with no before-state to compare, it reports every dirty path.
 - **The journal** keeps the paths. A replay re-checks them:
   - an isolated call checks its worktree as it now stands; a removed worktree is clean;
   - a repo call keeps the journaled paths that are still dirty.
@@ -305,7 +306,7 @@ Every call that spawned and returns a value or a null reports the paths it left 
 ### Known limits
 
 - **Uncommitted attribution.** A requester edit to the main checkout during a repo call is attributed to that call. The review gate and cleanup run in parallel in the main checkout, so a change made during them is attributed to both.
-- **A repo call's null re-run.** A repo call that returned null with dirt is not journaled. On resume it re-runs with that dirt in its before-state, so the dirt is not reported again.
+- **A repo call's re-run.** A repo call with no journal record re-runs on resume with any dirt it left in its before-state, so that dirt is not reported again. This covers a call that returned null, was stopped or killed, crashed before its record, or failed to write it.
 - **Session limits.** The shape of a session limit under `-p` is built from the binary's schema and interactive transcripts, not observed. The first real limit's stream is kept under `calls/`.
 - **Retries in a dirty worktree.** A retry after a worker made partial changes reruns in the same worktree.
 - **Group kill after reaping.** After the leader of a cancelled call is reaped, its pgid could in principle be reused before the group SIGKILL. Sequential pid allocation makes this need a wrapped pid space.

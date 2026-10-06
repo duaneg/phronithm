@@ -148,6 +148,7 @@ func TestUncommittedSkipsStateDir(t *testing.T) {
 func TestUncommittedUncheckedNotJournaled(t *testing.T) {
 	cfg, _ := testConfig(t)
 	cfg.Repo = t.TempDir() // not a repository: the check fails
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(cfg.Repo))
 	t.Setenv("STUB_SCRIPT", "ok")
 	res, _ := call(t, cfg, vOpts)
 	if !slices.Contains(res.Flags, flagUnchecked) || len(res.Uncommitted) != 0 {
@@ -158,8 +159,74 @@ func TestUncommittedUncheckedNotJournaled(t *testing.T) {
 		t.Fatal(err)
 	}
 	var r record
-	if err := json.Unmarshal(b, &r); err != nil || slices.Contains(r.Flags, flagUnchecked) {
+	if err := json.Unmarshal(b, &r); err != nil || slices.Contains(r.Flags, flagUnchecked) || !r.Unchecked {
 		t.Fatalf("record %s", b)
+	}
+	// A replay checks afresh: still not a repository, still unchecked.
+	again, _ := call(t, cfg, vOpts)
+	if !again.Replayed || !slices.Contains(again.Flags, flagUnchecked) {
+		t.Fatalf("replay %+v", again)
+	}
+}
+
+// A repo call whose check failed replays with every dirty path, having no
+// before-state to compare.
+func TestUncommittedUncheckedReplayRepo(t *testing.T) {
+	cfg, _ := testConfig(t)
+	t.Setenv("STUB_SCRIPT", "ok")
+	key := journalKey(vOpts.Label)
+	os.MkdirAll(filepath.Join(cfg.StateDir, "journal"), 0o755)
+	rec := record{Label: vOpts.Label, Kind: "call", Hash: callHash("do the thing", "", vOpts), Ret: json.RawMessage(`{"verdict":"pass","n":3}`), Unchecked: true}
+	b, _ := json.Marshal(rec)
+	os.WriteFile(filepath.Join(cfg.StateDir, "journal", key+".json"), b, 0o644)
+	os.WriteFile(filepath.Join(cfg.Repo, "left.txt"), []byte("x"), 0o644)
+	res, _ := call(t, cfg, vOpts)
+	if !res.Replayed || !slices.Equal(res.Uncommitted, []string{"left.txt"}) {
+		t.Fatalf("%+v", res)
+	}
+}
+
+// Every return after a spawn is checked: a value, a null after invalid
+// returns, an exhausted transient, a permanent error and a guard timeout.
+func TestUncommittedEveryReturnPath(t *testing.T) {
+	for _, tc := range []struct{ name, script string }{
+		{"ok", "ok"},
+		{"invalid", "invalid"},
+		{"transient", "transient"},
+		{"permanent", "fixture:permanent"},
+		{"timeout", "hang"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, _ := isolatedConfig(t)
+			cfg.GuardTimeout = Duration(300 * time.Millisecond)
+			t.Setenv("STUB_SCRIPT", tc.script)
+			t.Setenv("STUB_DIRTY", "partial.txt")
+			o := vOpts
+			o.Isolation = "worktree"
+			res, err := call(t, cfg, o)
+			if err != nil || !slices.Equal(res.Uncommitted, []string{"partial.txt"}) {
+				t.Fatalf("%v %+v", err, res)
+			}
+		})
+	}
+}
+
+// A state dir reached through a symlink, inside the repository, is still
+// excluded.
+func TestUncommittedSkipsSymlinkedStateDir(t *testing.T) {
+	cfg, _ := testConfig(t)
+	commitFile(t, cfg.Repo, ".keep", "")
+	real := filepath.Join(cfg.Repo, "state")
+	os.Mkdir(real, 0o755)
+	link := filepath.Join(t.TempDir(), "state-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skip(err)
+	}
+	cfg.StateDir = link
+	t.Setenv("STUB_SCRIPT", "ok")
+	res, _ := call(t, cfg, vOpts)
+	if len(res.Uncommitted) != 0 || slices.Contains(res.Flags, flagUnchecked) {
+		t.Fatalf("%+v", res)
 	}
 }
 
@@ -191,6 +258,7 @@ func TestValidateOutputEmptySchema(t *testing.T) {
 func TestStepCtxEndsOnKill(t *testing.T) {
 	cfg, _ := testConfig(t)
 	done := make(chan error, 1)
+	t0 := time.Now()
 	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
 		go func() {
 			time.Sleep(50 * time.Millisecond)
@@ -213,5 +281,8 @@ func TestStepCtxEndsOnKill(t *testing.T) {
 	})
 	if err := <-done; err == nil {
 		t.Fatal("the step's ctx did not end on killCh")
+	}
+	if d := time.Since(t0); d > 2*time.Second {
+		t.Fatalf("the step took %v to end", d)
 	}
 }

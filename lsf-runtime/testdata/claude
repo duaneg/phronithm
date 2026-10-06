@@ -10,6 +10,7 @@
 #               and active/maxactive (concurrent invocations).
 # STUB_PIDFILE  also receives the grandchild pid of a hang mode.
 # STUB_RESET_IN seconds from now to the session-limit reset (default 1).
+# STUB_DIRTY    a path the stub writes in its cwd before any mode runs.
 #
 # Modes: ok | cost:<usd> | nullout | invalid | slow:<secs> | transient |
 #        session | session-noreset | hang | hang-ignore-term |
@@ -60,6 +61,7 @@ IFS=, read -r -a modes <<< "$script"
 i=$((n - 1))
 [ "$i" -ge "${#modes[@]}" ] && i=$((${#modes[@]} - 1))
 mode=${modes[$i]}
+[ -n "${STUB_DIRTY:-}" ] && echo x > "$STUB_DIRTY"
 
 init() { echo "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$session\",\"tools\":[\"Read\",\"Bash\"],\"slash_commands\":[]}"; }
 result_ok() { echo "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"structured_output\":$1,\"total_cost_usd\":${2:-0.01}}"; }

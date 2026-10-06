@@ -17,8 +17,8 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 	skill := rt.cfg.skillFor(o.Label)
 	hash := callHash(prompt, skill, o)
 	rt.noteLabel(key, hash, o.Label)
-	if res, ok := rt.replayCall(key, hash, o.Label); ok {
-		rt.recheckUncommitted(ctx, o, key, &res)
+	if res, unchecked, ok := rt.replayCall(key, hash, o.Label); ok {
+		rt.recheckUncommitted(ctx, o, key, unchecked, &res)
 		return res, nil
 	}
 	if err := rt.boundary(ctx); err != nil {
