@@ -94,9 +94,10 @@ func TestStopRecordDisjoint(t *testing.T) {
 // js: escalation omits plan_sha and wave when unset
 func TestEscalationOmitsUnset(t *testing.T) {
 	keys := func(e Escalation) []string {
-		b, _ := json.Marshal(e)
 		var m map[string]any
-		json.Unmarshal(b, &m)
+		if err := json.Unmarshal([]byte(jsonOf(t, e)), &m); err != nil {
+			t.Fatal(err)
+		}
 		var ks []string
 		for k := range m {
 			ks = append(ks, k)
@@ -160,5 +161,16 @@ func TestSchemaLiteralsAreJSONAndMatchLists(t *testing.T) {
 	gate := unit["gates"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
 	if got := enum(gate["kind"]); !slices.Equal(got, GateKinds) {
 		t.Errorf("PlanSchema gate kinds %v != %v", got, GateKinds)
+	}
+}
+
+func TestSignalAndEscalationJSON(t *testing.T) {
+	s := NewSignal(Signal{Kind: "verdict", Source: "reported", Stage: "decision-replan", Statement: "s", Unit: "u", Wave: W(0), Disposition: "recorded"})
+	if got := jsonOf(t, s); got != `{"kind":"verdict","source":"reported","stage":"decision-replan","statement":"s","referent":"","raisedBy":"decision-replan","unit":"u","wave":0,"disposition":"recorded"}` {
+		t.Errorf("signal %s", got)
+	}
+	e := NewEscalation(Escalation{Workflow: "w", Stage: "replan", PlanSha: "b", PreReplanSha: "a", Wave: W(0)})
+	if got := jsonOf(t, e); got != `{"workflow":"w","stage":"replan","signals":[],"decision_needed":[],"plan_sha":"b","pre_replan_sha":"a","wave":0}` {
+		t.Errorf("escalation %s", got)
 	}
 }
