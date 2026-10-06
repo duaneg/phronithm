@@ -84,5 +84,9 @@
 | S11 | pass | evidenced → evidenced | `lsf-workflow.md::escalation` amended in commits 3a, 3b, 3c and 4. D20 to D22 recorded, D19 amended. |
 | S12 | pass | proven/evidenced → same | `go vet ./...` and `go test -race ./...` pass. Promptparity: 55 scenarios identical. Graphparity: 145 cases identical. `git diff --stat 85dced0 -- workflows/ lsf-runtime/go.mod` is empty. |
 
+## Phase 5
+
+Full-diff critique (0 Critical, 4 Significant) and lens review (0 Critical, 0 Significant, 18 Minor); fixes in `7571a7b`. Completion report: `docs/plans/runtime-signals-completion.md`.
+
 ## Remaining phases
-Complete Phase 5 (Review) as defined in the phronithm:feature skill.
+Complete Phase 5 (Review) as defined in the phronithm:feature skill. (Done: see above.)
