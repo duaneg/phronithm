@@ -275,3 +275,26 @@ func TestStaleWorktreeDirectoryStops(t *testing.T) {
 		t.Fatalf("err %v, spawns %d", err, stubCount(t, stub))
 	}
 }
+
+func TestWorktreeReusedOnResume(t *testing.T) {
+	cfg, _ := testConfig(t)
+	cfg.Repo = gitRepo(t)
+	cfg.Args = json.RawMessage(`{"planSha":"0123456789ab","integrationBranch":"main"}`)
+	t.Setenv("STUB_SCRIPT", "ok")
+	o := vOpts
+	o.Isolation = "worktree"
+	call(t, cfg, o)
+	wt := filepath.Join(cfg.StateDir, "wt", journalKey(o.Label))
+	git(t, wt, "commit", "-q", "--allow-empty", "-m", "unit work")
+	tip := git(t, wt, "rev-parse", "HEAD")
+	o.Effort = "high" // not a replay: the call runs again in the same worktree
+	if r, err := call(t, cfg, o); err != nil || r.Value == nil {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if got := git(t, wt, "rev-parse", "HEAD"); got != tip {
+		t.Fatalf("HEAD %s, want %s", got, tip)
+	}
+	if n := countEvents(telemetry(t, cfg), "worktree"); n != 1 {
+		t.Errorf("%d worktree creations, want 1", n)
+	}
+}

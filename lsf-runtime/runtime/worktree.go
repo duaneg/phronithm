@@ -15,24 +15,12 @@ import (
 // integration branch and reused on resume. A failure is a runtime-error stop,
 // never a silent fallback to the repo.
 func (rt *Runtime) cwdFor(ctx context.Context, o Opts, key string) (string, error) {
-	switch o.Isolation {
-	case "":
+	if o.Isolation == "" {
 		return rt.cfg.Repo, nil
-	case "worktree":
-	default:
-		return "", rt.setStop(StopRuntimeError, fmt.Sprintf("%s: unknown isolation %q", o.Label, o.Isolation))
 	}
-	var args struct {
-		PlanSha           string `json:"planSha"`
-		IntegrationBranch string `json:"integrationBranch"`
-	}
-	if len(rt.cfg.Args) > 0 {
-		if err := json.Unmarshal(rt.cfg.Args, &args); err != nil {
-			return "", rt.setStop(StopRuntimeError, fmt.Sprintf("%s: args: %v", o.Label, err))
-		}
-	}
-	if len(args.PlanSha) < 8 || args.IntegrationBranch == "" || rt.cfg.Repo == "" {
-		return "", rt.setStop(StopRuntimeError, fmt.Sprintf("%s: a worktree needs repo, args.planSha (8+ characters) and args.integrationBranch", o.Label))
+	args, err := rt.isolationArgs(o)
+	if err != nil {
+		return "", err
 	}
 
 	// Concurrent `git worktree add` calls contend on git's locks.
@@ -46,8 +34,8 @@ func (rt *Runtime) cwdFor(ctx context.Context, o Opts, key string) (string, erro
 	if fi, err := os.Stat(path); err == nil && fi.IsDir() {
 		// Reuse only a worktree of this branch: a directory left by a crash
 		// mid-add, or one whose metadata was pruned, is not one.
-		top, err1 := gitOut(path, "rev-parse", "--show-toplevel")
-		head, err2 := gitOut(path, "symbolic-ref", "--short", "HEAD")
+		top, err1 := gitStdout(path, "rev-parse", "--show-toplevel")
+		head, err2 := gitStdout(path, "symbolic-ref", "--short", "HEAD")
 		real, _ := filepath.EvalSymlinks(path)
 		if err1 != nil || err2 != nil || strings.TrimSpace(string(top)) != real || strings.TrimSpace(string(head)) != branch {
 			return "", rt.setStop(StopRuntimeError, fmt.Sprintf("%s: %s exists but is not a worktree on %s; remove it and relaunch", o.Label, path, branch))
@@ -55,7 +43,6 @@ func (rt *Runtime) cwdFor(ctx context.Context, o Opts, key string) (string, erro
 		return path, nil
 	}
 	var out []byte
-	var err error
 	if gitRun(rt.cfg.Repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch) == nil {
 		// The branch outlived its worktree directory: keep its commits.
 		gitRun(rt.cfg.Repo, "worktree", "prune")
@@ -68,6 +55,36 @@ func (rt *Runtime) cwdFor(ctx context.Context, o Opts, key string) (string, erro
 	}
 	rt.event("worktree", map[string]any{"label": o.Label, "path": path, "branch": branch})
 	return path, nil
+}
+
+type worktreeArgs struct {
+	PlanSha           string `json:"planSha"`
+	IntegrationBranch string `json:"integrationBranch"`
+}
+
+// isolationArgs checks, without touching git, what an isolated call needs;
+// a dry run checks it too.
+func (rt *Runtime) isolationArgs(o Opts) (worktreeArgs, error) {
+	var args worktreeArgs
+	if o.Isolation != "worktree" {
+		return args, rt.setStop(StopRuntimeError, fmt.Sprintf("%s: unknown isolation %q", o.Label, o.Isolation))
+	}
+	if len(rt.cfg.Args) > 0 {
+		if err := json.Unmarshal(rt.cfg.Args, &args); err != nil {
+			return args, rt.setStop(StopRuntimeError, fmt.Sprintf("%s: args: %v", o.Label, err))
+		}
+	}
+	if len(args.PlanSha) < 8 || args.IntegrationBranch == "" || rt.cfg.Repo == "" {
+		return args, rt.setStop(StopRuntimeError, fmt.Sprintf("%s: a worktree needs repo, args.planSha (8+ characters) and args.integrationBranch", o.Label))
+	}
+	return args, nil
+}
+
+// gitStdout is a git command's stdout alone, so warnings cannot pollute it.
+func gitStdout(dir string, args ...string) ([]byte, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	return cmd.Output()
 }
 
 func gitOut(dir string, args ...string) ([]byte, error) {

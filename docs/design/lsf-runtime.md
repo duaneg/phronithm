@@ -255,7 +255,7 @@ Classification reads the `result` event first, because the CLI can recover from 
 
 ### Supervision
 
-- **Signals.** The first SIGINT or SIGTERM sets the sticky stop `signal-SIGINT` or `signal-SIGTERM`. In-flight attempts finish and their results are journaled. Retries, backoff and gate waits are abandoned, and every later boundary returns the stop. A second signal cancels in-flight attempts.
+- **Signals.** The first SIGINT or SIGTERM sets the sticky stop `signal-SIGINT` or `signal-SIGTERM`. In-flight attempts finish and their results are journaled. Retries, backoff and gate waits are abandoned, and every later boundary returns the stop. A second signal cancels in-flight attempts. A journal replay is still served after a stop, since it costs nothing; the stop returns at the first call that would spawn.
 - **`stop_reason` precedence.** A stop the runtime recorded wins, even if the body swallowed it. Then a `StopError` from the body, then `cancelled` (the parent context), then `crashed` (a body error or panic), then `returned`.
 - **Orphans.** At launch, every process whose arguments carry `--session-id <id>` for an id in `children.json` is a call left by a killed launch. Its group gets SIGTERM, then SIGKILL after `killGrace`. If `ps` fails, `children.json` is kept for the next launch. A torn `children.json` is reported and treated as empty.
 - **Worktrees.**

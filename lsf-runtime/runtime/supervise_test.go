@@ -80,7 +80,11 @@ func startHelper(t *testing.T, cfg Config, scenario string) *exec.Cmd {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+	t.Cleanup(func() {
+		cmd.Process.Kill()
+		cmd.Wait()
+		killStubs(os.Getenv("STUB_STATE"))
+	})
 	return cmd
 }
 
@@ -191,8 +195,13 @@ func TestOrphansReapedByNextLaunch(t *testing.T) {
 	t.Setenv("STUB_SCRIPT", "hang")
 	cmd := startHelper(t, cfg, "three-hangs")
 	waitFor(t, 5*time.Second, "three calls", func() bool {
-		_, err := os.Stat(filepath.Join(stub, "pids.3"))
-		return err == nil && len(liveChildren(t, cfg)) == 3
+		for n := 1; n <= 3; n++ {
+			b, _ := os.ReadFile(filepath.Join(stub, "pids."+strconv.Itoa(n)))
+			if len(strings.Fields(string(b))) != 2 {
+				return false
+			}
+		}
+		return len(liveChildren(t, cfg)) == 3
 	})
 	cmd.Process.Signal(syscall.SIGKILL)
 	cmd.Wait()
@@ -300,21 +309,13 @@ func TestDryRunSpawnsNothing(t *testing.T) {
 	cfg.DryRun = true
 	cfg.Repo = gitRepo(t)
 	cfg.Args = json.RawMessage(`{"planSha":"0123456789ab","integrationBranch":"main"}`)
-	stepRan := false
 	s := launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
-		if _, err := rt.Step(ctx, "ledger:w1", []byte("x"), func(context.Context, bool) (json.RawMessage, error) {
-			stepRan = true
-			return nil, nil
-		}); err == nil {
-			t.Error("dry-run step did not stop")
-		}
 		o := vOpts
 		o.Isolation = "worktree"
-		_, err := rt.Agent(ctx, "x", o)
-		return nil, err
+		return rt.Agent(ctx, "x", o)
 	})
-	if s.StopReason != StopDryRun || stepRan || stubCount(t, stub) != 0 {
-		t.Fatalf("summary %+v, step ran %v, spawns %d", s, stepRan, stubCount(t, stub))
+	if s.StopReason != StopDryRun || stubCount(t, stub) != 0 {
+		t.Fatalf("summary %+v, spawns %d", s, stubCount(t, stub))
 	}
 	if entries, _ := os.ReadDir(filepath.Join(cfg.StateDir, "wt")); len(entries) != 0 {
 		t.Errorf("worktrees created: %v", entries)
@@ -322,14 +323,69 @@ func TestDryRunSpawnsNothing(t *testing.T) {
 	if b := git(t, cfg.Repo, "branch", "--list", "lsf/*"); b != "" {
 		t.Errorf("branches created: %s", b)
 	}
-	// A fresh dry run (the step stop is sticky) shows the call's argv.
+	if log := readFile(t, cfg, "log.txt"); !strings.Contains(log, "--strict-mcp-config") || countEvents(telemetry(t, cfg), "dry-run") != 1 {
+		t.Errorf("dry-run argv not logged:\n%s", log)
+	}
+
+	stepRan := false
 	cfg2, _ := testConfig(t)
 	cfg2.DryRun = true
-	launch(t, cfg2, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
-		return rt.Agent(ctx, "x", vOpts)
+	s = launch(t, cfg2, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		return rt.Step(ctx, "ledger:w1", []byte("x"), func(context.Context, bool) (json.RawMessage, error) {
+			stepRan = true
+			return nil, nil
+		})
 	})
-	if log := readFile(t, cfg2, "log.txt"); !strings.Contains(log, "--strict-mcp-config") || countEvents(telemetry(t, cfg2), "dry-run") != 1 {
-		t.Errorf("dry-run argv not logged:\n%s", log)
+	if s.StopReason != StopDryRun || stepRan {
+		t.Fatalf("summary %+v, step ran %v", s, stepRan)
+	}
+
+	// A dry run still reports an isolated call's missing args.
+	cfg3, _ := testConfig(t)
+	cfg3.DryRun = true
+	o := vOpts
+	o.Isolation = "worktree"
+	if s := launch(t, cfg3, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) { return rt.Agent(ctx, "x", o) }); s.StopReason != StopRuntimeError {
+		t.Errorf("summary %+v", s)
+	}
+}
+
+func TestSessionLimitPastWallClockStops(t *testing.T) {
+	cfg, stub := testConfig(t)
+	cfg.Caps = Caps{MaxWallClock: Duration(5 * time.Second)}
+	t.Setenv("STUB_SCRIPT", "session,ok")
+	t.Setenv("STUB_RESET_IN", "60")
+	start := time.Now()
+	_, err := call(t, cfg, vOpts)
+	if r, ok := IsStop(err); !ok || r != StopMaxWallClock || time.Since(start) > 3*time.Second || stubCount(t, stub) != 1 {
+		t.Fatalf("err %v after %v, spawns %d", err, time.Since(start), stubCount(t, stub))
+	}
+}
+
+func TestCapsUnderConcurrencyAreSticky(t *testing.T) {
+	cfg, stub := testConfig(t)
+	cfg.Caps = Caps{MaxCalls: 2}
+	t.Setenv("STUB_SCRIPT", "slow:0.3")
+	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		var thunks []func(context.Context) (json.RawMessage, error)
+		for i := range 4 {
+			o := vOpts
+			o.Label = "implement:c" + strconv.Itoa(i)
+			thunks = append(thunks, func(ctx context.Context) (json.RawMessage, error) { return rt.Agent(ctx, "x", o) })
+		}
+		_, err := rt.Parallel(ctx, thunks)
+		if r, ok := IsStop(err); !ok || r != StopMaxCalls {
+			t.Errorf("parallel err %v", err)
+		}
+		o := vOpts
+		o.Label = "implement:after"
+		if _, err := rt.Agent(ctx, "x", o); err == nil {
+			t.Error("the cap stop is not sticky")
+		}
+		return nil, nil
+	})
+	if n := stubCount(t, stub); n != 2 {
+		t.Fatalf("spawns %d, want 2", n)
 	}
 }
 
@@ -353,5 +409,20 @@ func TestBodyOutcomes(t *testing.T) {
 		return json.RawMessage(`{"status":"complete"}`), nil
 	}); s.StopReason != StopReturned {
 		t.Errorf("returned: %+v", s)
+	}
+}
+
+// killStubs kills every hang-mode stub and grandchild a test left, so a
+// failed test does not leave processes for 300 s.
+func killStubs(stub string) {
+	files, _ := filepath.Glob(filepath.Join(stub, "pids.*"))
+	for _, f := range files {
+		b, _ := os.ReadFile(f)
+		for _, p := range strings.Fields(string(b)) {
+			if pid, err := strconv.Atoi(p); err == nil {
+				syscall.Kill(-pid, syscall.SIGKILL)
+				syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
 	}
 }

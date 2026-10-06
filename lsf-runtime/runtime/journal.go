@@ -176,7 +176,7 @@ func (rt *Runtime) Step(ctx context.Context, label string, input []byte, fn func
 // compactJSON is a value's journal form: the live return and its replay are
 // byte-identical. Stream output is already compact.
 func compactJSON(v json.RawMessage) (json.RawMessage, error) {
-	if v == nil || string(bytes.TrimSpace(v)) == "null" { // nil and null are one value
+	if t := bytes.TrimSpace(v); len(t) == 0 || string(t) == "null" { // nil, empty and null are one value
 		return nil, nil
 	}
 	var b bytes.Buffer

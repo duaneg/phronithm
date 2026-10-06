@@ -10,7 +10,8 @@ import (
 )
 
 // Call runs one headless call (design §2.5), or replays it from the journal.
-// The only non-nil error is *StopError.
+// The only non-nil error is *StopError. A replay is served even after a stop:
+// it costs nothing, and the stop returns at the first call that would spawn.
 func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult, error) {
 	key := journalKey(o.Label)
 	hash := callHash(prompt, o)
@@ -24,6 +25,11 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 	roleName, role := rt.cfg.roleFor(o)
 	skill := rt.cfg.skillFor(o.Label)
 	sent := withSkill(skill, prompt)
+	if o.Isolation != "" {
+		if _, err := rt.isolationArgs(o); err != nil {
+			return CallResult{}, err
+		}
+	}
 	if rt.cfg.DryRun {
 		argv := buildArgv(o, role, "<session-id>")
 		rt.event("dry-run", map[string]any{"label": o.Label, "role": roleName, "argv": argv, "stdin": truncateRunes(sent, 200)})
