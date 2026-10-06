@@ -53,7 +53,9 @@ func ExtractBlock(markdown, tag string) (body, problemText string) {
 }
 
 // Plan is the decomposition plan reduced to what the orchestrator reads
-// (PlanSchema). Path and Sha are set by the caller.
+// (PlanSchema). Path and Sha are set by the caller. The parser's slices are
+// never nil; a caller building these types directly must do the same, or
+// the JSON holds null where JS has [].
 type Plan struct {
 	Units          []*Unit  `json:"units"`
 	ExecutionOrder []string `json:"executionOrder"`
@@ -82,7 +84,7 @@ type Gate struct {
 	Kind      string  `json:"kind,omitempty"` // as Unit.Type
 	Cleared   bool    `json:"cleared"`
 	Pin       *string `json:"pin,omitempty"`
-	ClearedBy string  `json:"clearedBy,omitempty"`
+	ClearedBy *string `json:"clearedBy,omitempty"` // the clearing decision's id, which may be ""
 }
 
 // Decision is one decision-log entry.
@@ -403,7 +405,7 @@ func ApplyClearances(p *Plan, decisions []Decision) []Problem {
 				problems = append(problems, problem(fmt.Sprintf("decision %s clears environment gate %s; environment gates are probed, not decided", d.ID, c), c))
 			default:
 				g.Cleared = true
-				g.ClearedBy = d.ID
+				g.ClearedBy = &d.ID
 			}
 		}
 	}

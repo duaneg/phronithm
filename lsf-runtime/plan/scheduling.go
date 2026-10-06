@@ -34,7 +34,8 @@ func orderIndex(p *Plan) map[string]int {
 	return order
 }
 
-// position is id's execution-order position, +Inf when absent.
+// position is id's execution-order position; an absent id sorts after
+// every present one.
 func position(order map[string]int, id string) int {
 	if i, ok := order[id]; ok {
 		return i
@@ -302,7 +303,7 @@ func BlockedUnits(p *Plan, done Completed) []Blocked {
 
 // MergeOrder is a wave's units in execution order, never a choice.
 func MergeOrder(p *Plan, ids []string) []string {
-	out := slices.Clone(ids)
+	out := append([]string{}, ids...)
 	sortByOrder(out, orderIndex(p), func(id string) string { return id })
 	return out
 }

@@ -263,3 +263,21 @@ func TestDivergenceD2(t *testing.T) {
 	}
 	eqStrings(t, "merge", MergeOrder(p, []string{"X", "A", "Y", "C"}), []string{"C", "A", "X", "Y"})
 }
+
+func TestSchedulingDuplicatesAndSelfDependency(t *testing.T) {
+	p := mkPlan([]*Unit{unit("A"), unit("B")}, "B", "A", "B")
+	eqStrings(t, "last position wins", MergeOrder(p, []string{"A", "B"}), []string{"A", "B"})
+	if got := MergeOrder(p, nil); got == nil {
+		t.Error("MergeOrder(nil) is nil, not empty")
+	}
+	self := mkPlan([]*Unit{unit("A", deps("A"))})
+	eqStrings(t, "self cycle", FindCycle(self), []string{"A", "A"})
+	if got := ValidatePlan(self); len(got) != 1 || got[0].Statement != "dependency cycle A -> A" {
+		t.Errorf("validate %v", got)
+	}
+	if got := BlockedUnits(self, nil); len(got) != 1 || !slices.Equal(got[0].WaitingOn, []string{"A"}) {
+		t.Errorf("blocked %+v", got)
+	}
+	// A ready unit absent from the execution order sorts last (D2).
+	eqStrings(t, "absent last", ids(ReadySet(mkPlan([]*Unit{unit("X"), unit("A")}, "A"), nil)), []string{"A", "X"})
+}

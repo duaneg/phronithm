@@ -181,18 +181,23 @@ func TestLoadGraphClearanceProblems(t *testing.T) {
 // compared against graph.js by tools/graphparity.
 func TestLoadGraphBreakdownPinned(t *testing.T) {
 	g := LoadGraph(fixture(t, "breakdown-d88f63b.md"), nil)
-	if len(g.Problems) != 0 || g.Plan == nil || len(g.Plan.Units) != 36 {
-		t.Fatalf("problems %v, units %d", g.Problems, len(g.Plan.Units))
+	if len(g.Problems) != 0 || g.Plan == nil {
+		t.Fatalf("problems %v", g.Problems)
+	}
+	if len(g.Plan.Units) != 36 {
+		t.Errorf("units %d", len(g.Plan.Units))
 	}
 }
 
 // D3: JS multiline ^/$ also break at a lone \r, U+2028 and U+2029; Go's
-// break only at \n, so a closing fence after one of them is not found.
+// break only at \n, so a closing fence next to one of them is not found.
+// JS finds a block in each case below; the test pins the Go result.
 func TestDivergenceD3LineTerminators(t *testing.T) {
 	for _, md := range []string{
 		"```yaml lsf-plan\nunits: []\r```\n",
-		"```yaml lsf-plan\nunits: [] ```\n",
-		"```yaml lsf-plan\nunits: []\n``` x\n",
+		"```yaml lsf-plan\nunits: []\u2028```\n",
+		"```yaml lsf-plan\nunits: []\u2029```\n",
+		"```yaml lsf-plan\nunits: []\n```\u2028x\n",
 	} {
 		if _, prob := ExtractBlock(md, PlanTag); prob != "no ```yaml lsf-plan block found" {
 			t.Errorf("%q: %q", md, prob)
@@ -245,5 +250,12 @@ func TestDivergenceD7Encoding(t *testing.T) {
 	ind, _ := MarshalJS(map[string][]int{"a": {1}}, "  ")
 	if string(ind) != "{\n  \"a\": [\n    1\n  ]\n}" {
 		t.Errorf("indent: %q", ind)
+	}
+}
+
+func TestClearedByKeepsEmptyID(t *testing.T) {
+	g := LoadGraph(fixture(t, "nolog.plan.md"), ptr("```yaml lsf-decisions\ndecisions:\n  - id: \"\"\n    date: d\n    question: q\n    decision: a\n    clears: [b/legal]\n```\n"))
+	if got := jsonOf(t, g.Plan.Units[1].Gates[0]); got != `{"name":"legal","kind":"organisational","cleared":true,"clearedBy":""}` {
+		t.Errorf("gate %s", got)
 	}
 }
