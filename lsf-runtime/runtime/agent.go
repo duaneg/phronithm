@@ -3,6 +3,7 @@ package lsfrt
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -13,6 +14,7 @@ import (
 func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult, error) {
 	key := journalKey(o.Label)
 	hash := callHash(prompt, o)
+	rt.noteLabel(key, hash, o.Label)
 	if res, ok := rt.replayCall(key, hash, o.Label); ok {
 		return res, nil
 	}
@@ -28,7 +30,7 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 		rt.Log(fmt.Sprintf("dry run: %s would run %s %q", o.Label, rt.cfg.ClaudeBin, argv))
 		return CallResult{}, rt.setStop(StopDryRun, o.Label)
 	}
-	cwd, err := rt.cwdFor(o, key)
+	cwd, err := rt.cwdFor(ctx, o, key)
 	if err != nil {
 		return CallResult{}, err
 	}
@@ -42,8 +44,11 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 		if err := rt.acquire(ctx); err != nil {
 			return res, err
 		}
-		if err := rt.admit(); err != nil {
+		if err := rt.admit(ctx); err != nil {
 			rt.release()
+			if errors.Is(err, errLimitPending) { // the limit moved while this call queued
+				continue
+			}
 			return res, err
 		}
 		sid := newUUID()
@@ -53,7 +58,7 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 			argv:       buildArgv(o, role, sid),
 			sessionID:  sid,
 			cwd:        cwd,
-			transcript: filepath.Join(rt.cfg.StateDir, "calls", fmt.Sprintf("%s.%s.a%d.jsonl", key, rt.launchID, res.Attempts)),
+			transcript: filepath.Join(rt.cfg.StateDir, "calls", fmt.Sprintf("%s.%s.a%d.%s.jsonl", key, rt.launchID, res.Attempts, sid[:8])),
 		})
 		rt.release()
 		res.Attempts++
@@ -62,7 +67,7 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 			res.Denials = r.Denials
 			rt.addCost(r.CostUSD)
 		}
-		if ctx.Err() != nil && a.cause != errGuard && a.cause != errKilled {
+		if a.cause != nil && !errors.Is(a.cause, errGuard) && !errors.Is(a.cause, errKilled) {
 			return res, &StopError{Reason: StopCancelled}
 		}
 		v := classify(a, o.Schema, skill, skill != "")
@@ -75,7 +80,7 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 			rt.recordCall(key, hash, o.Label, res)
 			return res, nil
 		case classStopped:
-			return res, rt.stopped()
+			return res, rt.stopErr()
 		case classTimeout, classPermanent, classSpawnError:
 			return res, nil
 		case classSkillMissing:
@@ -109,13 +114,14 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 			rt.Log(fmt.Sprintf("%s: transient failure persisted over %d attempt(s); null", o.Label, res.Attempts))
 			return res, nil
 		case classSessionLimit:
+			// A reset already past (a stale event) still waits the margin.
+			until := time.Now().Add(rt.cfg.SessionLimitFallback.D())
+			if !v.resetsAt.IsZero() {
+				until = maxTime(v.resetsAt, time.Now()).Add(rt.cfg.SessionLimitMargin.D())
+			}
+			rt.extendLimit(until, o.Label) // other calls learn of the limit even when this one gives up
 			if waits < rt.cfg.MaxSessionWaits {
 				waits++
-				until := time.Now().Add(rt.cfg.SessionLimitFallback.D())
-				if !v.resetsAt.IsZero() {
-					until = v.resetsAt.Add(rt.cfg.SessionLimitMargin.D())
-				}
-				rt.extendLimit(until, o.Label)
 				continue
 			}
 			rt.Log(fmt.Sprintf("%s: session limit persisted over %d wait(s); null", o.Label, waits))
@@ -151,7 +157,7 @@ func (rt *Runtime) sleep(ctx context.Context, d time.Duration) error {
 	case <-t.C:
 		return nil
 	case <-rt.stopCh:
-		return rt.stopped()
+		return rt.stopErr()
 	case <-ctx.Done():
 		return &StopError{Reason: StopCancelled}
 	}
@@ -196,7 +202,7 @@ func (rt *Runtime) acquire(ctx context.Context) error {
 	case rt.sem <- struct{}{}:
 		return nil
 	case <-rt.stopCh:
-		return rt.stopped()
+		return rt.stopErr()
 	case <-ctx.Done():
 		return &StopError{Reason: StopCancelled}
 	}
@@ -204,14 +210,27 @@ func (rt *Runtime) acquire(ctx context.Context) error {
 
 func (rt *Runtime) release() { <-rt.sem }
 
+// errLimitPending sends a call that queued for a slot back to the gate.
+var errLimitPending = errors.New("session limit pending")
+
 // admit is the per-spawn check, in one critical section: the sticky stop,
-// then the caps; a spawn it admits is counted.
-func (rt *Runtime) admit() error {
+// the parent context, the session-limit gate (a call can pass it, then queue
+// for a slot while another call meets the limit), then the caps; a spawn it
+// admits is counted.
+func (rt *Runtime) admit(ctx context.Context) error {
 	rt.mu.Lock()
 	if rt.stop != nil {
 		s := rt.stop
 		rt.mu.Unlock()
 		return s
+	}
+	if ctx.Err() != nil {
+		rt.mu.Unlock()
+		return &StopError{Reason: StopCancelled}
+	}
+	if time.Now().Before(rt.limitUntil) {
+		rt.mu.Unlock()
+		return errLimitPending
 	}
 	c := rt.cfg.Caps
 	var reason StopReason
@@ -266,6 +285,13 @@ func (rt *Runtime) recordAttempt(o Opts, role, sid string, n int, a *attempt, v 
 		f["stderr"] = a.stderr
 	}
 	rt.event("call", f)
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 
 func firstOr(xs []string, def string) string {

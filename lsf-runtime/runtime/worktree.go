@@ -1,6 +1,7 @@
 package lsfrt
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,7 +14,7 @@ import (
 // "worktree" the call's own worktree on lsf/<plan8>/<key>, created from the
 // integration branch and reused on resume. A failure is a runtime-error stop,
 // never a silent fallback to the repo.
-func (rt *Runtime) cwdFor(o Opts, key string) (string, error) {
+func (rt *Runtime) cwdFor(ctx context.Context, o Opts, key string) (string, error) {
 	switch o.Isolation {
 	case "":
 		return rt.cfg.Repo, nil
@@ -37,11 +38,22 @@ func (rt *Runtime) cwdFor(o Opts, key string) (string, error) {
 	// Concurrent `git worktree add` calls contend on git's locks.
 	rt.wtMu.Lock()
 	defer rt.wtMu.Unlock()
+	if err := rt.boundary(ctx); err != nil { // a stop while queued here
+		return "", err
+	}
 	path := filepath.Join(rt.cfg.StateDir, "wt", key)
+	branch := "lsf/" + args.PlanSha[:8] + "/" + refSafe(key)
 	if fi, err := os.Stat(path); err == nil && fi.IsDir() {
+		// Reuse only a worktree of this branch: a directory left by a crash
+		// mid-add, or one whose metadata was pruned, is not one.
+		top, err1 := gitOut(path, "rev-parse", "--show-toplevel")
+		head, err2 := gitOut(path, "symbolic-ref", "--short", "HEAD")
+		real, _ := filepath.EvalSymlinks(path)
+		if err1 != nil || err2 != nil || strings.TrimSpace(string(top)) != real || strings.TrimSpace(string(head)) != branch {
+			return "", rt.setStop(StopRuntimeError, fmt.Sprintf("%s: %s exists but is not a worktree on %s; remove it and relaunch", o.Label, path, branch))
+		}
 		return path, nil
 	}
-	branch := "lsf/" + args.PlanSha[:8] + "/" + key
 	var out []byte
 	var err error
 	if gitRun(rt.cfg.Repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch) == nil {
@@ -67,4 +79,14 @@ func gitOut(dir string, args ...string) ([]byte, error) {
 func gitRun(dir string, args ...string) error {
 	_, err := gitOut(dir, args...)
 	return err
+}
+
+// refSafe makes a journal key a valid git ref component: no "..", no leading
+// "." or "-", no trailing ".lock" (the key's hash suffix keeps it distinct).
+func refSafe(key string) string {
+	for strings.Contains(key, "..") {
+		key = strings.ReplaceAll(key, "..", "_")
+	}
+	key = strings.TrimLeft(key, ".-")
+	return strings.TrimSuffix(key, ".lock")
 }

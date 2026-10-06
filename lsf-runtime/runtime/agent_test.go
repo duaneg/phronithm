@@ -253,3 +253,31 @@ func TestParallelBranchFailures(t *testing.T) {
 		return nil, nil
 	})
 }
+
+func TestQueuedCallRechecksLimit(t *testing.T) {
+	cfg, stub := testConfig(t)
+	cfg.Concurrency = 1
+	cfg.SessionLimitMargin = Duration(time.Millisecond)
+	t.Setenv("STUB_SCRIPT", "session,ok,ok")
+	t.Setenv("STUB_RESET_IN", "1")
+	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		var thunks []func(context.Context) (json.RawMessage, error)
+		for i := range 2 {
+			o := vOpts
+			o.Label = "implement:q" + strconv.Itoa(i)
+			thunks = append(thunks, func(ctx context.Context) (json.RawMessage, error) { return rt.Agent(ctx, "x", o) })
+		}
+		_, err := rt.Parallel(ctx, thunks)
+		return nil, err
+	})
+	// The call that queued behind the limited one did not spawn into the limit.
+	if n := stubCount(t, stub); n != 3 {
+		t.Fatalf("spawns %d, want 3", n)
+	}
+	reset := stubInt(t, stub, "reset.1")
+	for _, n := range []string{"started.2", "started.3"} {
+		if s := stubInt(t, stub, n); s < reset {
+			t.Errorf("%s = %d, before the reset %d", n, s, reset)
+		}
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"time"
 )
@@ -176,6 +177,15 @@ func (c *Config) prepare() error {
 	}
 	if c.Backoff != nil && len(c.Backoff) == 0 {
 		errs = append(errs, errors.New("backoff: omit it for the default; an empty list would retry transient errors never"))
+	}
+	for _, p := range []*string{&c.StateDir, &c.Repo} {
+		if *p != "" {
+			abs, err := filepath.Abs(*p)
+			if err != nil {
+				errs = append(errs, err)
+			}
+			*p = abs
+		}
 	}
 	if err := errors.Join(errs...); err != nil {
 		return err

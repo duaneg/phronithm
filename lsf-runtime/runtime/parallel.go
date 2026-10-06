@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime/debug"
 	"sync"
 )
 
@@ -20,7 +21,7 @@ func (rt *Runtime) Parallel(ctx context.Context, thunks []func(context.Context) 
 			defer func() {
 				if p := recover(); p != nil {
 					out[i] = nil
-					rt.Log(fmt.Sprintf("parallel branch %d panicked: %v", i, p))
+					rt.Log(fmt.Sprintf("parallel branch %d panicked: %v\n%s", i, p, debug.Stack()))
 					rt.event("branch-panic", map[string]any{"branch": i, "panic": fmt.Sprint(p)})
 				}
 			}()

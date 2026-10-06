@@ -41,6 +41,9 @@ type Runtime struct {
 	limitUntil time.Time
 
 	wtMu sync.Mutex // serialises git worktree operations
+
+	seenMu sync.Mutex
+	seen   map[string]string // journal key → input hash, this launch
 }
 
 // Run is a launch. It takes the state-dir lock, reaps orphans, installs
@@ -68,6 +71,7 @@ func Run(ctx context.Context, cfg Config, body func(ctx context.Context, rt *Run
 		cfg:      cfg,
 		started:  time.Now(),
 		children: map[string]int{},
+		seen:     map[string]string{},
 		sem:      make(chan struct{}, cfg.Concurrency),
 		stopCh:   make(chan struct{}),
 		killCh:   make(chan struct{}),
@@ -174,6 +178,14 @@ func (rt *Runtime) setStopLocked(reason StopReason, detail string) (s *StopError
 func (rt *Runtime) stopEvent(s *StopError) {
 	rt.event("stop", map[string]any{"reason": s.Reason, "detail": s.Detail})
 	rt.Log("stop: " + s.Error())
+}
+
+// stopErr is the sticky stop as an error: nil, not a typed nil, when none.
+func (rt *Runtime) stopErr() error {
+	if s := rt.stopped(); s != nil {
+		return s
+	}
+	return nil
 }
 
 // stopped returns the sticky stop, or nil.

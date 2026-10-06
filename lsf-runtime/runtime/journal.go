@@ -32,7 +32,11 @@ var unsafeChars = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 // slug alike ("a:b", "a_b") apart.
 func journalKey(label string) string {
 	sum := sha256.Sum256([]byte(label))
-	return unsafeChars.ReplaceAllString(label, "_") + "-" + hex.EncodeToString(sum[:4])
+	slug := unsafeChars.ReplaceAllString(label, "_")
+	if len(slug) > 100 { // file names stay under NAME_MAX; the hash keeps keys distinct
+		slug = slug[:100]
+	}
+	return slug + "-" + hex.EncodeToString(sum[:4])
 }
 
 // callHash identifies a call's inputs: the prompt before any skill prefix,
@@ -48,6 +52,20 @@ func callHash(prompt string, o Opts) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// noteLabel warns when a label is reused with other inputs in one launch.
+// The journal holds one record per label, so a reused label overwrites its
+// record and a resume re-runs both calls: labels must be unique per call.
+func (rt *Runtime) noteLabel(key, hash, label string) {
+	rt.seenMu.Lock()
+	prev, ok := rt.seen[key]
+	rt.seen[key] = hash
+	rt.seenMu.Unlock()
+	if ok && prev != hash {
+		rt.event("label-reused", map[string]any{"label": label})
+		rt.Log(label + ": label reused with different inputs; the journal keeps only the latest")
+	}
+}
+
 func (rt *Runtime) recordPath(key string) string {
 	return filepath.Join(rt.cfg.StateDir, "journal", key+".json")
 }
@@ -60,6 +78,9 @@ func (rt *Runtime) readRecord(key string) (*record, error) {
 	var r record
 	if err := json.Unmarshal(b, &r); err != nil {
 		return nil, err
+	}
+	if string(r.Ret) == "null" {
+		r.Ret = nil
 	}
 	return &r, nil
 }
@@ -111,6 +132,7 @@ func (rt *Runtime) Step(ctx context.Context, label string, input []byte, fn func
 	key := journalKey(label)
 	sum := sha256.Sum256(input)
 	hash := hex.EncodeToString(sum[:])
+	rt.noteLabel(key, hash, label)
 	if r, err := rt.readRecord(key); err == nil && r.Kind == "step" && r.Hash == hash {
 		rt.event("step-replayed", map[string]any{"label": label})
 		return r.Ret, nil
@@ -154,7 +176,7 @@ func (rt *Runtime) Step(ctx context.Context, label string, input []byte, fn func
 // compactJSON is a value's journal form: the live return and its replay are
 // byte-identical. Stream output is already compact.
 func compactJSON(v json.RawMessage) (json.RawMessage, error) {
-	if v == nil {
+	if v == nil || string(bytes.TrimSpace(v)) == "null" { // nil and null are one value
 		return nil, nil
 	}
 	var b bytes.Buffer

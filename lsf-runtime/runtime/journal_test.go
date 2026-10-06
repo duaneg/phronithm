@@ -236,3 +236,42 @@ func TestWorktreeNeedsArgs(t *testing.T) {
 		t.Fatal("spawned, or summary not runtime-error")
 	}
 }
+
+func TestRefSafe(t *testing.T) {
+	for in, want := range map[string]string{"a..b-1": "a_b-1", ".x-1": "x-1", "-y.lock": "y", "plain-ab": "plain-ab"} {
+		if got := refSafe(in); got != want {
+			t.Errorf("refSafe(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if k := journalKey(strings.Repeat("x", 300)); len(k) > 120 {
+		t.Errorf("key length %d", len(k))
+	}
+}
+
+func TestLabelReuseWarns(t *testing.T) {
+	cfg, _ := testConfig(t)
+	t.Setenv("STUB_SCRIPT", "ok")
+	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		rt.Agent(ctx, "one", vOpts)
+		rt.Agent(ctx, "two", vOpts)
+		return nil, nil
+	})
+	if countEvents(telemetry(t, cfg), "label-reused") != 1 {
+		t.Error("want one label-reused event")
+	}
+}
+
+func TestStaleWorktreeDirectoryStops(t *testing.T) {
+	cfg, stub := testConfig(t)
+	cfg.Repo = gitRepo(t)
+	cfg.Args = json.RawMessage(`{"planSha":"0123456789ab","integrationBranch":"main"}`)
+	o := vOpts
+	o.Isolation = "worktree"
+	if err := os.MkdirAll(filepath.Join(cfg.StateDir, "wt", journalKey(o.Label)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := call(t, cfg, o)
+	if r, ok := IsStop(err); !ok || r != StopRuntimeError || stubCount(t, stub) != 0 {
+		t.Fatalf("err %v, spawns %d", err, stubCount(t, stub))
+	}
+}
