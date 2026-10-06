@@ -1,8 +1,13 @@
-// Package orchestrator is the wave loop and its prompt builders, ported
-// from workflows/lsf/implement.js, which stays the behavioural reference
-// until script-retirement. Run is the JS run(runtime); Body adapts it to
-// lsfrt.Run. tools/promptparity runs the same scenarios through both and
-// compares every prompt, option, log and return byte for byte.
+// Package orchestrator is the wave loop, its prompt builders and its code
+// stages, ported from workflows/lsf/implement.js, which stays the
+// behavioural reference until script-retirement. Run is the JS
+// run(runtime); Body adapts it to lsfrt.Run. Agent stages go through
+// Runtime.Call, which returns each call's CallResult (flags, denials) with
+// its value. Load, the decision log, ledger appends and completion reports
+// are code steps (Runtime.Step, stages.go, git.go; D18). tools/promptparity
+// runs the same scenarios through both and compares every agent prompt,
+// option, log and return byte for byte; the JS calls for the code stages
+// are answered from the Go steps' values and left out.
 //
 // # Divergences from the JavaScript
 //
@@ -66,4 +71,39 @@
 //     is the stage's agent-null (a no-commit signal on the report's path),
 //     and the unit aborts. JS leaves such a unit out of the merge with no
 //     signal, so it is never completed and runs again every wave.
+//
+// D18 and D19 are the code stages (unit code-stage-interface).
+//
+//   - D18. Load, the decision log, ledger appends and completion reports
+//     are journaled code steps, not agent calls. Their values keep the
+//     agent-return shape; planBlock and decisionsBlock hold the whole
+//     documents, from which LoadGraph extracts the blocks. A seed naming
+//     one is logged ("<label>: args.seed ignored; code stage") and not
+//     used. Load is journaled, so a resume replays the texts and the
+//     architecture SHA it saw; HEAD's branch and the pause ref are re-read
+//     live after the load and ledger steps, replayed or not. The decision
+//     log drops a decision already present with identical content, and when
+//     none remains returns the last commit touching the log. Each commit
+//     carries Lsf-Step: <label> and Lsf-Content: sha256:<digest of the
+//     bytes written> trailers; a stage commit whose content no longer
+//     matches its digest is not intact. An interrupted rerun adopts its own
+//     intact commit instead of committing again. Returned SHAs are full.
+//     A state dir journaled before this unit holds call records for these
+//     labels, which Step treats as stale and reruns: such a state dir is
+//     not resumable. A relaunch with changed input after a kill between a
+//     ledger commit and its record is not interrupted, so it appends its
+//     rows after the committed ones; the repeat is visible in the ledger.
+//   - D19. A code stage's failure is an agent-null-kind stop whose
+//     statement is "<stage> failed: <reason>", its referent the path, else
+//     the unit, else the stage. The reasons: a git error; HEAD off the
+//     integration branch; the path holding changes the stage did not make;
+//     a broken existing decision block; a rejected commit (the file is
+//     restored and unstaged); an earlier stage commit that is not intact
+//     (the guard: repair it with a new commit without an Lsf-Content
+//     trailer); a commit that fails verification (it stays, named). A
+//     project whose hooks rewrite these files (formatters, whitespace
+//     fixers) or stage other paths gets the verification stop, and then the
+//     guard's, on every launch until it exempts the paths: the bytes must
+//     be exact. JS reports these only as a null or an empty SHA, without
+//     the reason.
 package orchestrator
