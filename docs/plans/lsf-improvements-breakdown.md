@@ -2,7 +2,7 @@
 
 ## Summary
 
-A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 36 units, eight complete; critical path 13 units through the orchestrator port, the S2 build, distribution and the serialised orchestrator stream. Base commit `b3dac6a`.
+A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 36 units, nine complete; critical path 12 units through the orchestrator port, the S2 build, distribution and the serialised orchestrator stream. Base commit `b3dac6a`.
 
 The postmortem's problems are taken as accurate for archipeligo. The proposals in [lsf-improvements](../design/lsf-improvements.md) are candidate options, not designs: every decision unit states its problem without a solution, checks whether the problem holds outside archipeligo, and weighs the proposal against alternatives that include doing nothing.
 
@@ -32,18 +32,20 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 
 ### runtime-core — complete at `3b85e99`; entry at `b537a01`; report `docs/plans/runtime-core-completion.md`
 
+### orchestrator-port-plan — complete at `7d1c664`; entry at `d88f63b`; report `docs/plans/orchestrator-port-plan-completion.md`
+
 ### plan-preflight-check
 - **Type**: feature
-- **Risk**: low — the checks exist in the ported plan model
+- **Risk**: low — `plan.LoadGraph` and `plan.ValidatePlan` already catch the overlap, cycle and `clears` cases; the block-against-entries comparison is new code with no reference implementation, specified by `phronithm:breakdown`'s quality check
 - **Clarity**: specified
 - **Iteration**: write-once
 - **Effort**: medium
 - **Scope**: `lsf-runtime/validate`, `skills/breakdown/SKILL.md::quality-check`, `skills/lsf-drive/SKILL.md::startup`
 - **Publishes**: a plan-validation command runnable outside a workflow
-- **Depends on**: orchestrator-port-plan (logical, the ported parser and plan checks)
+- **Depends on**: orchestrator-port-plan (logical, `plan.LoadGraph` and `plan.ValidatePlan`)
 - **External gates**: `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`)
-- **Done condition**: A command runnable outside a workflow exits non-zero, printing the load stage's problems, on fixtures for an unserialised overlap, a cycle, a bad `clears` entry and a block that disagrees with its entries, and exits zero on this plan. `phronithm:breakdown` and `phronithm:lsf-drive` name it where a plan is committed and where one is launched. The tests pass.
-- **Description**: Postmortem §D "Plan checks only at load": two plans fresh from breakdown stopped at load. The check is independent of the substrate decision, since both a script and a driver need it before launch.
+- **Done condition**: A command runnable outside a workflow exits non-zero, printing the load stage's problems, on fixtures for an unserialised overlap, a cycle, a bad `clears` entry and a block that disagrees with its entries, and exits zero on this plan. The agreement check covers what the quality check names: every unit, its type, its Depends-on units, its Scope paths, its gates with kind and pin, and the execution order; a completed unit's one-line stub is checked against the block's `complete: true` only. `phronithm:breakdown` and `phronithm:lsf-drive` name it where a plan is committed and where one is launched. The tests pass.
+- **Description**: Postmortem §D "Plan checks only at load": two plans fresh from breakdown stopped at load. The check is independent of the substrate decision, since both a script and a driver need it before launch. Neither `graph.js` nor its port compares the block with the entries; that check is this unit's. `CLAUDE.md` is outside its Scope: `orchestrator-port-loop`, which may run beside it, owns the `lsf-runtime` entry, and `programme-close` lists the command. **Flag:** three surfaces written; two are a few lines of skill text, so the excess is not context.
 
 ### significant-precision-sample
 - **Type**: design
@@ -136,30 +138,17 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Done condition**: The Permissions section is committed. It decides each stage role's permission configuration, comparing at least a deny list with Bash granted, prompts rewritten to single commands, `--permission-mode auto`, and running each call inside the `ic` isolation container with broad permissions, as the maths exemplar does. Each option is run on the spike fixture: whether an implement stage completes, and whether a probe agent told to edit `.claude/settings.json` and delete a branch by shell is stopped, recorded per option. It states what a reviewer role may write. Each option is stated as runtime roles; an option the role shape cannot express, such as the container, names the runtime change it needs and the unit that carries it. The requester's verdict is recorded.
 - **Description**: Spike condition 3; P-C5, P-C6. The spike's deny list held on agent restraint, not enforcement (results, check 9). The exemplar's broad permissions are safe because the container, not per-call rules, is the boundary.
 
-### orchestrator-port-plan
-- **Type**: foundation
-- **Risk**: medium — a parser and stop rule ported by hand; the JavaScript tests are the oracle
-- **Clarity**: specified
-- **Iteration**: write-once
-- **Effort**: large
-- **Scope**: `lsf-runtime/plan`, `lsf-runtime/tools`
-- **Publishes**: the plan graph, schema and scheduling rules in Go
-- **Depends on**: runtime-language-design (design, the language and layout)
-- **External gates**: `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`)
-- **Done condition**: `schema.js`, `graph.js` and `scheduling.js` are ported to `lsf-runtime/plan`, with every test in their three test files ported and passing. The ported parser and `graph.js` read this plan's block and the fixture blocks of `graph.test.js` to the same graph and the same problems, checked by a script that runs both.
-- **Description**: The plan model of the orchestrator: about 1,050 lines and 640 lines of tests in JavaScript. **Flag:** steps exceed the bound; the JavaScript and its tests are the behavioural reference, so the excess is not context.
-
 ### orchestrator-port-loop
 - **Type**: foundation
 - **Risk**: high — the wave loop and its prompts; a divergence changes every stage
 - **Clarity**: specified
 - **Iteration**: write-once
 - **Effort**: large
-- **Scope**: `lsf-runtime/orchestrator`, `lsf-runtime/tools`
+- **Scope**: `lsf-runtime/orchestrator`, `lsf-runtime/tools`, `CLAUDE.md::lsf-runtime`
 - **Publishes**: the orchestrator `run(runtime)` in Go
 - **Depends on**: orchestrator-port-plan (logical, the plan model); runtime-core (logical, `Run`, `rt.Call` and worktree isolation)
 - **External gates**: `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`); `claude-code-headless` (environment, Claude Code 2.1.289)
-- **Done condition**: `implement.js` is ported to `lsf-runtime/orchestrator`, with every test in `implement.test.js` ported and passing. A script shows each prompt builder renders byte-identical text in both languages for the same inputs. The spike fixture's end-to-end path (run 2) completes on the ported orchestrator and the runtime. Every call label is unique within a launch, and a multi-wave test logs no `label-reused`.
+- **Done condition**: `implement.js` is ported to `lsf-runtime/orchestrator`, with every test in `implement.test.js` ported and passing. A script shows each prompt builder renders byte-identical text in both languages for the same inputs. The spike fixture's end-to-end path (run 2) completes on the ported orchestrator and the runtime. Every call label is unique within a launch, and a multi-wave test logs no `label-reused`. A stage result that fails to decode into its typed struct, including a wrong-typed field JavaScript would coerce, is that stage's `agent-null`, not a run error; a test shows it, and the divergence is recorded with the plan package's D1–D8.
 - **Description**: About 1,300 lines and 1,500 lines of tests in JavaScript. The JavaScript stays the Workflow script's source, unchanged, until `script-retirement`. The cleanup prompt, ported unchanged, names the Workflow tool's `worktree-wf_*` branches, so it removes none of the runtime's `lsf/<plan8>/<key>` worktrees until `code-stage-interface`. **Flag:** steps exceed the bound; the JavaScript and its tests are the behavioural reference, so the excess is not context.
 
 ### code-stage-interface
@@ -185,8 +174,8 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: driver-event signal kinds
 - **Depends on**: code-stage-interface (logical, serialises the runtime and orchestrator files); runtime-core (logical, `CallResult` and telemetry)
 - **External gates**: `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`)
-- **Done condition**: A corrected SHA, a permission denial, uncommitted changes at a stage's return, a gate the agent omitted, a skill not loaded, and a guard kill after a valid result (`guard-killed-after-result`, requester decision 2026-10-06) each reach the ledger as a signal, and the decided ones stop the run. The runtime detects uncommitted changes at a call's return, which `runtime-core` does not. Tests reproduce postmortem §C's permission faults (a denied commit reported with HEAD as its SHA; a denied branch delete) and run #2's transient null, and show none yields its recorded outcome. A `gate-not-run` stop is not retried (requester decision, 2026-10-05). The tests pass.
-- **Description**: Replaces `stage-failure-handling`. In the spike these events reached telemetry only.
+- **Done condition**: A corrected SHA, a permission denial, uncommitted changes at a stage's return, a gate the agent omitted, a skill not loaded, a guard kill after a valid result (`guard-killed-after-result`, requester decision 2026-10-06), and a stage result carrying an enum value outside its schema each reach the ledger as a signal, and the decided ones stop the run. The runtime detects uncommitted changes at a call's return, which `runtime-core` does not. Tests reproduce postmortem §C's permission faults (a denied commit reported with HEAD as its SHA; a denied branch delete) and run #2's transient null, and show none yields its recorded outcome. A `gate-not-run` stop is not retried (requester decision, 2026-10-05). A test shows an out-of-schema merge status is not recorded as `claimed-disjoint-conflict` and an out-of-schema finding severity is not dropped. The tests pass.
+- **Description**: Replaces `stage-failure-handling`. In the spike these events reached telemetry only. The ported stop rule fails open on a schema-violating enum, faithfully to the JavaScript (orchestrator-port-plan report).
 
 ### declared-gates
 - **Type**: feature
@@ -224,7 +213,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: the launcher the skills invoke; the release build
 - **Depends on**: runtime-cli-drive (logical, the CLI the launcher runs; serialises `skills/lsf-drive/SKILL.md::launch`); runtime-language-design (design, the routes and targets)
 - **External gates**: `github-actions` (environment); `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`); `requester-verdict` (organisational)
-- **Done condition**: The Distribution section is committed, choosing D1 or D4, with the requester's verdict recorded. CI builds static binaries for linux and darwin on amd64 and arm64 with `CGO_ENABLED=0`, and runs the `lsf-runtime` tests on Linux and macOS, orphan reaping included. A launcher at `${CLAUDE_PLUGIN_ROOT}/lsf-runtime/` runs the platform's binary. It prefers a locally built binary or one named by an environment variable, so `--plugin-dir` development and `shakedown-fixture` run the working tree. Under D1 it refuses a binary whose sha256 does not match its pin. `phronithm:lsf-drive` invokes the runtime through the launcher; there is no top-level `bin/`. A plugin installed from a local marketplace runs the runtime on this host through the launcher. The tests pass.
+- **Done condition**: The Distribution section is committed, choosing D1 or D4, with the requester's verdict recorded. CI builds static binaries for linux and darwin on amd64 and arm64 with `CGO_ENABLED=0`, and runs the `lsf-runtime` tests on Linux and macOS, orphan reaping included. A launcher at `${CLAUDE_PLUGIN_ROOT}/lsf-runtime/` runs the platform's binary, and the plan-validation command through it. It prefers a locally built binary or one named by an environment variable, so `--plugin-dir` development and `shakedown-fixture` run the working tree. Under D1 it refuses a binary whose sha256 does not match its pin. `phronithm:lsf-drive` invokes the runtime through the launcher; there is no top-level `bin/`. A plugin installed from a local marketplace runs the runtime on this host through the launcher. The tests pass.
 - **Description**: `lsf-runtime.md` Language, Open for the re-plan: no unit owned the route, the CI or the release, though the spike's estimate counted packaging. Windows outside WSL is out of scope (requester verdict, 2026-10-06; R16).
 
 ### script-retirement
@@ -233,11 +222,11 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Clarity**: specified
 - **Iteration**: write-once
 - **Effort**: small
-- **Scope**: `workflows/`, `docs/design/lsf-workflow.md::constraints`, `CLAUDE.md`
+- **Scope**: `workflows/`, `lsf-runtime/tools`, `docs/design/lsf-workflow.md::constraints`, `CLAUDE.md`
 - **Publishes**: none
 - **Depends on**: runtime-cli-drive (testing, the replacement path runs through `phronithm:lsf-drive`); runtime-distribution (logical, plugin users get the runtime before the script is deleted)
 - **External gates**: none
-- **Done condition**: `workflows/` is deleted: the generated script, the JavaScript orchestrator and its tests, `build.js` and the spike. `lsf-workflow.md`'s Constraints section describes the runtime, not the Workflow tool. `CLAUDE.md`'s Structure section names `lsf-runtime/` and no longer `workflows/`. The `lsf-runtime` tests pass.
+- **Done condition**: `workflows/` is deleted: the generated script, the JavaScript orchestrator and its tests, `build.js` and the spike. The JavaScript parity tools under `lsf-runtime/tools` are deleted with it, and `go test` has no `node` dependency; the pinned plan fixtures and `plan/doc.go`'s divergence register stay. `lsf-workflow.md`'s Constraints section describes the runtime, not the Workflow tool. `CLAUDE.md`'s Structure section names `lsf-runtime/` and no longer `workflows/`. The `lsf-runtime` tests pass.
 - **Description**: Ends `lsf-substrate.md`'s interim policy: the Workflow script is the supported Phase 3 path until this unit.
 
 ### empirical-script-support
@@ -587,9 +576,9 @@ units:
         pin: "2.1.289"
   - id: orchestrator-port-plan
     type: foundation
-    complete: false
+    complete: true
     dependencies: [runtime-language-design]
-    scope: [lsf-runtime/plan, lsf-runtime/tools]
+    scope: [lsf-runtime/plan, lsf-runtime/tools, CLAUDE.md]
     publishes: [plan graph, schema and scheduling rules]
     gates:
       - name: lsf-toolchain
@@ -599,7 +588,7 @@ units:
     type: foundation
     complete: false
     dependencies: [orchestrator-port-plan, runtime-core]
-    scope: [lsf-runtime/orchestrator, lsf-runtime/tools]
+    scope: [lsf-runtime/orchestrator, lsf-runtime/tools, CLAUDE.md::lsf-runtime]
     publishes: [orchestrator run(runtime)]
     gates:
       - name: lsf-toolchain
@@ -669,7 +658,7 @@ units:
     type: refactor
     complete: false
     dependencies: [runtime-cli-drive, runtime-distribution]
-    scope: [workflows, docs/design/lsf-workflow.md::constraints, CLAUDE.md]
+    scope: [workflows, lsf-runtime/tools, docs/design/lsf-workflow.md::constraints, CLAUDE.md]
     publishes: []
     gates: []
   - id: empirical-script-support
@@ -802,7 +791,7 @@ graph TD
   SPD[s2-permissions-design]
   RLD[runtime-language-design: complete]
   RC[runtime-core: complete]
-  OPP[orchestrator-port-plan]
+  OPP[orchestrator-port-plan: complete]
   OPL[orchestrator-port-loop]
   CSI[code-stage-interface]
   RS[runtime-signals]
@@ -951,9 +940,9 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 
 ## Critical Path
 
-`orchestrator-port-plan` → `orchestrator-port-loop` → `code-stage-interface` → `runtime-signals` → `declared-gates` → `runtime-cli-drive` → `runtime-distribution` → `script-retirement` → `empirical-script-support` → `findings-consumer-impl` → `long-running-impl` → `shakedown-fixture` → `programme-close`.
+`orchestrator-port-loop` → `code-stage-interface` → `runtime-signals` → `declared-gates` → `runtime-cli-drive` → `runtime-distribution` → `script-retirement` → `empirical-script-support` → `findings-consumer-impl` → `long-running-impl` → `shakedown-fixture` → `programme-close`.
 
-13 units remaining: four large, seven medium, two small. The S2 build's and the port's sizes are conjectured estimates, and the runtime alone exceeded the S2 estimate (R1).
+12 units remaining: three large, seven medium, two small. The S2 build's and the port's sizes are conjectured estimates, and the runtime alone exceeded the S2 estimate (R1).
 
 ## Meta-Tasks
 
@@ -1015,6 +1004,20 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 ## Plan Maintenance
 
 On each unit completion, run the re-plan step before starting its dependants.
+
+### 2026-10-06 — orchestrator-port-plan complete
+Report: docs/plans/orchestrator-port-plan-completion.md @ 7d1c664.
+scope-reassignment orchestrator-port-plan — block records the write to `CLAUDE.md`
+scope-reassignment orchestrator-port-loop — adds `CLAUDE.md::lsf-runtime`, the entry both port units update; plan-preflight-check, beside it, leaves `CLAUDE.md` to `programme-close`
+done-condition orchestrator-port-loop — a stage result that fails to decode is the stage's `agent-null`, a recorded divergence
+done-condition plan-preflight-check — the block-against-entries check is new code: neither `graph.js` nor `plan` has it, contrary to the report; fields compared stated; risk restated; three-surface flag
+done-condition runtime-signals — an out-of-schema enum in a stage result is a signal; the ported stop rule fails open on it
+done-condition runtime-distribution — the launcher runs the plan-validation command
+scope-reassignment script-retirement — adds `lsf-runtime/tools`: the parity tools and their `node` dependency go with `workflows/`
+check orchestrator-port-loop — size budget re-checked on five mid-implementation decisions and about 5,800 lines finished with context comfortable; within budget under its flag. Prompt JSON through `plan.MarshalJS`, panics as `crashed`, single-goroutine aggregation, `ConfigFrom`, the load sequence and `WavePlan`'s gated narration are implementation guidance; no change
+check runtime-signals — size budget re-checked with the enum event added; one open decision, two surfaces, within budget
+check findings-consumer-impl — the digest's statement-text matching is a cross-site contract a test pins; no change
+check R1 — the port's plan model finished with context comfortable; unchanged
 
 ### 2026-10-06 — decisions guard-kill, headless-pin, claude-binary
 done-condition runtime-signals — `guard-killed-after-result` confirmed: the value is kept and flagged
