@@ -293,22 +293,21 @@ func (l *launch) applyDirectEdits(ctx context.Context, at planRef, edits []direc
 		label = "direct-edits:w" + itoa(*wave)
 	}
 	t := l.ctx.tierFor("default")
-	r, _, err := call[scribeResult](ctx, l.orch, directEditsPrompt(l.ctx, at, what, edits),
+	r, out, err := call[scribeResult](ctx, l.orch, site{plan.At{Stage: "direct-edits", Wave: wave}, true}, directEditsPrompt(l.ctx, at, what, edits),
 		lsfrt.Opts{Label: label, Model: t.Model, Effort: t.Effort, Phase: phase, Schema: scribeSchema})
 	if err != nil {
 		return nil, err
 	}
 	if r == nil {
-		return []*plan.Signal{plan.NullReturnSignal(plan.At{Stage: "direct-edits", Wave: wave})}, nil
+		return append(out, plan.NullReturnSignal(plan.At{Stage: "direct-edits", Wave: wave})), nil
 	}
 	if !committed(r.Result.Sha) {
 		paths := []string{}
 		for _, e := range edits {
 			paths = append(paths, e.Path)
 		}
-		return []*plan.Signal{plan.NoCommitSignal(plan.At{Stage: "direct-edits", Wave: wave, Path: strings.Join(paths, ",")})}, nil
+		return append(out, plan.NoCommitSignal(plan.At{Stage: "direct-edits", Wave: wave, Path: strings.Join(paths, ",")})), nil
 	}
-	out := []*plan.Signal{}
 	for _, e := range edits {
 		out = append(out, plan.NewSignal(plan.Signal{Kind: "direct-edit", Source: "reported", Stage: stage, Wave: wave, Statement: e.Description, Referent: e.Path}))
 	}
@@ -475,15 +474,17 @@ func Run(ctx context.Context, rt Runtime) (json.RawMessage, error) {
 			rpItems = append(rpItems, rpItem{id: dec.ID, describe: dec.Question, described: true, stopText: dec.Question, referent: dec.ID})
 		}
 		t := c.tierFor("planning")
-		rp, _, err := call[replanResult](ctx, l.orch, decisionReplanPrompt(c, l.ref(), items),
+		rp, cs, err := call[replanResult](ctx, l.orch, site{plan.At{Stage: "decision-replan", Wave: plan.W(0)}, true}, decisionReplanPrompt(c, l.ref(), items),
 			lsfrt.Opts{Label: "decision-replan", Model: t.Model, Effort: t.Effort, Phase: "Load", Schema: replanSchema})
 		if err != nil {
 			return nil, err
 		}
 		if rp == nil {
-			return l.stopped(ctx, "decision-replan", []*plan.Signal{plan.NullReturnSignal(plan.At{Stage: "decision-replan"})}, nil)
+			ev := plan.EvaluateWave(append(cs, plan.NullReturnSignal(plan.At{Stage: "decision-replan"})))
+			l.record(ev)
+			return l.stopped(ctx, "decision-replan", ev.Stops, nil)
 		}
-		sigs := replanSignals(&rp.Result, rpItems, "decision-replan", 0, l.ledger)
+		sigs := append(cs, replanSignals(&rp.Result, rpItems, "decision-replan", 0, l.ledger)...)
 		edits, err := l.applyDirectEdits(ctx, planRef{l.plan.Path, rp.Result.PlanSha}, rp.Result.DirectEdits, "decision re-plan", "decision-replan", plan.W(0), "Load")
 		if err != nil {
 			return nil, err

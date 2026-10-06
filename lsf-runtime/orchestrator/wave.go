@@ -117,10 +117,13 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 	if len(order) > 0 {
 		t := c.tierFor("default")
 		label := "merge:w" + itoa(wave)
-		m, _, err := call[mergeResult](ctx, l.orch, mergePrompt(c, l.ref(), wave, order), lsfrt.Opts{Label: label, Model: t.Model, Effort: t.Effort, Phase: "Merge", Schema: mergeSchema})
+		m, cs, err := call[mergeResult](ctx, l.orch, site{plan.At{Stage: "merge", Wave: plan.W(wave)}, true}, mergePrompt(c, l.ref(), wave, order), lsfrt.Opts{Label: label, Model: t.Model, Effort: t.Effort, Phase: "Merge", Schema: mergeSchema})
 		if err != nil {
 			return nil, true, false, err
 		}
+		// A merge stop keeps what it merged: those commits exist, and the
+		// wave goes on to the re-plan as any stopping wave with units merged.
+		waveSignals = append(waveSignals, cs...)
 		if m == nil {
 			waveSignals = append(waveSignals, plan.NullReturnSignal(plan.At{Stage: "merge", Wave: plan.W(wave)}))
 		} else {
@@ -158,8 +161,8 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 
 	// The wave gate: one question, does the wave invalidate the
 	// architecture. Merged worktrees are removed alongside it; the gate
-	// reads the main checkout only. Cleanup never signals: a failure leaves
-	// residue, not risk.
+	// reads the main checkout only. Both are readers. Cleanup's null is
+	// logged, not signalled.
 	if len(merged) > 0 {
 		gt, mt := c.tierFor("gate"), c.tierFor("mechanical")
 		gl, cl := "review-gate:w"+itoa(wave), "cleanup:w"+itoa(wave)
@@ -170,8 +173,11 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 		if err != nil {
 			return nil, true, false, err
 		}
-		g := decode[plan.GateResult](l.rt, res[0].label, res[0].cr.Value)
-		cu := decode[cleanupResult](l.rt, res[1].label, res[1].cr.Value)
+		gv, gs := l.callSigs(site{plan.At{Stage: "review-gate", Wave: plan.W(wave)}, false}, res[0].cr, res[0].label, gateSchema)
+		cv, cs := l.callSigs(site{plan.At{Stage: "cleanup", Wave: plan.W(wave)}, false}, res[1].cr, res[1].label, cleanupSchema)
+		waveSignals = append(append(waveSignals, gs...), cs...)
+		g := decode[plan.GateResult](l.rt, res[0].label, gv)
+		cu := decode[cleanupResult](l.rt, res[1].label, cv)
 		if g == nil {
 			waveSignals = append(waveSignals, plan.NullReturnSignal(plan.At{Stage: "review-gate", Wave: plan.W(wave)}))
 		} else {
@@ -235,12 +241,12 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 		return nil, false, false, nil
 	}
 	pt := c.tierFor("planning")
-	rp, _, err := call[replanResult](ctx, l.orch, replanPrompt(c, l.ref(), wave, merged, conflicts, items, evalA.Stops),
+	rp, cs, err := call[replanResult](ctx, l.orch, site{plan.At{Stage: "replan", Wave: plan.W(wave)}, true}, replanPrompt(c, l.ref(), wave, merged, conflicts, items, evalA.Stops),
 		lsfrt.Opts{Label: "replan:w" + itoa(wave), Model: pt.Model, Effort: pt.Effort, Schema: replanSchema, Phase: "Re-plan"})
 	if err != nil {
 		return nil, true, false, err
 	}
-	replanSigs := []*plan.Signal{}
+	replanSigs := append([]*plan.Signal{}, cs...)
 	nextPlan := l.plan
 	if rp == nil {
 		replanSigs = append(replanSigs, plan.NullReturnSignal(plan.At{Stage: "replan", Wave: plan.W(wave)}))
@@ -296,12 +302,14 @@ func (l *launch) terminate(ctx context.Context) (json.RawMessage, bool, error) {
 	c := l.ctx
 	l.terminationRan = true
 	t := c.tierFor("planning")
-	term, _, err := call[terminationResult](ctx, l.orch, terminationPrompt(c, l.ref()), lsfrt.Opts{Label: "termination", Model: t.Model, Effort: t.Effort, Phase: "Termination", Schema: terminationSchema})
+	term, cs, err := call[terminationResult](ctx, l.orch, site{plan.At{Stage: "termination"}, true}, terminationPrompt(c, l.ref()), lsfrt.Opts{Label: "termination", Model: t.Model, Effort: t.Effort, Phase: "Termination", Schema: terminationSchema})
 	if err != nil {
 		return nil, true, err
 	}
 	if term == nil {
-		out, err := l.stopped(ctx, "termination", []*plan.Signal{plan.NullReturnSignal(plan.At{Stage: "termination"})}, nil)
+		ev := plan.EvaluateWave(append(cs, plan.NullReturnSignal(plan.At{Stage: "termination"})))
+		l.record(ev)
+		out, err := l.stopped(ctx, "termination", ev.Stops, nil)
 		return out, true, err
 	}
 	re, err := l.loadPlan(ctx, term.Result.PlanSha, "load:termination", plan.W(l.wave))
@@ -311,7 +319,7 @@ func (l *launch) terminate(ctx context.Context) (json.RawMessage, bool, error) {
 	if re.copy != nil {
 		l.refreshPin(re.copy.Result.ArchitectureSha)
 	}
-	termEval := plan.EvaluateWave(re.stops)
+	termEval := plan.EvaluateWave(append(cs, re.stops...))
 	l.record(termEval)
 	if termEval.Stop {
 		out, err := l.stopped(ctx, "termination", termEval.Stops, nil)
@@ -338,14 +346,16 @@ func (l *launch) terminate(ctx context.Context) (json.RawMessage, bool, error) {
 func (l *launch) finish(ctx context.Context) (json.RawMessage, error) {
 	c := l.ctx
 	t := c.tierFor("default")
-	ob, _, err := call[obligationsResult](ctx, l.orch, obligationsPrompt(c, l.ref()), lsfrt.Opts{Label: "obligations", Model: t.Model, Effort: t.Effort, Phase: "Termination", Schema: obligationsSchema})
+	ob, cs, err := call[obligationsResult](ctx, l.orch, site{plan.At{Stage: "obligations"}, false}, obligationsPrompt(c, l.ref()), lsfrt.Opts{Label: "obligations", Model: t.Model, Effort: t.Effort, Phase: "Termination", Schema: obligationsSchema})
 	if err != nil {
 		return nil, err
 	}
 	if ob == nil {
-		return l.stopped(ctx, "obligations", []*plan.Signal{plan.NullReturnSignal(plan.At{Stage: "obligations"})}, nil)
+		ev := plan.EvaluateWave(append(cs, plan.NullReturnSignal(plan.At{Stage: "obligations"})))
+		l.record(ev)
+		return l.stopped(ctx, "obligations", ev.Stops, nil)
 	}
-	sigs := []*plan.Signal{}
+	sigs := append([]*plan.Signal{}, cs...)
 	for _, o := range ob.Result.Obligations {
 		if o.Disposition == "discharged" {
 			continue

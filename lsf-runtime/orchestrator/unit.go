@@ -22,15 +22,18 @@ var lensesByType = map[string][]string{
 	"meta":        {"general"},
 }
 
-// reviewer is one reviewer's return in a critique round.
+// reviewer is one reviewer's return in a critique round, and its call's
+// signals.
 type reviewer struct {
 	stage string
 	ret   *ret[findingsResult]
+	sigs  []*plan.Signal
 }
 
 // gateOutcome is a critique loop's result. Significant and Minor findings
 // accumulate in findings, each stamped with its stage and round, for the
-// caller to record once per gate.
+// caller to record once per gate. Reason call-stop is a stop among a
+// round's call signals.
 type gateOutcome struct {
 	ok       bool
 	reason   string
@@ -48,7 +51,7 @@ func critiqueLoop(
 	at func(stage string) plan.At,
 	sigs *[]*plan.Signal,
 	round func(n int) ([]reviewer, error),
-	fix func(n int, criticals []critical) (*ret[fixResult], error),
+	fix func(n int, criticals []critical) (*ret[fixResult], []*plan.Signal, error),
 	onFix func(fixed *ret[fixResult], n int) []*plan.Signal,
 ) (gateOutcome, error) {
 	unitID := at("").Unit
@@ -62,11 +65,20 @@ func critiqueLoop(
 		if err != nil {
 			return gateOutcome{}, err
 		}
+		var callSigs []*plan.Signal
+		for _, r := range rets {
+			callSigs = append(callSigs, r.sigs...)
+		}
+		*sigs = append(*sigs, callSigs...)
 		for _, r := range rets {
 			if r.ret == nil {
 				*sigs = append(*sigs, plan.NullReturnSignal(at(r.stage)))
 				return gateOutcome{reason: "agent-null", rounds: n, findings: findings}, nil
 			}
+		}
+		// A stopping reviewer's findings are not used.
+		if hasStop(callSigs) {
+			return gateOutcome{reason: "call-stop", rounds: n, findings: findings}, nil
 		}
 		criticals := []critical{}
 		for _, r := range rets {
@@ -94,16 +106,20 @@ func critiqueLoop(
 				fmt.Sprintf("%d Critical finding(s) remain after round %d (hard cap)", len(criticals), n), unitID))
 			return gateOutcome{reason: "hard-cap", rounds: n, findings: findings}, nil
 		}
-		fixed, err := fix(n, criticals)
+		fixed, fixSigs, err := fix(n, criticals)
 		if err != nil {
 			return gateOutcome{}, err
 		}
+		*sigs = append(*sigs, fixSigs...)
 		if fixed == nil {
 			*sigs = append(*sigs, plan.NullReturnSignal(at("fix")))
 			return gateOutcome{reason: "agent-null", rounds: n, findings: findings}, nil
 		}
 		for _, a := range fixed.Result.Applied {
 			*sigs = append(*sigs, signal("fix", "critical-fixed", "structural", fmt.Sprintf("round %d: %s — fixed: %s", n, a.Finding, a.Fix), a.Finding))
+		}
+		if hasStop(fixSigs) {
+			return gateOutcome{reason: "call-stop", rounds: n, findings: findings}, nil
 		}
 		if len(fixed.Result.NotApplied) > 0 {
 			// A declined Critical stays Critical; the loop cannot pass, so
@@ -178,10 +194,11 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	}
 
 	// 1. plan
-	planned, _, err := call[unitPlanResult](ctx, o, unitPlanPrompt(c, pr, u), o.unitOpts(u, "plan", "planning", lsfrt.Opts{Isolation: "worktree", Schema: unitPlanSchema}))
+	planned, cs, err := call[unitPlanResult](ctx, o, site{at("plan"), true}, unitPlanPrompt(c, pr, u), o.unitOpts(u, "plan", "planning", lsfrt.Opts{Isolation: "worktree", Schema: unitPlanSchema}))
 	if err != nil {
 		return nil, err
 	}
+	sigs = append(sigs, cs...)
 	if planned == nil {
 		sigs = append(sigs, plan.NullReturnSignal(at("plan")))
 		return abort("plan")
@@ -191,35 +208,39 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	sigs = append(sigs, plan.SignalsFromReadings(len(planned.Result.Readings), pa)...)
 	pa.TargetKB = unitPlanTargetKB
 	sigs = append(sigs, plan.SignalsFromDocumentSize(float64(planned.Result.Bytes), pa)...)
+	if hasStop(cs) {
+		return abort("plan")
+	}
 	branch := planned.Result.Branch
 
 	// 2. critique gate over the plan
 	planGate, err := critiqueLoop(at, &sigs,
 		func(n int) ([]reviewer, error) {
-			r, _, err := call[findingsResult](ctx, o, planCritiquePrompt(c, pr, u, branch, n),
+			r, rs, err := call[findingsResult](ctx, o, site{at("critique-plan"), false}, planCritiquePrompt(c, pr, u, branch, n),
 				o.unitOpts(u, fmt.Sprintf("critique-plan:r%d", n), "critique", lsfrt.Opts{AgentType: "phronithm:critic", Schema: findingsSchema}))
-			return []reviewer{{"critique-plan", r}}, err
+			return []reviewer{{"critique-plan", r, rs}}, err
 		},
-		func(n int, criticals []critical) (*ret[fixResult], error) {
-			r, _, err := call[fixResult](ctx, o, fixPrompt(c, pr, u, branch, "plan", criticals, n, nil),
+		func(n int, criticals []critical) (*ret[fixResult], []*plan.Signal, error) {
+			return call[fixResult](ctx, o, site{at("fix"), true}, fixPrompt(c, pr, u, branch, "plan", criticals, n, nil),
 				o.unitOpts(u, fmt.Sprintf("fix-plan:r%d", n), "", lsfrt.Opts{Isolation: "worktree", Schema: fixSchema}))
-			return r, err
 		},
 		func(fixed *ret[fixResult], n int) []*plan.Signal { branch = fixed.Result.Branch; return nil },
 	)
 	if err != nil {
 		return nil, err
 	}
-	sigs = append(sigs, plan.SignalsFromFindings(planGate.findings, at("critique-plan"))...)
-	if !planGate.ok {
+	planFindings := plan.SignalsFromFindings(planGate.findings, at("critique-plan"))
+	sigs = append(sigs, planFindings...)
+	if !planGate.ok || hasStop(planFindings) {
 		return abort("critique-plan")
 	}
 
 	// 3. implement
-	impl, _, err := call[implementResult](ctx, o, implementPrompt(c, pr, u, branch), o.unitOpts(u, "implement", "", lsfrt.Opts{Isolation: "worktree", Schema: implementSchema}))
+	impl, cs, err := call[implementResult](ctx, o, site{at("implement"), true}, implementPrompt(c, pr, u, branch), o.unitOpts(u, "implement", "", lsfrt.Opts{Isolation: "worktree", Schema: implementSchema}))
 	if err != nil {
 		return nil, err
 	}
+	sigs = append(sigs, cs...)
 	if impl == nil {
 		sigs = append(sigs, plan.NullReturnSignal(at("implement")))
 		return abort("implement")
@@ -238,6 +259,9 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	branch = impl.Result.Branch
 	sigs = append(sigs, plan.SignalsFromImplement(impl.Result.ImplementResult, at("implement"))...)
 	sigs = append(sigs, plan.DistressSignals(impl.Result.Distress.plan(), plan.At{Unit: u.ID, Wave: plan.W(wave)}, c.config)...)
+	if hasStop(cs) {
+		return abort("implement")
+	}
 	design := u.Type == "design"
 	// A design unit's review reads no gates.
 	if !design {
@@ -280,18 +304,18 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 			}
 			out := []reviewer{}
 			for i, r := range rvs {
-				out = append(out, reviewer{r.stage, decode[findingsResult](o.rt, res[i].label, res[i].cr.Value)})
+				v, rs := o.callSigs(site{at(r.stage), false}, res[i].cr, res[i].label, reqs[i].opts.Schema)
+				out = append(out, reviewer{r.stage, decode[findingsResult](o.rt, res[i].label, v), rs})
 			}
 			return out, nil
 		},
-		func(n int, criticals []critical) (*ret[fixResult], error) {
+		func(n int, criticals []critical) (*ret[fixResult], []*plan.Signal, error) {
 			schema := fixCodeSchema
 			if design {
 				schema = fixSchema
 			}
-			r, _, err := call[fixResult](ctx, o, fixPrompt(c, pr, u, branch, "code", criticals, n, impl.Result.Gates),
+			return call[fixResult](ctx, o, site{at("fix"), true}, fixPrompt(c, pr, u, branch, "code", criticals, n, impl.Result.Gates),
 				o.unitOpts(u, fmt.Sprintf("fix-code:r%d", n), "", lsfrt.Opts{Isolation: "worktree", Schema: schema}))
-			return r, err
 		},
 		func(fixed *ret[fixResult], n int) []*plan.Signal {
 			branch = fixed.Result.Branch
@@ -332,8 +356,9 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	if err != nil {
 		return nil, err
 	}
-	sigs = append(sigs, plan.SignalsFromFindings(reviewGate.findings, at("review"))...)
-	if !reviewGate.ok {
+	reviewFindings := plan.SignalsFromFindings(reviewGate.findings, at("review"))
+	sigs = append(sigs, reviewFindings...)
+	if !reviewGate.ok || hasStop(reviewFindings) {
 		return abort("review")
 	}
 

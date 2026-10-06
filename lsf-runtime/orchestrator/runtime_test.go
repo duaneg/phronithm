@@ -195,8 +195,9 @@ func TestDecodeNullsAndMissingResult(t *testing.T) {
 	}
 }
 
-// S4: the flags and denials a call returns reach the call site with its
-// value: a plain call, a null call, and a parallel reviewer.
+// S7: the flags and denials a call returns become its driver-event
+// signals at the call site: a plain call, a null call, and a parallel
+// reviewer, including one whose branch returned null.
 func TestCallResultReachesCallSites(t *testing.T) {
 	flagged := func(v any) H {
 		return func(Call, *State) any {
@@ -212,30 +213,37 @@ func TestCallResultReachesCallSites(t *testing.T) {
 		"critique-code": flagged(orchtest.NoFindings()), "lens-review": flagged(nil)}, nil)
 	o := stubOrch(t, s, nil)
 	ctx := context.Background()
-	shows := func(what string, cr lsfrt.CallResult) {
+	at := site{plan.At{Stage: "implement", Unit: "A", Wave: plan.W(1)}, true}
+	shows := func(what, label string, sigs []*plan.Signal) {
 		t.Helper()
-		if !slices.Equal(cr.Flags, []string{"skill-not-loaded"}) || !slices.Equal(cr.Denials, []string{"Bash: git push"}) {
-			t.Errorf("%s: %+v", what, cr)
+		var got []string
+		for _, sg := range sigs {
+			got = append(got, sg.Kind+"@"+sg.Referent)
+		}
+		if want := []string{"skill-not-loaded@" + label, "permission-denied@" + label}; !slices.Equal(got, want) {
+			t.Errorf("%s: %v, want %v", what, got, want)
 		}
 	}
 
-	r, cr, err := call[implementResult](ctx, o, "p", lsfrt.Opts{Label: "implement:A"})
+	r, sigs, err := call[implementResult](ctx, o, at, "p", lsfrt.Opts{Label: "implement:A"})
 	if err != nil || r == nil {
 		t.Fatal(r, err)
 	}
-	shows("plain call", cr)
-	r2, cr, err := call[unitPlanResult](ctx, o, "p", lsfrt.Opts{Label: "plan:A"})
+	shows("plain call", "implement:A", sigs)
+	r2, sigs, err := call[unitPlanResult](ctx, o, at, "p", lsfrt.Opts{Label: "plan:A"})
 	if err != nil || r2 != nil {
 		t.Fatal(r2, err)
 	}
-	shows("null call", cr)
+	shows("null call", "plan:A", sigs)
 	res, err := o.parallelAgents(ctx, []agentReq{{"p", lsfrt.Opts{Label: "critique-code:r1:A"}}, {"p", lsfrt.Opts{Label: "lens-review:r1:A"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	shows("parallel reviewer", res[0].cr)
-	shows("parallel null reviewer", res[1].cr)
-	if res[0].cr.Value == nil || res[1].cr.Value != nil || res[0].label != "critique-code:r1:A" {
+	v0, s0 := o.callSigs(at, res[0].cr, res[0].label, nil)
+	v1, s1 := o.callSigs(at, res[1].cr, res[1].label, nil)
+	shows("parallel reviewer", "critique-code:r1:A", s0)
+	shows("parallel null reviewer", "lens-review:r1:A", s1)
+	if v0 == nil || v1 != nil {
 		t.Errorf("%+v", res)
 	}
 }

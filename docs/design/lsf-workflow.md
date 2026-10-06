@@ -434,7 +434,11 @@ declare are only those whose consequence the script can check.
    conflict or regression; a cycle in the amended graph; critique-gate
    non-convergence (hard cap, a systemic verdict, or a Critical the fix stage
    declined); agent returned null; an environment gate probe failing against
-   its pin; an invalid plan at load.
+   its pin; an invalid plan at load. Structural signals also include the
+   driver-detected events: what the runtime observes about a call, rather
+   than reads from its result. These are permission denials, changes left
+   uncommitted at a call's return, a skill that did not load, and a guard
+   kill after a valid result.
 2. **Adjudicated** — one judgement per wave, in a form the script checks: the
    wave gate's complete invalidation, and the re-plan's verdict on each item
    it was handed. Measured recall on premise- and requirements-level defects
@@ -459,8 +463,10 @@ RECORD (ledger; the re-plan absorbs what it can): every reading, deviation,
 deferral, discovery, distress record, unfixed Significant or Minor finding,
 applied Critical fix, gate note, mechanically resolved claimed-disjoint
 conflict, re-plan amendment, re-plan verdict of `amended`, `no-change`, or
-`document-text` with the architecture amendment it made, and an over-budget
-unit repaired by extraction or flagged with rationale.
+`document-text` with the architecture amendment it made, an over-budget
+unit repaired by extraction or flagged with rationale, a permission
+denial, changes a read-only stage left in its checkout, and a guard kill
+after a valid result (the result stands).
 
 STOP (return an escalation record):
 
@@ -481,7 +487,11 @@ STOP (return an escalation record):
 - an environment gate that has drifted from its plan-time pin, or a wave with
   no ready unit because of uncleared organisational or release gates;
 - an undischarged standing obligation at termination;
-- an agent returning null (skipped or terminal error).
+- an agent returning null (skipped or terminal error);
+- a stage that commits returning with changes no commit holds, or whose
+  uncommitted check failed. In the main checkout a requester's own edit
+  during the call counts too: the statement names the paths;
+- a skill that did not load after the runtime's retry.
 
 There are no volume or recurrence rules; counting reported signals measures
 verbosity, not trouble in the work.
@@ -544,7 +554,9 @@ A stop does not always relaunch the workflow. Per STOP kind:
 | STOP kind | Relaunch | Inputs |
 |-----------|----------|--------|
 | Architecture invalidated; a re-plan item unabsorbed because the answer changes a decision in the architecture document or the request record | `phronithm:large-scale-feature` Phase 2, re-entry sub-procedure (fresh session; the skill's startup prompt carries the inputs) | Per `phronithm:lsf-drive`'s *Return to Phase 2* prompt: plan SHA, architecture document and request record, integration branch, ledger path, the stop with the gate's five fields, the requester's decision, unscribed ledger rows |
-| Everything else: done condition unevaluable as written (the requester's rewrite is a decision the decision re-plan applies); cycle or unrepairable budget excess; gate non-convergence; unresolvable merge conflict or regression; environment drift; gated units; null agent; load failure; undischarged obligation | Same workflow | Decision log SHA |
+| Everything else: done condition unevaluable as written (the requester's rewrite is a decision the decision re-plan applies); cycle or unrepairable budget excess; gate non-convergence; unresolvable merge conflict or regression; environment drift; gated units; null agent; load failure; undischarged obligation; uncommitted at return; skill not loaded | Same workflow | Decision log SHA |
+
+For an uncommitted-at-return stop, the requester commits or removes the named paths and relaunches. A relaunch without decisions replays the call, which re-checks the paths and passes once they are clean. With decisions, every prompt changes and the stage runs again. An isolated writer's worktree is reused, so dirt still in it is reported again.
 
 Returning to an earlier phase is the skill's own rule ("return to the earliest
 affected phase; do not patch forward"). Phase 3 work already merged is not

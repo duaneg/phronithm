@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -216,13 +218,40 @@ func decode[T any](rt Runtime, label string, raw json.RawMessage) *ret[T] {
 	return &ret[T]{Result: *r.Result}
 }
 
-// call is agent plus decode. The CallResult is returned with the value.
-func call[T any](ctx context.Context, o *orch, prompt string, opts lsfrt.Opts) (*ret[T], lsfrt.CallResult, error) {
+// site is where an agent call is made: its ledger position, and whether
+// its stage commits (a writer's uncommitted changes stop; a reader's are
+// recorded).
+type site struct {
+	at     plan.At
+	writer bool
+}
+
+// callSigs maps a call's CallResult to its driver-event signals (D21) and
+// returns the value to decode.
+func (o *orch) callSigs(s site, cr lsfrt.CallResult, label string, schema json.RawMessage) (json.RawMessage, []*plan.Signal) {
+	sigs, unknown := plan.SignalsFromCall(plan.CallEvents{
+		Label: label, Writer: s.writer, Flags: cr.Flags, Denials: cr.Denials, Uncommitted: cr.Uncommitted,
+	}, s.at)
+	if len(unknown) > 0 {
+		o.rt.Log(label + ": unknown call flag(s): " + strings.Join(unknown, ", "))
+	}
+	return cr.Value, sigs
+}
+
+// hasStop reports whether any of sigs is a stop kind.
+func hasStop(sigs []*plan.Signal) bool {
+	return slices.ContainsFunc(sigs, func(s *plan.Signal) bool { return plan.IsStopKind(s.Kind) })
+}
+
+// call is agent, the driver-event mapping and decode. sigs are the call's
+// driver-event signals; the caller appends them to its stage's signals.
+func call[T any](ctx context.Context, o *orch, s site, prompt string, opts lsfrt.Opts) (*ret[T], []*plan.Signal, error) {
 	cr, label, err := o.agent(ctx, prompt, opts)
 	if err != nil {
-		return nil, cr, err
+		return nil, nil, err
 	}
-	return decode[T](o.rt, label, cr.Value), cr, nil
+	v, sigs := o.callSigs(s, cr, label, opts.Schema)
+	return decode[T](o.rt, label, v), sigs, nil
 }
 
 // step is runStep plus decode. fault is the stage's failure reason, "" when
