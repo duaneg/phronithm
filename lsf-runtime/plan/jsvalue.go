@@ -1,6 +1,8 @@
 package plan
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strconv"
@@ -163,4 +165,37 @@ func jsKeyOrder(keys []string) []string {
 func lastRune(s string) rune {
 	r, _ := utf8.DecodeLastRuneInString(s)
 	return r
+}
+
+// MarshalJS marshals v as JS JSON.stringify(v, null, indent) does, for the
+// types in this package: encoding/json without HTML escaping, and with
+// U+2028 and U+2029 left raw (encoding/json escapes them; JS does not).
+// json.Marshal is not JS-faithful: it escapes <, > and & too.
+func MarshalJS(v any, indent string) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if indent != "" {
+		enc.SetIndent("", indent)
+	}
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	b := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
+	out := make([]byte, 0, len(b))
+	for i := 0; i < len(b); i++ {
+		if b[i] != '\\' || i+1 >= len(b) {
+			out = append(out, b[i])
+			continue
+		}
+		// Backslashes occur only in string escapes, so pairs are read in turn.
+		if rest := b[i+1:]; bytes.HasPrefix(rest, []byte("u2028")) || bytes.HasPrefix(rest, []byte("u2029")) {
+			out = utf8.AppendRune(out, rune(0x2028+int(rest[4]-'8')))
+			i += 5
+			continue
+		}
+		out = append(out, b[i], b[i+1])
+		i++
+	}
+	return out, nil
 }

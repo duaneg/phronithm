@@ -1,0 +1,8 @@
+a: ["x\"y", 'p''q']
+b: "x" # c
+c: it's # not stripped
+01: a
+1: b
+d: "😀 # x"
+e: 'a#b' #c
+f: été  # nbsp

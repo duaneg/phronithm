@@ -53,7 +53,8 @@ func (m *Map) Get(k string) (any, bool) {
 // Keys returns the keys in JS property order.
 func (m *Map) Keys() []string { return jsKeyOrder(m.keys) }
 
-// MarshalJSON writes the mapping as JSON.stringify does.
+// MarshalJSON writes the mapping in JS key order. Its escaping is that of
+// the caller's encoder: use MarshalJS for JSON.stringify output.
 func (m *Map) MarshalJSON() ([]byte, error) { return []byte(jsJSON(m)), nil }
 
 type yamlLine struct {
