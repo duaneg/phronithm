@@ -42,11 +42,21 @@ func fakeClaude(table string) int {
 			f.Close()
 		}
 	}
-	prompt, _ := io.ReadAll(os.Stdin)
+	prompt, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "fake claude: stdin:", err)
+		return 3
+	}
 	sum := sha256.Sum256(prompt)
 	var answers map[string]json.RawMessage
-	b, _ := os.ReadFile(table)
-	json.Unmarshal(b, &answers)
+	b, err := os.ReadFile(table)
+	if err == nil {
+		err = json.Unmarshal(b, &answers)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "fake claude: table:", err)
+		return 3
+	}
 	fmt.Printf(`{"type":"system","subtype":"init","session_id":%q,"tools":["Read"],"slash_commands":[]}`+"\n", session)
 	fmt.Println(`{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}`)
 	v, ok := answers[hex.EncodeToString(sum[:])]
@@ -56,6 +66,26 @@ func fakeClaude(table string) int {
 	}
 	fmt.Printf(`{"type":"result","subtype":"success","is_error":false,"structured_output":%s,"total_cost_usd":0.01}`+"\n", v)
 	return 0
+}
+
+// events counts telemetry.jsonl's events by kind.
+func events(t *testing.T, stateDir string) map[string]int {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(stateDir, "telemetry.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]int{}
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		var e struct {
+			Kind string `json:"kind"`
+		}
+		if json.Unmarshal([]byte(line), &e) != nil {
+			t.Fatalf("telemetry line %q", line)
+		}
+		out[e.Kind]++
+	}
+	return out
 }
 
 func calls(t *testing.T, dir string) int {
@@ -163,8 +193,21 @@ func TestOnRuntimeLabelsUniqueAndReplay(t *testing.T) {
 		}
 	}
 
+	records, _ := filepath.Glob(filepath.Join(cfg.StateDir, "journal", "*.json"))
+	eq(t, len(records), len(s.Calls), "one journal record per label")
+	for _, key := range []string{"ledger_w2-", "ledger_w2_2-"} {
+		if m, _ := filepath.Glob(filepath.Join(cfg.StateDir, "journal", key+"*.json")); len(m) != 1 {
+			t.Errorf("journal record %s*: %v", key, m)
+		}
+	}
+	firstEvents := events(t, cfg.StateDir)
+	eq(t, firstEvents["label-reused"], 0)
+
 	again := launch()
 	sameOutcome(again.Outcome)
 	eq(t, again.Calls, 0, "the relaunch replays every call")
 	eq(t, calls(t, callDir), len(s.Calls), "no spawn on the relaunch")
+	all := events(t, cfg.StateDir)
+	eq(t, all["cache-hit"]-firstEvents["cache-hit"], len(s.Calls), "every call replayed from the journal")
+	eq(t, all["cache-stale"], 0)
 }

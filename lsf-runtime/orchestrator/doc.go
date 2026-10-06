@@ -21,8 +21,9 @@
 //     encoding/json matches keys case-insensitively. Under the runtime,
 //     schema validation rejects such returns before the orchestrator sees
 //     them (retried, then an unjournaled null), so this arises from args.seed
-//     returns, which bypass validation in both languages: a seed is trusted,
-//     as the caller vouches for it.
+//     returns, which bypass validation in both languages (a journal replay
+//     was validated when recorded): a seed is trusted, as the caller vouches
+//     for it.
 //   - D10. The nth real call (n ≥ 2) with a label in a launch is label#n,
 //     so the journal keeps one record per call. JS reuses ledger:w<n> when a
 //     stop or pause scribes after the wave's own scribe, and at wave 0 after
@@ -34,10 +35,10 @@
 //     when present (including []) and dropped when absent or null. JS embeds
 //     each object as it arrived, with any extra keys, in its key order.
 //   - D12. Args are typed. A non-string string field, a fractional
-//     maxUnitsPerWave or a non-object seed fails the decode, and a row of
-//     args.unscribed that signal() rejects is an args error; each ends the
-//     launch crashed with the message. JS coerces, ignores or throws. A tier
-//     field that is null or "" counts as unset.
+//     maxUnitsPerWave, a non-object seed or a wrong-typed args.unscribed
+//     row fails the decode, and a row that signal() rejects is an args
+//     error; each ends the launch crashed with the message. JS coerces,
+//     ignores or throws. A tier field that is null or "" counts as unset.
 //   - D13. A merge row naming a unit outside the wave still completes the
 //     unit, as in JS; its entry in the gate and re-plan prompts has empty
 //     fields where JS renders "undefined".

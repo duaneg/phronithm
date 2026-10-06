@@ -127,6 +127,20 @@ func run(root, claude, dir, example string, dryRun bool) error {
 			return err
 		}
 	}
+	// A state dir from an earlier launch would replay its journal and mix
+	// its transcripts into the version check.
+	if _, err := os.Stat(filepath.Join(dir, "state")); err == nil {
+		return fmt.Errorf("%s/state exists: use a fresh -dir", dir)
+	}
+	// Check the pin before spending anything.
+	if !dryRun {
+		cmd := exec.Command(claude, "--version")
+		cmd.Env = append(os.Environ(), "DISABLE_AUTOUPDATER=1")
+		v, err := cmd.Output()
+		if err != nil || !strings.HasPrefix(strings.TrimSpace(string(v)), pin+" ") {
+			return fmt.Errorf("%s --version: %q %v; want %s", claude, strings.TrimSpace(string(v)), err, pin)
+		}
+	}
 	planSha, err := fixture(root, dir)
 	if err != nil {
 		return err
@@ -158,11 +172,11 @@ func run(root, claude, dir, example string, dryRun bool) error {
 	}
 	json.Unmarshal(sum.Outcome, &out)
 	fmt.Printf("status %s\n", out.Status)
+	var problems []string
 	if out.Escalation != nil {
 		fmt.Printf("escalation %s\n", out.Escalation)
 	}
 
-	var problems []string
 	if out.Status != "complete" {
 		problems = append(problems, fmt.Sprintf("status %q (stop_reason %s %s %s)", out.Status, sum.StopReason, sum.Detail, sum.Error))
 	}
@@ -171,7 +185,19 @@ func run(root, claude, dir, example string, dryRun bool) error {
 		problems = append(problems, "log.txt reports a reused label")
 	}
 	tel, _ := os.ReadFile(filepath.Join(cfg.StateDir, "telemetry.jsonl"))
-	fmt.Printf("skill-not-loaded events: %d\n", bytes.Count(tel, []byte(`"skill-not-loaded"`)))
+	kinds := map[string]int{}
+	for _, line := range bytes.Split(bytes.TrimSpace(tel), []byte("\n")) {
+		var e struct {
+			Kind string `json:"kind"`
+		}
+		if json.Unmarshal(line, &e) == nil {
+			kinds[e.Kind]++
+		}
+	}
+	fmt.Printf("skill-not-loaded events: %d\n", kinds["skill-not-loaded"])
+	if kinds["label-reused"] > 0 {
+		problems = append(problems, "telemetry reports a reused label")
+	}
 	vs, err := versions(cfg.StateDir)
 	if err != nil {
 		return err
@@ -187,11 +213,15 @@ func run(root, claude, dir, example string, dryRun bool) error {
 	}
 	if log, err := git(cfg.Repo, "log", "--oneline", "main"); err == nil {
 		fmt.Printf("main:\n%s", log)
-		if !strings.Contains(log, "merge(stats): add-mean") {
-			problems = append(problems, "main has no add-mean merge")
-		}
-	} else {
-		problems = append(problems, "git log: "+err.Error())
+	}
+	// A merge commit on main, and the unit's deliverable in its tree.
+	if merges, err := git(cfg.Repo, "log", "--merges", "--oneline", "main"); err != nil || strings.TrimSpace(merges) == "" {
+		problems = append(problems, "main has no merge commit")
+	}
+	src, _ := os.ReadFile(filepath.Join(cfg.Repo, "src", "stats.js"))
+	test, _ := os.ReadFile(filepath.Join(cfg.Repo, "test", "stats.test.js"))
+	if !bytes.Contains(src, []byte("export function mean")) || !bytes.Contains(test, []byte("RangeError")) {
+		problems = append(problems, "main lacks mean or its RangeError test")
 	}
 	for _, gate := range [][]string{{"node", "--test"}, {"node", "scripts/lint.js"}} {
 		cmd := exec.Command(gate[0], gate[1:]...)
