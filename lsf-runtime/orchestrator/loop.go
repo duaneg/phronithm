@@ -303,10 +303,10 @@ func (l *launch) applyDirectEdits(ctx context.Context, at planRef, edits []direc
 	return out, nil
 }
 
-// loaded is a plan read at a SHA: a copy agent returns the fenced blocks
-// verbatim, the plan package parses and validates. Structural problems
-// (unreadable block, unknown unit, cycle, unserialised overlap, bad
-// clearance) are stop signals.
+// loaded is a plan read at a SHA: the load step reads the documents from
+// git, the plan package extracts the blocks, parses and validates.
+// Structural problems (unreadable block, unknown unit, cycle, unserialised
+// overlap, bad clearance) and the step's own failure are stop signals.
 type loaded struct {
 	plan  *plan.Plan
 	copy  *ret[copyResult]
@@ -314,10 +314,20 @@ type loaded struct {
 }
 
 func (l *launch) loadPlan(ctx context.Context, sha, label string, wave *int) (loaded, error) {
-	t := l.ctx.tierFor("mechanical")
-	cp, _, err := call[copyResult](ctx, l.orch, copyPrompt(l.ctx, sha), lsfrt.Opts{Label: label, Model: t.Model, Effort: t.Effort, Phase: "Load", Schema: copySchema})
+	c := l.ctx
+	in := loadInput{Sha: sha, PlanPath: c.planPath, DecisionLogSha: c.decisionLogSha, DecisionLogPath: c.decisionLogPath,
+		IntegrationBranch: c.integrationBranch, ArchitectureDoc: c.architectureDoc, PauseRef: c.pauseRef}
+	cp, fault, err := step[copyResult](ctx, l.orch, label, in, l.load(in))
 	if err != nil {
 		return loaded{}, err
+	}
+	if fault == "" && cp != nil {
+		if err := l.liveReads(ctx, &cp.Result.HeadBranch, &cp.Result.PauseRequested); err != nil {
+			fault = "live read: " + err.Error()
+		}
+	}
+	if fault != "" {
+		return loaded{stops: []*plan.Signal{stageFaultSignal(plan.At{Stage: "load", Wave: wave}, fault)}}, nil
 	}
 	if cp == nil {
 		return loaded{stops: []*plan.Signal{plan.NullReturnSignal(plan.At{Stage: "load", Wave: wave})}}, nil
@@ -346,7 +356,7 @@ func (l *launch) loadPlan(ctx context.Context, sha, label string, wave *int) (lo
 	return out, nil
 }
 
-// refreshPin: the pin follows the integration branch; a reload's copy stage
+// refreshPin: the pin follows the integration branch; a reload's load step
 // reports the document's SHA after any document-text correction.
 func (l *launch) refreshPin(reported string) {
 	if r := jsTrim(reported); r != "" {
@@ -371,8 +381,8 @@ func (l *launch) record(ev plan.WaveEval) { l.ledger = append(l.ledger, ev.All..
 //
 // The plan graph is read from the plan's ```yaml lsf-plan block and gate
 // clearances from the decision log's ```yaml lsf-decisions block
-// (docs/plan-graph.md). A copy agent fetches the blocks; package plan parses
-// them. No agent interprets the plan's prose on the loop's behalf.
+// (docs/plan-graph.md). The load step reads the documents from git; package
+// plan extracts and parses the blocks. No agent interprets the plan's prose on the loop's behalf.
 //
 // The loop stops only on structural signals (merge, tests, gate cap, null
 // returns, plan validity) and on two adjudicated ones: the wave gate's
@@ -389,7 +399,7 @@ func Run(ctx context.Context, rt Runtime) (json.RawMessage, error) {
 		return nil, err
 	}
 	l := &launch{
-		orch:      &orch{rt: rt, ctx: c, seed: a.Seed, uses: map[string]int{}},
+		orch:      newOrch(rt, c, a.Seed),
 		carried:   map[*plan.Signal]bool{},
 		scribed:   map[*plan.Signal]bool{},
 		plan:      &plan.Plan{Path: c.planPath, Sha: c.planSha, Units: []*plan.Unit{}, ExecutionOrder: []string{}},
@@ -422,11 +432,18 @@ func Run(ctx context.Context, rt Runtime) (json.RawMessage, error) {
 	// Decisions handed back by the requester go into the repo first, so the
 	// SHA can appear in every prompt they affect.
 	if len(a.Decisions) > 0 {
-		t := c.tierFor("mechanical")
-		d, _, err := call[scribeResult](ctx, l.orch, decisionLogPrompt(c, a.Decisions),
-			lsfrt.Opts{Label: "decision-log", Model: t.Model, Effort: t.Effort, Phase: "Load", Schema: decisionLogSchema})
+		ids := []string{}
+		for _, d := range a.Decisions {
+			ids = append(ids, d.ID)
+		}
+		in := decisionLogInput{Path: c.decisionLogPath, Name: c.name, IntegrationBranch: c.integrationBranch, Decisions: a.Decisions,
+			Subject: "docs(" + c.name + "): append decision(s) " + strings.Join(ids, ", ")}
+		d, fault, err := step[scribeResult](ctx, l.orch, "decision-log", in, l.decisionLog(in))
 		if err != nil {
 			return nil, err
+		}
+		if fault != "" {
+			return l.stopped(ctx, "decision-log", []*plan.Signal{stageFaultSignal(plan.At{Stage: "decision-log", Path: c.decisionLogPath}, fault)}, nil)
 		}
 		if d == nil {
 			return l.stopped(ctx, "decision-log", []*plan.Signal{plan.NullReturnSignal(plan.At{Stage: "decision-log"})}, nil)
@@ -445,7 +462,7 @@ func Run(ctx context.Context, rt Runtime) (json.RawMessage, error) {
 			items = append(items, decisionItem{dec.ID, dec.Question, dec.Decision})
 			rpItems = append(rpItems, rpItem{id: dec.ID, describe: dec.Question, described: true, stopText: dec.Question, referent: dec.ID})
 		}
-		t = c.tierFor("planning")
+		t := c.tierFor("planning")
 		rp, _, err := call[replanResult](ctx, l.orch, decisionReplanPrompt(c, l.ref(), items),
 			lsfrt.Opts{Label: "decision-replan", Model: t.Model, Effort: t.Effort, Phase: "Load", Schema: replanSchema})
 		if err != nil {

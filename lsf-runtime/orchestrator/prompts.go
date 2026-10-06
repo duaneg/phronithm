@@ -75,15 +75,6 @@ func header(c *runCtx, p planRef) string {
 // is not there.
 const entrySemantics = "The entry's Scope line declares the files this unit writes that another unit in flight might also write; the scheduler reads it for overlap. It does not limit what the work may edit. A file the work needs to change outside the Scope line is changed, and reported as such where a stage asks for it — never treated as a question. A clause of the entry or of the architecture document that admits more than one reading, or names something that does not exist as named (a file, a test, a function), is read the plainest way consistent with the code; the unit plan records the reading and later stages hold to it."
 
-// copyPrompt is the load stage: the plan block, and the decision log's.
-func copyPrompt(c *runCtx, sha string) string {
-	decisions := "There is no decision log; return an empty string in `decisionsBlock`."
-	if c.decisionLogSha != "" {
-		decisions = "Run `git show " + c.decisionLogSha + ":" + c.decisionLogPath + "` and return its ```yaml lsf-decisions fenced block the same way in `decisionsBlock`."
-	}
-	return header(c, planRef{c.planPath, sha}) + "\n\nCopy stage. Run `git show " + sha + ":" + c.planPath + "` and return, in `planBlock`, its ```yaml lsf-plan fenced block verbatim: from the opening fence line to the closing fence line inclusive, every character unchanged. A block with no closing fence is returned as it stands, to the end of the file, without adding one; the script's parser reports it. " + decisions + " Also return the branch the main checkout is on (`git rev-parse --abbrev-ref HEAD`) and the commit SHA of " + c.architectureDoc + " on " + c.integrationBranch + " (`git rev-list -1 " + c.integrationBranch + " -- " + c.architectureDoc + "`).\n\nDo not read, assess, or summarise the prose. Do not correct, reformat, or complete anything in the blocks; do not add units, edges, or gates. This stage copies; the script parses and checks the blocks itself. " + pauseClause(c) + "\n" + returnFields
-}
-
 // longGates: a gate past the Bash tool's limit moves to the background, and
 // an agent that ends its turn waiting returns with the gate unrun
 // (postmortem §D). The status file sits under the git directory, outside
@@ -224,14 +215,6 @@ func worktree(base string) string {
 // so the commands are stable across a wave.
 func unitBlock(p planRef, u *plan.Unit) string {
 	return "Work unit: " + u.ID + " (type: " + u.Type + ")\nUnit entry: the `### " + u.ID + "` section under `## Work Units` in " + p.path + " @ " + p.sha + ". Read it first, with this command verbatim, and take it as requirement text:\n`git show " + p.sha + ":" + p.path + " | sed -n '/^### " + u.ID + "$/,/^##/p'`\nStanding obligations naming the unit, with this command:\n`git show " + p.sha + ":" + p.path + " | sed -n '/^## Standing Obligations/,/^## /p' | grep -n '" + u.ID + "'`\nDo not read the rest of the plan; the entry and the obligations are what this stage needs from it. " + entrySemantics
-}
-
-func decisionLogPrompt(c *runCtx, decisions []decision) string {
-	ids := []string{}
-	for _, d := range decisions {
-		ids = append(ids, d.ID)
-	}
-	return header(c, planRef{c.planPath, c.planSha}) + "\n\nAppend the following requester decisions to " + c.decisionLogPath + " and commit on " + c.integrationBranch + ". The file holds one ```yaml lsf-decisions fenced block; each decision is one entry in its `decisions` sequence with `id`, `date` (today, `date -I`), `question`, `decision`, and `clears` (a flow sequence of `unit/gate` names; omit the key when empty). The entries go inside the fenced block as the last items of the `decisions` sequence, before the closing ``` line, which stays the file's last fenced line; after writing, confirm with `tail -n 3 " + c.decisionLogPath + "` that the closing fence is present. Quote any scalar containing `: `, ` #`, or leading punctuation with double quotes. Nothing else in the block: no comments, anchors, or multi-line scalars. If the file does not exist, create it as:\n\n# Decisions: " + c.name + "\n\n```yaml lsf-decisions\ndecisions:\n  - id: <id>\n    date: <YYYY-MM-DD>\n    question: <question>\n    decision: <decision>\n    clears: [<unit>/<gate>]\n```\n\nDecisions to append:\n" + jsonIndent(decisions) + "\n\n" + ownFilesOnly(c.decisionLogPath) + " " + commitMessage("docs("+c.name+"): append decision(s) "+strings.Join(ids, ", ")) + " Return the file path and the " + shortSha + ".\n" + returnFields
 }
 
 func unitPlanPrompt(c *runCtx, p planRef, u *plan.Unit) string {

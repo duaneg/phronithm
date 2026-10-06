@@ -171,6 +171,11 @@ func (rt *Runtime) Step(ctx context.Context, label string, input []byte, fn func
 	}
 	if err != nil {
 		rt.event("step-failed", map[string]any{"label": label, "error": err.Error()})
+		if s := rt.stopped(); s != nil {
+			// A stop that ended fn (a signal reaching its git) is the stop,
+			// not the step's own failure.
+			return nil, s
+		}
 		return nil, err
 	}
 	if err := rt.writeRecord(key, record{Label: label, Kind: "step", Hash: hash, Ret: ret}); err != nil {

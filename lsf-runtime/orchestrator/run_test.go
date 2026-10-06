@@ -253,7 +253,7 @@ func TestReplannedShaInPrompts(t *testing.T) {
 func TestEntrySemanticsAndReturnFields(t *testing.T) {
 	s := stub(t, twoWaves(), nil, nil)
 	run(t, s)
-	for _, c := range s.Calls {
+	for _, c := range agentCalls(s) {
 		noMatch(t, c.Prompt, `assumptions|ambiguities|contradictions`, c.Label)
 		match(t, c.Prompt, "return `commits`", c.Label)
 	}
@@ -1164,9 +1164,9 @@ func TestOwnFilesOnly(t *testing.T) {
 		},
 	}), M{"decisions": []M{{"id": "d1", "question": "q", "decision": "yes"}}})
 	run(t, s)
-	committing := []string{"decision-log", "decision-replan", "merge", "replan", "ledger", "termination", "direct-edits"}
+	committing := []string{"decision-replan", "merge", "replan", "ledger", "termination", "direct-edits"}
 	seen := map[string]bool{}
-	for _, c := range s.Calls {
+	for _, c := range agentCalls(s) {
 		if !has(committing, c.Prefix) {
 			continue
 		}
@@ -1177,14 +1177,13 @@ func TestOwnFilesOnly(t *testing.T) {
 	}
 	eq(t, len(seen), len(committing), seen)
 	at := func(prefix string) string {
-		for _, c := range s.Calls {
+		for _, c := range agentCalls(s) {
 			if strings.HasPrefix(c.Label, prefix) {
 				return c.Prompt
 			}
 		}
 		return ""
 	}
-	match(t, at("decision-log"), `Commit only the files this stage wrote \(docs/plans/f-decisions\.md\)`)
 	match(t, at("ledger"), `Commit only the files this stage wrote \(docs/plans/f-signals/plan0\.md\)`)
 	match(t, at("replan"), "Commit only the files this stage wrote \\(docs/plans/f-breakdown\\.md, and docs/architecture/f\\.md if you made a `document-text` correction\\)")
 	m := at("merge")
@@ -1200,14 +1199,17 @@ func TestDecisionsFirst(t *testing.T) {
 	out := run(t, s)
 	eq(t, out.Status, "complete", out.stopKinds())
 	eqs(t, s.Labels()[:3], []string{"decision-log", "decision-replan", "ledger:w0"})
-	for _, c := range s.Calls[1:] {
+	for _, c := range agentCalls(s) {
 		match(t, c.Prompt, `Decision log: docs/plans/f-decisions\.md @ dec1`, c.Label)
+	}
+	for _, l := range filterPrefix(s.Labels(), "load") {
+		eq(t, input(t, s, l)["decisionLogSha"], any("dec1"), l)
 	}
 	rp := s.Calls[1].Prompt
 	match(t, rp, `Decomposition plan: docs/plans/f-breakdown\.md @ plan0`)
 	match(t, rp, `(?s)"id": "d1".*"decision": "yes"`)
 	noMatch(t, rp, `"clears"`)
-	match(t, s.Prompt("load"), `git show decided1:docs/plans/f-breakdown\.md`, "loads the re-planned SHA")
+	eq(t, input(t, s, "load")["sha"], any("decided1"), "loads the re-planned SHA")
 	eq(t, out.LedgerPath, "docs/plans/f-signals/plan0.md", "the ledger is named by the SHA the launch started from, not the decision re-plan's")
 	match(t, s.Calls[2].Prompt, `mkdir -p \$\(dirname docs/plans/f-signals/plan0\.md\)`)
 	match(t, rp, `### <date, date -I> — decisions d1`)
@@ -1313,7 +1315,7 @@ func TestRoleTiers(t *testing.T) {
 	s := stub(t, twoWaves(), discovering(), nil)
 	run(t, s)
 	seen := map[string]bool{}
-	for _, c := range s.Calls {
+	for _, c := range agentCalls(s) {
 		role := c.Prefix
 		seen[role] = true
 		got := c.Opts.Model + "/" + c.Opts.Effort
@@ -1328,7 +1330,7 @@ func TestRoleTiers(t *testing.T) {
 		}
 		eq(t, got, want, c.Label)
 	}
-	for _, r := range []string{"critique-code", "plan", "implement", "merge", "review-gate", "replan", "load", "obligations"} {
+	for _, r := range []string{"critique-code", "plan", "implement", "merge", "review-gate", "replan", "obligations"} {
 		if !seen[r] {
 			t.Error(r)
 		}
@@ -1383,7 +1385,6 @@ func TestLoadBadBlock(t *testing.T) {
 	if hasPrefix(s.Labels(), "plan:") {
 		t.Error(s.Labels())
 	}
-	match(t, s.Calls[0].Prompt, `This stage copies; the script parses`)
 }
 
 // js: load: a decision log clears an organisational gate; clearing an environment gate is a stop
@@ -1400,7 +1401,8 @@ func TestLoadDecisionClears(t *testing.T) {
 	ok := stub(t, gated(), Hs{"load": loadWith(M{"decisionsBlock": log("A/legal")})}, M{"decisionLogSha": "dec0"})
 	outOk := run(t, ok)
 	eq(t, outOk.Status, "complete", outOk.stopKinds())
-	match(t, ok.Calls[0].Prompt, `git show dec0:docs/plans/f-decisions\.md`)
+	eq(t, input(t, ok, "load")["decisionLogSha"], any("dec0"))
+	eq(t, input(t, ok, "load")["decisionLogPath"], any("docs/plans/f-decisions.md"))
 
 	outBad := run(t, stub(t, gated(), Hs{"load": loadWith(M{"decisionsBlock": log("A/node")})}, M{"decisionLogSha": "dec0"}))
 	eq(t, outBad.Status, "stopped")
@@ -1416,7 +1418,7 @@ func TestReloadsFromSha(t *testing.T) {
 	s := stub(t, twoWaves(), discovering(), nil)
 	run(t, s)
 	eqs(t, filterPrefix(s.Labels(), "load"), []string{"load", "load:w1", "load:w2", "load:termination"})
-	match(t, s.Prompt("load:w1"), `git show replan\d:docs/plans/f-breakdown\.md`)
+	match(t, input(t, s, "load:w1")["sha"].(string), `^replan\d$`)
 	match(t, s.Prompt("plan:B"), `@ replan\d`)
 }
 
@@ -1426,12 +1428,10 @@ func TestAppendStagePrompts(t *testing.T) {
 		M{"decisions": []M{{"id": "d1", "question": "q", "decision": "yes"}}})
 	run(t, s)
 	match(t, s.Prompt("ledger:w1"), `subject line "docs\(f\): append wave 1 signal ledger entries", then a blank line, then any trailer lines`)
-	log := s.Prompt("decision-log")
-	match(t, log, "before the closing ``` line")
-	match(t, log, `tail -n 3 docs/plans/f-decisions\.md`)
-	match(t, log, `subject line "docs\(f\): append decision\(s\) d1"`)
-	match(t, s.Prompt("load"), `no closing fence is returned as it stands[^.]*without adding one`)
-	for _, c := range s.Calls {
+	log := input(t, s, "decision-log")
+	eq(t, log["subject"], any("docs(f): append decision(s) d1"))
+	eq(t, log["path"], any("docs/plans/f-decisions.md"))
+	for _, c := range agentCalls(s) {
 		match(t, c.Prompt, `git rev-parse --short HEAD`, c.Label)
 	}
 }
@@ -1518,7 +1518,7 @@ func TestPauseAtLoad(t *testing.T) {
 	if hasPrefix(s.Labels(), "plan:") || hasPrefix(s.Labels(), "implement:") {
 		t.Error(s.Labels())
 	}
-	match(t, s.Prompt("load"), `refs/custom/pause`)
+	eq(t, input(t, s, "load")["pauseRef"], any("refs/custom/pause"))
 }
 
 // js: a pause ref seen by the ledger scribe on a wave with nothing to absorb pauses the run
@@ -1938,6 +1938,9 @@ func TestEveryRoleTier(t *testing.T) {
 			continue
 		}
 		want := "m-" + r + "/e-" + r
+		if c.Step {
+			want = "/" // a code step has no tier
+		}
 		eq(t, c.Opts.Model+"/"+c.Opts.Effort, want, c.Label)
 	}
 }

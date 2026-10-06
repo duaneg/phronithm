@@ -699,9 +699,12 @@ Each stage call carries a role tier (`args.tiers` overrides per role):
 critique (unit plan critique, code critique, lens review) runs opus at low
 effort; gate (the wave gate alone) runs opus at medium effort;
 planning (unit plan, re-plan, termination) runs opus at high effort;
-mechanical (plan-block copy, decision-log and ledger appends, the
-completion-report copy, worktree cleanup) runs haiku at low effort, since the
-script has already rendered what they write and the parser checks it on the
-next load; everything else — implement, merge, the direct edits the re-plan
-and termination stages return, the obligation dispositions — runs opus at
-low effort.
+mechanical (ledger appends, the completion-report copy, worktree cleanup)
+runs haiku at low effort, since the script has already rendered what they
+write and the parser checks it on the next load; everything else —
+implement, merge, the direct edits the re-plan and termination stages
+return, the obligation dispositions — runs opus at low effort. In the Go
+orchestrator the load (the plan and decision-log reads) and the
+decision-log append are code, not agent calls, and take no tier
+(`lsf-runtime/orchestrator`, D18); the JavaScript keeps them as
+mechanical-tier agents until `script-retirement`.

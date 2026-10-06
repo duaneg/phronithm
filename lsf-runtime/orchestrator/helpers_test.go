@@ -138,6 +138,27 @@ func trunc(s string) string {
 	return s
 }
 
+// agentCalls are s's agent calls, without its code steps.
+func agentCalls(s *orchtest.Stub) []Call {
+	out := []Call{}
+	for _, c := range s.Calls {
+		if !c.Step {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// input is the decoded input of the step labelled l.
+func input(t *testing.T, s *orchtest.Stub, l string) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(s.Input(l), &m); err != nil {
+		t.Fatalf("%s: input: %v", l, err)
+	}
+	return m
+}
+
 func has(labels []string, l string) bool { return slices.Contains(labels, l) }
 
 func hasPrefix(labels []string, p string) bool {

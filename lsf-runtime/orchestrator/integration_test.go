@@ -126,7 +126,12 @@ func TestOnRuntimeLabelsUniqueAndReplay(t *testing.T) {
 		t.Fatalf("the scenario does not repeat a ledger label: %v", s.Labels())
 	}
 	table := map[string]json.RawMessage{}
+	steps := map[string]json.RawMessage{}
 	for _, c := range s.Calls {
+		if c.Step {
+			steps[c.Label] = s.Returns[c.Label]
+			continue
+		}
 		sum := sha256.Sum256([]byte(c.Prompt))
 		k := hex.EncodeToString(sum[:])
 		if r := s.Returns[c.Label]; len(r) == 0 || string(r) == "null" {
@@ -168,7 +173,9 @@ func TestOnRuntimeLabelsUniqueAndReplay(t *testing.T) {
 	}
 	launch := func() lsfrt.Summary {
 		t.Helper()
-		sum, err := lsfrt.Run(context.Background(), cfg, Body)
+		sum, err := lsfrt.Run(context.Background(), cfg, func(ctx context.Context, rt *lsfrt.Runtime) (json.RawMessage, error) {
+			return Run(ctx, scriptedSteps{rt, steps})
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -187,8 +194,9 @@ func TestOnRuntimeLabelsUniqueAndReplay(t *testing.T) {
 		t.Fatalf("stop reason %s: %s %s", first.StopReason, first.Detail, first.Error)
 	}
 	sameOutcome(first.Outcome)
-	eq(t, first.Calls, len(s.Calls), "one spawn per label: no retries")
-	eq(t, calls(t, callDir), len(s.Calls))
+	nCalls := len(agentCalls(s))
+	eq(t, first.Calls, nCalls, "one spawn per label: no retries")
+	eq(t, calls(t, callDir), nCalls)
 	for _, f := range []string{"log.txt", "telemetry.jsonl"} {
 		b, err := os.ReadFile(filepath.Join(cfg.StateDir, f))
 		if err != nil {
@@ -200,7 +208,7 @@ func TestOnRuntimeLabelsUniqueAndReplay(t *testing.T) {
 	}
 
 	records, _ := filepath.Glob(filepath.Join(cfg.StateDir, "journal", "*.json"))
-	eq(t, len(records), len(s.Calls), "one journal record per label")
+	eq(t, len(records), len(s.Calls), "one journal record per call and step")
 	for _, key := range []string{"ledger_w2-", "ledger_w2_2-"} {
 		if m, _ := filepath.Glob(filepath.Join(cfg.StateDir, "journal", key+"*.json")); len(m) != 1 {
 			t.Errorf("journal record %s*: %v", key, m)
@@ -212,8 +220,26 @@ func TestOnRuntimeLabelsUniqueAndReplay(t *testing.T) {
 	again := launch()
 	sameOutcome(again.Outcome)
 	eq(t, again.Calls, 0, "the relaunch replays every call")
-	eq(t, calls(t, callDir), len(s.Calls), "no spawn on the relaunch")
+	eq(t, calls(t, callDir), nCalls, "no spawn on the relaunch")
 	all := events(t, cfg.StateDir)
-	eq(t, all["cache-hit"]-firstEvents["cache-hit"], len(s.Calls), "every call replayed from the journal")
+	eq(t, all["cache-hit"]-firstEvents["cache-hit"], nCalls, "every call replayed from the journal")
+	eq(t, all["step-replayed"]-firstEvents["step-replayed"], len(steps), "every step replayed from the journal")
+	eq(t, firstEvents["step"], len(steps), "every step ran on the first launch")
 	eq(t, all["cache-stale"], 0)
+}
+
+// scriptedSteps is the real runtime with each code step's value scripted:
+// the step is journaled and replayed by rt.Step, but its fn returns the
+// stub run's value instead of touching git.
+type scriptedSteps struct {
+	*lsfrt.Runtime
+	values map[string]json.RawMessage
+}
+
+func (r scriptedSteps) Step(ctx context.Context, label string, input []byte, fn func(context.Context, bool) (json.RawMessage, error)) (json.RawMessage, error) {
+	v, ok := r.values[label]
+	if !ok {
+		return nil, fmt.Errorf("no scripted value for step %s", label)
+	}
+	return r.Runtime.Step(ctx, label, input, func(context.Context, bool) (json.RawMessage, error) { return v, nil })
 }

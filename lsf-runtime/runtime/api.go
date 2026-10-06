@@ -50,7 +50,7 @@ func (e *StopError) Error() string {
 // IsStop reports whether err's chain holds a StopError, and its reason.
 func IsStop(err error) (StopReason, bool) {
 	var s *StopError
-	if errors.As(err, &s) {
+	if errors.As(err, &s) && s != nil {
 		return s.Reason, true
 	}
 	return "", false
@@ -61,7 +61,7 @@ type CallResult struct {
 	Value    json.RawMessage
 	Class    string   // class of the last attempt
 	Flags    []string // e.g. "skill-not-loaded"
-	Denials  []string // permission_denials, "tool: input" truncated
+	Denials  []string // the last attempt's permission_denials, "tool: input" truncated
 	Attempts int      // spawns for this call this launch; 0 when replayed
 	CostUSD  float64
 	Replayed bool

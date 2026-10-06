@@ -13,6 +13,11 @@
 // interleaved and the stub runs them in turn, but each lane's order is
 // fixed in both.
 //
+// Load and the decision log are code steps in Go (orchestrator D18) and
+// agent calls in the JS: the JS calls are answered from the Go step's
+// recorded value and left out of the comparison; the coverage checks count
+// the Go steps.
+//
 // Node runs under precise coverage. The check fails unless every named
 // function in implement.js ran and every block that did not is listed in
 // unreachable, with the reason run() cannot reach it.
@@ -250,8 +255,17 @@ func normOpts(raw json.RawMessage) (string, error) {
 	return string(b), err
 }
 
+// codeStep reports whether a JS call is one the Go orchestrator makes as a
+// code step.
+func codeStep(label string) bool {
+	base, _, _ := strings.Cut(label, "#")
+	return base == "load" || strings.HasPrefix(base, "load:") || base == "decision-log"
+}
+
 // compare returns the differences between the two sides of one scenario.
+// The JS calls Go makes as code steps are dropped first.
 func compare(g result, j jsResult) []string {
+	j.Calls = slices.DeleteFunc(slices.Clone(j.Calls), func(c call) bool { return codeStep(c.Label) })
 	var diffs []string
 	add := func(f string, a ...any) { diffs = append(diffs, fmt.Sprintf(f, a...)) }
 	if g.Error != j.Error {
@@ -358,7 +372,7 @@ var unreachable = map[[2]string]string{
 	{"critiqueLoop", "?? []"}:                                     "both onFix callbacks return an array",
 	{"runUnit", "?? LENSES_BY_TYPE.feature"}:                      "validatePlan rejects an unknown unit type",
 	{"round", ": []"}:                                             "the design branch builds no lens reviewer",
-	{"(anonymous)", "?? null"}:                                    "a reviewer slot is null only on a JS exception in agent(); the Go runtime's Agent errors are stops",
+	{"(anonymous)", "?? null"}:                                    "a reviewer slot is null only on a JS exception in agent(); the Go runtime's Call errors are stops",
 	{"onFix", "?? []"}:                                            "an implement return without gates stops before review (gate-not-run)",
 	{"run", "?? {}"}:                                              "every runtime supplies args; Go reads nil args as {} (runtime_test.go)",
 	{"(anonymous)", "?? { unit: u.id, type: u.type, branch: null, completionPath: nul"}: "a unit is null only on a JS exception in runUnit; Go's analogue, a panic, is TestPanickingUnitIsUnitNull",

@@ -50,7 +50,7 @@
 //     these lists, so under the runtime the case does not reach either.
 //   - D15. Exceptions. A JS exception in agent() or in a unit's stages
 //     becomes null through parallel's catch, or rejects run(). In Go,
-//     Agent's only error is a runtime stop, which ends Run at once; a panic
+//     Call's only error is a runtime stop, which ends Run at once; a panic
 //     in a unit's stages is that unit's null (Parallel recovers it,
 //     TestPanickingUnitIsUnitNull), and a panic elsewhere ends the launch
 //     crashed.

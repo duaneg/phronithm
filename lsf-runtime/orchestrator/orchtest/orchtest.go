@@ -87,7 +87,7 @@ type Stub struct {
 	mu       sync.Mutex
 	Calls    []Call
 	Logs     []string
-	Returns  map[string]json.RawMessage // by final label, calls and steps; null included
+	Returns  map[string]json.RawMessage // by final label, calls and steps; null included; none for a handler error or a harness failure
 	Failures []string                   // harness failures: repeated label, missing handler, unexpected panic
 }
 

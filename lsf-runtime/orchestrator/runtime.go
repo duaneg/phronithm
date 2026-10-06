@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/duaneg/phronithm/lsf-runtime/plan"
 	lsfrt "github.com/duaneg/phronithm/lsf-runtime/runtime"
@@ -39,8 +40,22 @@ type orch struct {
 	ctx  *runCtx
 	seed map[string]json.RawMessage
 
+	// The code stages' repository: git is nil when the runtime has none.
+	git   gitRunner
+	repo  string
+	today func() string // the decision log's entry date
+
 	mu   sync.Mutex
-	uses map[string]int // real calls per label this launch
+	uses map[string]int // real calls and steps per label this launch
+}
+
+// newOrch is a launch's orch over rt.
+func newOrch(rt Runtime, c *runCtx, seed map[string]json.RawMessage) *orch {
+	o := &orch{rt: rt, ctx: c, seed: seed, uses: map[string]int{}, today: func() string { return time.Now().Format(time.DateOnly) }}
+	if repo := rt.Repo(); repo != "" {
+		o.git, o.repo = execGit{}, repo
+	}
+	return o
 }
 
 // agent is the orchestrator's agent call (D10). A seeded label stands in
@@ -105,6 +120,9 @@ func (o *orch) parallelAgents(ctx context.Context, reqs []agentReq) ([]agentRes,
 	return out, nil
 }
 
+// stageFn is a code step's body; label is the step's final label.
+type stageFn func(ctx context.Context, label string, interrupted bool) (json.RawMessage, error)
+
 // stageErr is a code step's failure: the reason its stop states.
 type stageErr struct{ reason string }
 
@@ -116,7 +134,7 @@ func (e *stageErr) Error() string { return e.reason }
 // label counter is the agent calls'. An error is a *lsfrt.StopError, or a
 // *stageErr for the stage's own failure; an error while ctx is done is the
 // cancellation reaching git, so a stop.
-func (o *orch) runStep(ctx context.Context, label string, input any, fn func(ctx context.Context, interrupted bool) (json.RawMessage, error)) (json.RawMessage, string, error) {
+func (o *orch) runStep(ctx context.Context, label string, input any, fn stageFn) (json.RawMessage, string, error) {
 	if _, ok := o.seed[label]; ok {
 		o.rt.Log(label + ": args.seed ignored; code stage")
 	}
@@ -125,7 +143,9 @@ func (o *orch) runStep(ctx context.Context, label string, input any, fn func(ctx
 	if err != nil {
 		return nil, label, &stageErr{fmt.Sprintf("input: %v", err)}
 	}
-	raw, err := o.rt.Step(ctx, label, in, fn)
+	raw, err := o.rt.Step(ctx, label, in, func(ctx context.Context, interrupted bool) (json.RawMessage, error) {
+		return fn(ctx, label, interrupted)
+	})
 	switch {
 	case err == nil:
 		return raw, label, nil
@@ -134,7 +154,12 @@ func (o *orch) runStep(ctx context.Context, label string, input any, fn func(ctx
 	case ctx.Err() != nil:
 		return nil, label, &lsfrt.StopError{Reason: lsfrt.StopCancelled}
 	default:
-		return nil, label, &stageErr{err.Error()}
+		reason := err.Error()
+		if reason == "" {
+			reason = "stage failed"
+		}
+		o.rt.Log(label + ": " + reason)
+		return nil, label, &stageErr{reason}
 	}
 }
 
@@ -200,7 +225,7 @@ func call[T any](ctx context.Context, o *orch, prompt string, opts lsfrt.Opts) (
 
 // step is runStep plus decode. fault is the stage's failure reason, "" when
 // it ran; err is a stop.
-func step[T any](ctx context.Context, o *orch, label string, input any, fn func(ctx context.Context, interrupted bool) (json.RawMessage, error)) (r *ret[T], fault string, err error) {
+func step[T any](ctx context.Context, o *orch, label string, input any, fn stageFn) (r *ret[T], fault string, err error) {
 	raw, final, err := o.runStep(ctx, label, input, fn)
 	var se *stageErr
 	if errors.As(err, &se) {

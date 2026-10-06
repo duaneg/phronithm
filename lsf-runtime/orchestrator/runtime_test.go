@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -13,7 +14,7 @@ import (
 	lsfrt "github.com/duaneg/phronithm/lsf-runtime/runtime"
 )
 
-func newOrch(t *testing.T, s *orchtest.Stub, seed map[string]json.RawMessage) *orch {
+func stubOrch(t *testing.T, s *orchtest.Stub, seed map[string]json.RawMessage) *orch {
 	t.Helper()
 	a, err := parseArgs(s.Args())
 	if err != nil {
@@ -23,7 +24,7 @@ func newOrch(t *testing.T, s *orchtest.Stub, seed map[string]json.RawMessage) *o
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &orch{rt: s, ctx: c, seed: seed, uses: map[string]int{}}
+	return newOrch(s, c, seed)
 }
 
 func TestRequiredArgsInJSOrder(t *testing.T) {
@@ -54,7 +55,7 @@ func TestRequiredArgsInJSOrder(t *testing.T) {
 
 func TestDefaultsDeriveFromName(t *testing.T) {
 	s := orchtest.New(t, orchtest.TwoWaves(), nil, nil)
-	c := newOrch(t, s, nil).ctx
+	c := stubOrch(t, s, nil).ctx
 	want := []string{"docs/plans/f-breakdown.md", "docs/architecture/f-brief.md", "docs/plans/f-decisions.md", "docs/plans/f-signals/plan0.md", "docs/plans/f-archive.md", "refs/lsf/f/pause"}
 	got := []string{c.planPath, c.requestRecord, c.decisionLogPath, c.ledgerPath, c.archivePath, c.pauseRef}
 	if !slices.Equal(got, want) || c.maxWaves != 20 || c.maxUnitsPerWave != nil || c.architectureSha.set {
@@ -67,7 +68,7 @@ func TestDefaultsDeriveFromName(t *testing.T) {
 
 func TestTiersOverrideByRole(t *testing.T) {
 	s := orchtest.New(t, orchtest.TwoWaves(), nil, orchtest.M{"tiers": orchtest.M{"critique": orchtest.M{"model": "sonnet"}, "gate": nil}})
-	c := newOrch(t, s, nil).ctx
+	c := stubOrch(t, s, nil).ctx
 	// A role that omits effort keeps the default's on unit stages, as
 	// {...tier(default), ...tier(role)} does; alone it has none.
 	if got := c.tierFor("default").over(c.tierFor("critique")); got != (tier{"sonnet", "low"}) {
@@ -87,7 +88,7 @@ func TestTiersOverrideByRole(t *testing.T) {
 
 func TestRepeatedLabelsGetSuffixes(t *testing.T) {
 	s := orchtest.New(t, orchtest.TwoWaves(), nil, nil)
-	o := newOrch(t, s, nil)
+	o := stubOrch(t, s, nil)
 	for range 3 {
 		if _, _, err := o.agent(context.Background(), "p", lsfrt.Opts{Label: "ledger:w1"}); err != nil {
 			t.Fatal(err)
@@ -106,7 +107,7 @@ func TestSeedStandsInOnEveryUseAndDropsPauseReport(t *testing.T) {
 	seed := map[string]json.RawMessage{
 		"merge:w1": json.RawMessage(`{"result":{"planSha":"s","pauseRequested":true},"commits":[]}`),
 	}
-	o := newOrch(t, s, seed)
+	o := stubOrch(t, s, seed)
 	for range 2 {
 		cr, label, err := o.agent(context.Background(), "p", lsfrt.Opts{Label: "merge:w1"})
 		if err != nil || label != "merge:w1" {
@@ -214,7 +215,7 @@ func TestCallResultReachesCallSites(t *testing.T) {
 	}
 	s := orchtest.New(t, orchtest.TwoWaves(), Hs{"implement": flagged(orchtest.Ret(orchtest.Implemented("A", nil))), "plan": flagged(nil),
 		"critique-code": flagged(orchtest.NoFindings()), "lens-review": flagged(nil)}, nil)
-	o := newOrch(t, s, nil)
+	o := stubOrch(t, s, nil)
 	ctx := context.Background()
 	shows := func(what string, cr lsfrt.CallResult) {
 		t.Helper()
@@ -248,7 +249,7 @@ func TestCallResultReachesCallSites(t *testing.T) {
 // stays launch-unique; a seed naming a step is logged and not used.
 func TestStepSharesLabelCounterAndIgnoresSeed(t *testing.T) {
 	s := orchtest.New(t, orchtest.TwoWaves(), nil, nil)
-	o := newOrch(t, s, map[string]json.RawMessage{"ledger:w1": json.RawMessage(`{"result":{"sha":"seeded"}}`)})
+	o := stubOrch(t, s, map[string]json.RawMessage{"ledger:w1": json.RawMessage(`{"result":{"sha":"seeded"}}`)})
 	ctx := context.Background()
 	if _, _, err := o.runStep(ctx, "ledger:w2", M{"a": 1}, nil); err != nil {
 		t.Fatal(err)
@@ -272,15 +273,23 @@ func TestStepSharesLabelCounterAndIgnoresSeed(t *testing.T) {
 func TestStepErrors(t *testing.T) {
 	stop := &lsfrt.StopError{Reason: lsfrt.StopMaxCalls}
 	s := orchtest.New(t, orchtest.TwoWaves(), Hs{
-		"ledger": func(Call, *State) any { return errors.New("git: boom") },
-		"load":   func(Call, *State) any { return stop },
+		"ledger":            func(Call, *State) any { return errors.New("git: boom") },
+		"load":              func(Call, *State) any { return stop },
+		"decision-log":      func(Call, *State) any { return errors.New("") },
+		"completion-report": func(Call, *State) any { return fmt.Errorf("wrapped: %w", stop) },
 	}, nil)
-	o := newOrch(t, s, nil)
+	o := stubOrch(t, s, nil)
 	if _, fault, err := step[scribeResult](context.Background(), o, "ledger:w1", M{}, nil); err != nil || fault != "git: boom" {
 		t.Errorf("fault %q err %v", fault, err)
 	}
 	if _, fault, err := step[copyResult](context.Background(), o, "load", M{}, nil); err != stop || fault != "" {
 		t.Errorf("fault %q err %v", fault, err)
+	}
+	if _, fault, err := step[scribeResult](context.Background(), o, "decision-log", M{}, nil); err != nil || fault != "stage failed" {
+		t.Errorf("empty reason: fault %q err %v", fault, err)
+	}
+	if _, fault, err := step[completionResult](context.Background(), o, "completion-report:A", M{}, nil); !errors.Is(err, stop) || fault != "" {
+		t.Errorf("wrapped stop: fault %q err %v", fault, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

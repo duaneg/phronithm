@@ -120,15 +120,7 @@ var (
 )
 
 var (
-	decisionLogSchema = stage(object(obj{{"path", str}, {"sha", shaField}}))
-	cleanupSchema     = stage(object(obj{{"removed", integer}, {"kept", strs}}))
-
-	copySchema = stage(object(pauseField.spread(obj{
-		{"planBlock", desc(str, "The plan document's ```yaml lsf-plan fenced block, verbatim, fences included")},
-		{"decisionsBlock", desc(str, "The decision log's ```yaml lsf-decisions fenced block, verbatim, fences included; empty string when there is no decision log")},
-		{"headBranch", desc(str, "Branch the main checkout is on")},
-		{"architectureSha", desc(str, "Commit SHA of the architecture document on the integration branch")},
-	})))
+	cleanupSchema = stage(object(obj{{"removed", integer}, {"kept", strs}}))
 
 	unitPlanSchema = stage(object(commitFields.spread(obj{
 		{"path", str},
