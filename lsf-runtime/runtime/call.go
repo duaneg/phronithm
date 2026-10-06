@@ -3,11 +3,9 @@ package lsfrt
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -195,35 +193,4 @@ func (t *tailBuffer) String() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return string(t.b)
-}
-
-// children.json holds the session ids of live calls (pid 0 before Start), so
-// a later launch can terminate calls a killed launch left running.
-
-func (rt *Runtime) addChild(sessionID string) {
-	rt.childMu.Lock()
-	defer rt.childMu.Unlock()
-	rt.children[sessionID] = 0
-	rt.saveChildrenLocked()
-}
-
-func (rt *Runtime) setChildPid(sessionID string, pid int) {
-	rt.childMu.Lock()
-	defer rt.childMu.Unlock()
-	rt.children[sessionID] = pid
-	rt.saveChildrenLocked()
-}
-
-func (rt *Runtime) removeChild(sessionID string) {
-	rt.childMu.Lock()
-	defer rt.childMu.Unlock()
-	delete(rt.children, sessionID)
-	rt.saveChildrenLocked()
-}
-
-func (rt *Runtime) saveChildrenLocked() {
-	b, _ := json.Marshal(rt.children)
-	if err := writeFileAtomic(filepath.Join(rt.cfg.StateDir, "children.json"), b); err != nil {
-		rt.Log("children.json: " + err.Error())
-	}
 }

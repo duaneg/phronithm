@@ -95,7 +95,10 @@ func TestClassifySynthetic(t *testing.T) {
 			`{"type":"result","subtype":"success","is_error":false}`)}, classInvalid, time.Time{}},
 		{"401 is permanent", attempt{exitCode: 1, acc: accFromLines(
 			`{"type":"result","subtype":"success","is_error":true,"api_error_status":401}`)}, classPermanent, time.Time{}},
-		{"guard timeout", attempt{cause: errGuard, acc: accFromLines(initLine, okResult)}, classTimeout, time.Time{}},
+		{"guard timeout before a result", attempt{cause: errGuard, acc: accFromLines(initLine)}, classTimeout, time.Time{}},
+		{"guard timeout after a valid result keeps it", attempt{cause: errGuard, acc: accFromLines(initLine, okResult)}, classOK, time.Time{}},
+		{"guard timeout after an invalid result", attempt{cause: errGuard, acc: accFromLines(initLine,
+			`{"type":"result","subtype":"success","is_error":false,"structured_output":null}`)}, classTimeout, time.Time{}},
 		{"repeated signal", attempt{cause: errKilled}, classStopped, time.Time{}},
 		{"spawn error", attempt{spawnErr: errors.New("exec: not found")}, classSpawnError, time.Time{}},
 		{"bad lines are counted, not fatal", attempt{acc: accFromLines("not json", initLine, okResult)}, classOK, time.Time{}},

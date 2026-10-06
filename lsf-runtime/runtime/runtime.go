@@ -40,7 +40,7 @@ type Runtime struct {
 	cost       float64 // summed total_cost_usd this launch
 	limitUntil time.Time
 
-	wtMu sync.Mutex // serialises git worktree operations
+	wtSem chan struct{} // one slot: serialises git worktree operations
 
 	seenMu sync.Mutex
 	seen   map[string]string // journal key → input hash, this launch
@@ -75,6 +75,7 @@ func Run(ctx context.Context, cfg Config, body func(ctx context.Context, rt *Run
 		sem:      make(chan struct{}, cfg.Concurrency),
 		stopCh:   make(chan struct{}),
 		killCh:   make(chan struct{}),
+		wtSem:    make(chan struct{}, 1),
 	}
 	rt.launchID = fmt.Sprintf("%s-%d", rt.started.UTC().Format("20060102T150405"), os.Getpid())
 	open := func(name string) (*os.File, error) {
@@ -137,10 +138,10 @@ func (rt *Runtime) summarise(ctx context.Context, outcome json.RawMessage, bodyE
 		s.StopReason, s.Detail = stop.Reason, stop.Detail
 	case errors.As(bodyErr, &bodyStop):
 		s.StopReason, s.Detail = bodyStop.Reason, bodyStop.Detail
-	case ctx.Err() != nil:
-		s.StopReason = StopCancelled
 	case panicked != nil:
 		s.StopReason, s.Error = StopCrashed, fmt.Sprintf("panic: %v", panicked)
+	case ctx.Err() != nil:
+		s.StopReason = StopCancelled
 	case bodyErr != nil:
 		s.StopReason, s.Error = StopCrashed, bodyErr.Error()
 	default:

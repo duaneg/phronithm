@@ -210,17 +210,21 @@ The prompt goes on stdin. Every call passes `-p --output-format stream-json --ve
 Order inside a call:
 
 1. The journal is checked; a replay returns at once and does not count against the caps.
-2. The stop is checked.
+2. The stop is checked, and so are the schema (a JSON object) and an isolated call's `args`.
 3. The dry-run check runs.
-4. The worktree is created, if the call is isolated.
-5. Each attempt: wait out the session-limit gate, take a concurrency slot, then admit or stop in one critical section (stop, parent context, gate again, caps), then spawn.
+4. Each attempt waits out the session-limit gate, then takes a concurrency slot and holds it while it:
+   - admits or stops in one critical section (stop, parent context, gate again, caps);
+   - creates the worktree, at the first admitted attempt of an isolated call, so a refused call leaves none;
+   - spawns and classifies.
+
+   A session limit moves the gate before the slot frees.
 
 Classification reads the `result` event first, because the CLI can recover from a mid-stream error and still return a valid result. First match wins:
 
 | Class | When | Then |
 |---|---|---|
 | `stopped` | a repeated signal cancelled the attempt | the stop |
-| `timeout` | the guard timeout fired | null |
+| `timeout` | the guard timeout fired before a valid result; one after it keeps the value, flagged `guard-killed-after-result` | null |
 | `spawn-error` | the process did not start | null |
 | `ok` | valid `structured_output`; skill loaded or none required | the value |
 | `skill-missing` | as `ok`, but no skill load | retry; on the second miss, the value, flagged `skill-not-loaded` |
@@ -248,8 +252,8 @@ Classification reads the `result` event first, because the CLI can recover from 
 | `status.json`, `summary.json`, `log.txt`, `telemetry.jsonl` | launch state, the `stop_reason`, the log, one event per line |
 
 - **Keys.** `<key>` is the label made filename-safe plus 8 hex digits of its hash. Labels must be unique per call: the journal keeps one record per label, and a label reused with other inputs in one launch is logged `label-reused`.
-- **Call records.** A call's hash covers the prompt (before the skill prefix), the schema, the model and the effort. Role and permissions are excluded, so changing them does not re-run completed work. A null return is not recorded, so a resume retries it.
-- **Step records.** A step writes an intent, runs, records its return (null included) and removes the intent. A step that errors keeps its intent, so the next launch reruns it with `interrupted=true` for its own effect check.
+- **Call records.** A call's hash covers the prompt, the skill it is sent as, the schema, the model, the effort and the isolation. Role and permissions are excluded, so changing them does not re-run completed work. A null return is not recorded, so a resume retries it. A call with the same label and inputs is replayed within a launch as well as across launches.
+- **Step records.** A step writes an intent, runs, records its return (null included) and removes the intent. A step that errors keeps its intent, so the next run of that step, in this launch or a later one, gets `interrupted=true` for its own effect check. An unreadable record of a step stops the run with `runtime-error` rather than rerun it blind.
 - **Replays.** A replayed value is byte-identical to the live one (compacted JSON).
 - **File writes.** Records, intents, `children.json`, the status and the summary are written by temp file and rename.
 
@@ -257,9 +261,10 @@ Classification reads the `result` event first, because the CLI can recover from 
 
 - **Signals.** The first SIGINT or SIGTERM sets the sticky stop `signal-SIGINT` or `signal-SIGTERM`. In-flight attempts finish and their results are journaled. Retries, backoff and gate waits are abandoned, and every later boundary returns the stop. A second signal cancels in-flight attempts. A journal replay is still served after a stop, since it costs nothing; the stop returns at the first call that would spawn.
 - **`stop_reason` precedence.** A stop the runtime recorded wins, even if the body swallowed it. Then a `StopError` from the body, then `cancelled` (the parent context), then `crashed` (a body error or panic), then `returned`.
-- **Orphans.** At launch, every process whose arguments carry `--session-id <id>` for an id in `children.json` is a call left by a killed launch. Its group gets SIGTERM, then SIGKILL after `killGrace`. If `ps` fails, `children.json` is kept for the next launch. A torn `children.json` is reported and treated as empty.
+- **Caps** are checked at spawn. A cap that passes during a step or a backoff stops the run at the next spawn.
+- **Orphans.** At launch, every process whose arguments carry `--session-id <id>` for an id in `children.json` is a call left by a killed launch. Its group gets SIGTERM, then SIGKILL after `killGrace`; a zombie counts as gone. If `ps` fails, or a kill fails, those records are carried into this launch's `children.json` for the next launch to reap. A torn `children.json` is reported and treated as empty.
 - **Worktrees.**
-  - Creation is serialised.
+  - Creation is serialised. Each git command has a 5-minute timeout and ends on a repeated signal.
   - An existing `wt/<key>` is reused only if it is a worktree on its branch; otherwise the run stops with `runtime-error`.
   - A branch whose directory is gone is re-attached, not reset.
   - Missing `planSha` or `integrationBranch` in `args` stops the run with `runtime-error`.
@@ -279,4 +284,6 @@ Classification reads the `result` event first, because the CLI can recover from 
 - **Retries in a dirty worktree.** A retry after a worker made partial changes reruns in the same worktree.
 - **Group kill after reaping.** After the leader of a cancelled call is reaped, its pgid could in principle be reused before the group SIGKILL. Sequential pid allocation makes this need a wrapped pid space.
 - **Orphan grandchildren.** An orphan whose group leader is gone is not signalled.
+- **Descendants of a normal exit.** A call that exits normally while a descendant holds its stdout returns `killGrace` later. The descendant is not killed; what happens to processes a stage detaches is `long-running-design`'s question.
+- **Unprobed error results.** `is_error` results with subtypes such as `error_max_turns` and no listed status class as transient and are retried. No real stream of one is recorded.
 - **macOS.** `ps -A -ww`, `flock` and process groups have not been run on macOS.

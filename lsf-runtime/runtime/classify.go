@@ -52,6 +52,9 @@ type verdict struct {
 	errors   []string        // schema violations, for invalid
 	output   json.RawMessage // the valid structured_output, for ok and skill-missing
 	resetsAt time.Time       // for session-limit; zero when the stream gave none
+	// guardKilled marks an ok or skill-missing verdict whose process the
+	// guard timeout killed after its result: the work is done, the exit hung.
+	guardKilled bool
 }
 
 // classify applies design §2.5. The result event decides first: the CLI can
@@ -63,23 +66,18 @@ func classify(a *attempt, schema json.RawMessage, skill string, prefixed bool) v
 	case errors.Is(a.cause, errKilled):
 		return verdict{class: classStopped}
 	case errors.Is(a.cause, errGuard):
+		if v := classifyResult(a, schema, skill, prefixed); v.class == classOK || v.class == classSkillMissing {
+			v.guardKilled = true
+			return v
+		}
 		return verdict{class: classTimeout}
 	case a.spawnErr != nil:
 		return verdict{class: classSpawnError, errors: []string{a.spawnErr.Error()}}
 	}
-	r := a.acc.Result
-	if r != nil && !r.IsError {
-		if len(r.StructuredOutput) == 0 || string(r.StructuredOutput) == "null" {
-			return verdict{class: classInvalid, errors: []string{"no structured_output"}}
-		}
-		if errs := validateOutput(schema, r.StructuredOutput); len(errs) > 0 {
-			return verdict{class: classInvalid, errors: errs}
-		}
-		if skill != "" && !a.acc.skillLoaded(skill, prefixed) {
-			return verdict{class: classSkillMissing, output: r.StructuredOutput}
-		}
-		return verdict{class: classOK, output: r.StructuredOutput}
+	if v := classifyResult(a, schema, skill, prefixed); v.class != "" {
+		return v
 	}
+	r := a.acc.Result
 	if slices.Contains(a.acc.AssistantErrors, "rate_limit") {
 		v := verdict{class: classSessionLimit}
 		if a.acc.RejectedResetsAt > 0 {
@@ -92,4 +90,23 @@ func classify(a *attempt, schema json.RawMessage, skill string, prefixed bool) v
 		return verdict{class: classPermanent}
 	}
 	return verdict{class: classTransient}
+}
+
+// classifyResult classifies a clean result event: ok, skill-missing or
+// invalid. It returns the zero verdict when there is no clean result.
+func classifyResult(a *attempt, schema json.RawMessage, skill string, prefixed bool) verdict {
+	r := a.acc.Result
+	if r == nil || r.IsError {
+		return verdict{}
+	}
+	if len(r.StructuredOutput) == 0 || string(r.StructuredOutput) == "null" {
+		return verdict{class: classInvalid, errors: []string{"no structured_output"}}
+	}
+	if errs := validateOutput(schema, r.StructuredOutput); len(errs) > 0 {
+		return verdict{class: classInvalid, errors: errs}
+	}
+	if skill != "" && !a.acc.skillLoaded(skill, prefixed) {
+		return verdict{class: classSkillMissing, output: r.StructuredOutput}
+	}
+	return verdict{class: classOK, output: r.StructuredOutput}
 }

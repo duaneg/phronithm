@@ -34,8 +34,9 @@ func (rt *Runtime) reapOrphans() {
 	if len(recorded) > 0 {
 		procs, err := processes()
 		if err != nil {
-			rt.Log("orphan check failed, children.json kept: " + err.Error())
+			rt.Log("orphan check failed; the recorded calls are carried forward for the next launch: " + err.Error())
 			rt.event("orphan-check-failed", map[string]any{"error": err.Error()})
+			rt.carryForward(recorded)
 			return
 		}
 		for pid, args := range procs {
@@ -49,7 +50,8 @@ func (rt *Runtime) reapOrphans() {
 					continue
 				}
 				if err := killGroup(pid, rt.cfg.KillGrace.D()); err != nil {
-					rt.Log(fmt.Sprintf("orphaned call pid %d (session %s): %v", pid, session, err))
+					rt.Log(fmt.Sprintf("orphaned call pid %d (session %s), carried forward: %v", pid, session, err))
+					rt.carryForward(map[string]int{session: pid})
 					continue
 				}
 				rt.event("orphan-terminated", map[string]any{"pid": pid, "session": session})
@@ -58,10 +60,21 @@ func (rt *Runtime) reapOrphans() {
 		}
 	}
 	if !rt.cfg.DryRun {
-		if err := writeFileAtomic(path, []byte("{}")); err != nil {
-			rt.Log("children.json: " + err.Error())
-		}
+		rt.childMu.Lock()
+		rt.saveChildrenLocked()
+		rt.childMu.Unlock()
 	}
+}
+
+// carryForward keeps recorded calls in this launch's children.json, which
+// every spawn rewrites, so a later launch can still reap them.
+func (rt *Runtime) carryForward(recorded map[string]int) {
+	rt.childMu.Lock()
+	defer rt.childMu.Unlock()
+	for s, p := range recorded {
+		rt.children[s] = p
+	}
+	rt.saveChildrenLocked()
 }
 
 // processes lists live processes as pid → arguments, through POSIX ps, which
@@ -98,9 +111,50 @@ func killGroup(pid int, grace time.Duration) error {
 		return err
 	}
 	deadline := time.Now().Add(grace)
-	for time.Now().Before(deadline) && syscall.Kill(pid, 0) == nil {
+	for time.Now().Before(deadline) && running(pid) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	syscall.Kill(target, syscall.SIGKILL)
 	return nil
+}
+
+// running reports whether pid exists and is not a zombie: an orphan's parent
+// may be an init that does not reap.
+func running(pid int) bool {
+	if syscall.Kill(pid, 0) != nil {
+		return false
+	}
+	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+	return err != nil || !strings.HasPrefix(strings.TrimSpace(string(out)), "Z")
+}
+
+// children.json holds the session ids of live calls (pid 0 before Start), so
+// a later launch can terminate calls a killed launch left running.
+
+func (rt *Runtime) addChild(sessionID string) {
+	rt.childMu.Lock()
+	defer rt.childMu.Unlock()
+	rt.children[sessionID] = 0
+	rt.saveChildrenLocked()
+}
+
+func (rt *Runtime) setChildPid(sessionID string, pid int) {
+	rt.childMu.Lock()
+	defer rt.childMu.Unlock()
+	rt.children[sessionID] = pid
+	rt.saveChildrenLocked()
+}
+
+func (rt *Runtime) removeChild(sessionID string) {
+	rt.childMu.Lock()
+	defer rt.childMu.Unlock()
+	delete(rt.children, sessionID)
+	rt.saveChildrenLocked()
+}
+
+func (rt *Runtime) saveChildrenLocked() {
+	b, _ := json.Marshal(rt.children)
+	if err := writeFileAtomic(filepath.Join(rt.cfg.StateDir, "children.json"), b); err != nil {
+		rt.Log("children.json: " + err.Error())
+	}
 }

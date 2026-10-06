@@ -39,11 +39,15 @@ func journalKey(label string) string {
 	return slug + "-" + hex.EncodeToString(sum[:4])
 }
 
-// callHash identifies a call's inputs: the prompt before any skill prefix,
-// the schema, model and effort. Role and permissions are left out, so a
-// permission change does not invalidate completed work.
-func callHash(prompt string, o Opts) string {
+// callHash identifies a call's inputs: the prompt, the skill it is sent as,
+// the schema, model, effort and isolation. Role and permissions are left
+// out, so a permission change does not invalidate completed work.
+func callHash(prompt, skill string, o Opts) string {
 	h := sha256.New()
+	h.Write([]byte(skill))
+	h.Write([]byte{0})
+	h.Write([]byte(o.Isolation))
+	h.Write([]byte{0})
 	h.Write([]byte(prompt))
 	h.Write([]byte{0})
 	h.Write(o.Schema)
@@ -133,9 +137,15 @@ func (rt *Runtime) Step(ctx context.Context, label string, input []byte, fn func
 	sum := sha256.Sum256(input)
 	hash := hex.EncodeToString(sum[:])
 	rt.noteLabel(key, hash, label)
-	if r, err := rt.readRecord(key); err == nil && r.Kind == "step" && r.Hash == hash {
+	r, err := rt.readRecord(key)
+	switch {
+	case err == nil && r.Kind == "step" && r.Hash == hash:
 		rt.event("step-replayed", map[string]any{"label": label})
 		return r.Ret, nil
+	case err != nil && !errors.Is(err, fs.ErrNotExist):
+		// A completed step's unreadable record: rerunning it blind could
+		// repeat a non-idempotent effect.
+		return nil, rt.setStop(StopRuntimeError, fmt.Sprintf("step %s: journal record unreadable: %v", label, err))
 	}
 	if err := rt.boundary(ctx); err != nil {
 		return nil, err

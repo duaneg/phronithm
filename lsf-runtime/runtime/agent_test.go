@@ -281,3 +281,27 @@ func TestQueuedCallRechecksLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestGuardKillAfterResultKeepsIt(t *testing.T) {
+	cfg, stub := testConfig(t)
+	cfg.GuardTimeout = Duration(500 * time.Millisecond)
+	cfg.KillGrace = Duration(100 * time.Millisecond)
+	t.Setenv("STUB_SCRIPT", "result-then-hang")
+	res, err := call(t, cfg, vOpts)
+	if err != nil || res.Value == nil || !slices.Contains(res.Flags, "guard-killed-after-result") || stubCount(t, stub) != 1 {
+		t.Fatalf("res %+v err %v", res, err)
+	}
+	for _, pid := range stubPids(t, stub, 1) {
+		waitFor(t, 2*time.Second, "pid to die", func() bool { return !alive(pid) })
+	}
+}
+
+func TestSchemaMustBeAnObject(t *testing.T) {
+	cfg, stub := testConfig(t)
+	o := vOpts
+	o.Schema = nil
+	_, err := call(t, cfg, o)
+	if r, ok := IsStop(err); !ok || r != StopRuntimeError || stubCount(t, stub) != 0 {
+		t.Fatalf("err %v, spawns %d", err, stubCount(t, stub))
+	}
+}

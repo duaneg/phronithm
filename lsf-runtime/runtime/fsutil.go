@@ -22,6 +22,10 @@ func writeFileAtomic(path string, data []byte) error {
 			os.Remove(tmp)
 		}
 	}()
+	if err := f.Chmod(0o644); err != nil { // CreateTemp makes 0600; readers include status tools
+		f.Close()
+		return err
+	}
 	if _, err := f.Write(data); err != nil {
 		f.Close()
 		return err

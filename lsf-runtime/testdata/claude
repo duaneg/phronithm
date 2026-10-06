@@ -13,7 +13,7 @@
 #
 # Modes: ok | cost:<usd> | nullout | invalid | slow:<secs> | transient |
 #        session | session-noreset | hang | hang-ignore-term |
-#        orphan-ignore-term | fixture:<name> (cats streams/<name>.jsonl) |
+#        orphan-ignore-term | result-then-hang | fixture:<name> (cats streams/<name>.jsonl) |
 #        file:<path> (cats a stream file)
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -92,6 +92,7 @@ case "$mode" in
              fi
              echo '{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"total_cost_usd":0}'; code=1 ;;
   hang)               hang default default ;;
+  result-then-hang)   result_ok '{"verdict":"pass","n":3}'; hang default default ;;
   hang-ignore-term)   hang ignore ignore ;;
   orphan-ignore-term) hang default ignore ;;
   fixture:*) cat "$here/streams/${mode#fixture:}.jsonl" ;;

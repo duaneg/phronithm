@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // cwdFor is a call's working directory: the repo, or for isolation
@@ -23,38 +24,67 @@ func (rt *Runtime) cwdFor(ctx context.Context, o Opts, key string) (string, erro
 		return "", err
 	}
 
-	// Concurrent `git worktree add` calls contend on git's locks.
-	rt.wtMu.Lock()
-	defer rt.wtMu.Unlock()
-	if err := rt.boundary(ctx); err != nil { // a stop while queued here
+	// Concurrent `git worktree add` calls contend on git's locks, so worktree
+	// work is serialised; the wait yields to a stop.
+	select {
+	case rt.wtSem <- struct{}{}:
+	case <-rt.stopCh:
+		return "", rt.stopErr()
+	case <-ctx.Done():
+		return "", &StopError{Reason: StopCancelled}
+	}
+	defer func() { <-rt.wtSem }()
+	if err := rt.boundary(ctx); err != nil {
 		return "", err
 	}
+	gctx, cancel := rt.gitContext(ctx)
+	defer cancel()
 	path := filepath.Join(rt.cfg.StateDir, "wt", key)
 	branch := "lsf/" + args.PlanSha[:8] + "/" + refSafe(key)
 	if fi, err := os.Stat(path); err == nil && fi.IsDir() {
 		// Reuse only a worktree of this branch: a directory left by a crash
 		// mid-add, or one whose metadata was pruned, is not one.
-		top, err1 := gitStdout(path, "rev-parse", "--show-toplevel")
-		head, err2 := gitStdout(path, "symbolic-ref", "--short", "HEAD")
-		real, _ := filepath.EvalSymlinks(path)
-		if err1 != nil || err2 != nil || strings.TrimSpace(string(top)) != real || strings.TrimSpace(string(head)) != branch {
+		top, err1 := gitStdout(gctx, path, "rev-parse", "--show-toplevel")
+		head, err2 := gitStdout(gctx, path, "symbolic-ref", "--short", "HEAD")
+		resolved, _ := filepath.EvalSymlinks(path)
+		if err1 != nil || err2 != nil || strings.TrimSpace(string(top)) != resolved || strings.TrimSpace(string(head)) != branch {
 			return "", rt.setStop(StopRuntimeError, fmt.Sprintf("%s: %s exists but is not a worktree on %s; remove it and relaunch", o.Label, path, branch))
 		}
 		return path, nil
 	}
-	var out []byte
-	if gitRun(rt.cfg.Repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch) == nil {
+	add := []string{"worktree", "add", "-b", branch, path, args.IntegrationBranch}
+	if gitRun(gctx, rt.cfg.Repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch) == nil {
 		// The branch outlived its worktree directory: keep its commits.
-		gitRun(rt.cfg.Repo, "worktree", "prune")
-		out, err = gitOut(rt.cfg.Repo, "worktree", "add", path, branch)
-	} else {
-		out, err = gitOut(rt.cfg.Repo, "worktree", "add", "-b", branch, path, args.IntegrationBranch)
+		add = []string{"worktree", "add", path, branch}
+	}
+	out, err := gitOut(gctx, rt.cfg.Repo, add...)
+	if err != nil && strings.Contains(string(out), "already registered") {
+		// A deleted worktree directory is still registered; prune and retry.
+		gitRun(gctx, rt.cfg.Repo, "worktree", "prune")
+		out, err = gitOut(gctx, rt.cfg.Repo, add...)
 	}
 	if err != nil {
-		return "", rt.setStop(StopRuntimeError, fmt.Sprintf("%s: git worktree add: %v: %s", o.Label, err, strings.TrimSpace(string(out))))
+		return "", rt.setStop(StopRuntimeError, fmt.Sprintf("%s: git %s: %v: %s", o.Label, strings.Join(add[:2], " "), err, strings.TrimSpace(string(out))))
 	}
 	rt.event("worktree", map[string]any{"label": o.Label, "path": path, "branch": branch})
 	return path, nil
+}
+
+// gitTimeout bounds one worktree git command; a hung git (a stale lock, a
+// slow hook) must not hold the run.
+const gitTimeout = 5 * time.Minute
+
+// gitContext ends at gitTimeout, at a repeated signal, or with ctx.
+func (rt *Runtime) gitContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	gctx, cancel := context.WithTimeout(ctx, gitTimeout)
+	go func() {
+		select {
+		case <-rt.killCh:
+			cancel()
+		case <-gctx.Done():
+		}
+	}()
+	return gctx, cancel
 }
 
 type worktreeArgs struct {
@@ -74,28 +104,31 @@ func (rt *Runtime) isolationArgs(o Opts) (worktreeArgs, error) {
 			return args, rt.setStop(StopRuntimeError, fmt.Sprintf("%s: args: %v", o.Label, err))
 		}
 	}
-	if len(args.PlanSha) < 8 || args.IntegrationBranch == "" || rt.cfg.Repo == "" {
+	if len(args.PlanSha) < 8 || args.IntegrationBranch == "" || strings.HasPrefix(args.IntegrationBranch, "-") || rt.cfg.Repo == "" {
 		return args, rt.setStop(StopRuntimeError, fmt.Sprintf("%s: a worktree needs repo, args.planSha (8+ characters) and args.integrationBranch", o.Label))
 	}
 	return args, nil
 }
 
 // gitStdout is a git command's stdout alone, so warnings cannot pollute it.
-func gitStdout(dir string, args ...string) ([]byte, error) {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	return cmd.Output()
+func gitStdout(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	return gitCmd(ctx, dir, args...).Output()
 }
 
-func gitOut(dir string, args ...string) ([]byte, error) {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	return cmd.CombinedOutput()
+func gitOut(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	return gitCmd(ctx, dir, args...).CombinedOutput()
 }
 
-func gitRun(dir string, args ...string) error {
-	_, err := gitOut(dir, args...)
+func gitRun(ctx context.Context, dir string, args ...string) error {
+	_, err := gitOut(ctx, dir, args...)
 	return err
+}
+
+func gitCmd(ctx context.Context, dir string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	return cmd
 }
 
 // refSafe makes a journal key a valid git ref component: no "..", no leading

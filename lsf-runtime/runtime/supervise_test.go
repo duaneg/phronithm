@@ -426,3 +426,64 @@ func killStubs(stub string) {
 		}
 	}
 }
+
+// orphanLaunch leaves three calls of the given stub mode running from a
+// SIGKILLed launch and returns their pids (leaders and grandchildren).
+func orphanLaunch(t *testing.T, cfg Config, stub, mode string) []int {
+	t.Helper()
+	t.Setenv("STUB_SCRIPT", mode)
+	cmd := startHelper(t, cfg, "three-hangs")
+	waitFor(t, 5*time.Second, "three calls", func() bool {
+		for n := 1; n <= 3; n++ {
+			b, _ := os.ReadFile(filepath.Join(stub, "pids."+strconv.Itoa(n)))
+			if len(strings.Fields(string(b))) != 2 {
+				return false
+			}
+		}
+		return len(liveChildren(t, cfg)) == 3
+	})
+	cmd.Process.Signal(syscall.SIGKILL)
+	cmd.Wait()
+	var pids []int
+	for n := 1; n <= 3; n++ {
+		pids = append(pids, stubPids(t, stub, n)...)
+	}
+	return pids
+}
+
+func TestReaperEscalatesToSigkill(t *testing.T) {
+	for _, mode := range []string{"hang-ignore-term", "orphan-ignore-term"} {
+		t.Run(mode, func(t *testing.T) {
+			cfg, stub := testConfig(t)
+			cfg.KillGrace = Duration(300 * time.Millisecond)
+			pids := orphanLaunch(t, cfg, stub, mode)
+			launch(t, cfg, func(context.Context, *Runtime) (json.RawMessage, error) { return nil, nil })
+			for _, pid := range pids {
+				waitFor(t, 3*time.Second, "orphan to die", func() bool { return !alive(pid) })
+			}
+		})
+	}
+}
+
+func TestPsFailureCarriesOrphansForward(t *testing.T) {
+	cfg, stub := testConfig(t)
+	pids := orphanLaunch(t, cfg, stub, "hang")
+	// A launch whose ps fails keeps the records, even after it spawns.
+	bin := t.TempDir()
+	os.WriteFile(filepath.Join(bin, "ps"), []byte("#!/bin/sh\nexit 1\n"), 0o755)
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	t.Setenv("STUB_SCRIPT", "ok")
+	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		o := vOpts
+		o.Label = "implement:later"
+		return rt.Agent(ctx, "x", o)
+	})
+	if n := countEvents(telemetry(t, cfg), "orphan-check-failed"); n != 1 {
+		t.Fatalf("orphan-check-failed events %d", n)
+	}
+	t.Setenv("PATH", strings.TrimPrefix(os.Getenv("PATH"), bin+":"))
+	launch(t, cfg, func(context.Context, *Runtime) (json.RawMessage, error) { return nil, nil })
+	for _, pid := range pids {
+		waitFor(t, 3*time.Second, "orphan to die", func() bool { return !alive(pid) })
+	}
+}
