@@ -2,7 +2,7 @@
 
 ## Summary
 
-A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 37 units, ten complete; critical path 12 units through the S2 build, distribution and the serialised orchestrator stream. Base commit `b3dac6a`.
+A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 37 units, eleven complete; critical path 11 units through the S2 build, distribution and the serialised orchestrator stream. Base commit `b3dac6a`.
 
 The postmortem's problems are taken as accurate for archipeligo. The proposals in [lsf-improvements](../design/lsf-improvements.md) are candidate options, not designs: every decision unit states its problem without a solution, checks whether the problem holds outside archipeligo, and weighs the proposal against alternatives that include doing nothing.
 
@@ -35,6 +35,8 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 ### orchestrator-port-plan — complete at `7d1c664`; entry at `d88f63b`; report `docs/plans/orchestrator-port-plan-completion.md`
 
 ### orchestrator-port-loop — complete at `799858c`; entry at `cfaf279`; report `docs/plans/orchestrator-port-loop-completion.md`
+
+### code-stage-interface — complete at `65f3efc`; entry at `492b524`; report `docs/plans/code-stage-interface-completion.md`
 
 ### plan-preflight-check
 - **Type**: feature
@@ -140,19 +142,6 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Done condition**: The Permissions section is committed. It decides each stage role's permission configuration, comparing at least a deny list with Bash granted, prompts rewritten to single commands, `--permission-mode auto`, and running each call inside the `ic` isolation container with broad permissions, as the maths exemplar does. Each option is run on the spike fixture: whether an implement stage completes, and whether a probe agent told to edit `.claude/settings.json` and delete a branch by shell is stopped, recorded per option. It states what a reviewer role may write. Each option is stated as runtime roles, with label patterns that match the labels the orchestrator issues, including D10's `#n` suffix on a repeated label (a `$`-anchored pattern does not); an option the role shape cannot express, such as the container, names the runtime change it needs and the unit that carries it. The requester's verdict is recorded.
 - **Description**: Spike condition 3; P-C5, P-C6. The spike's deny list held on agent restraint, not enforcement (results, check 9). The exemplar's broad permissions are safe because the container, not per-call rules, is the boundary.
 
-### code-stage-interface
-- **Type**: refactor
-- **Risk**: high — moves four stages out of agents and fixes the interface `code-merge-cleanup` builds on; P-C1 to P-C4 rest on it
-- **Clarity**: exploratory — one open decision: the interface's shape (an extension of `orchestrator.Runtime` or typed stage calls)
-- **Iteration**: write-once
-- **Effort**: large
-- **Scope**: `lsf-runtime/orchestrator`, `lsf-runtime/runtime`, `lsf-runtime/tools/promptparity`, `docs/design/lsf-workflow.md::model-tiers`
-- **Publishes**: the orchestrator's code-stage interface, including each call's `CallResult` visible to the orchestrator
-- **Depends on**: orchestrator-port-loop (logical, the ported orchestrator, `orchestrator.Runtime` and `tools/promptparity`); runtime-core (logical, `rt.Step`)
-- **External gates**: `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`)
-- **Done condition**: Load, decision log, ledger append and completion report run as code through the interface; the ported orchestrator has no agent prompt for them. Tests inject at each of these stages the faults P-C1 to P-C4 and their Appendix B probes record — a placeholder, truncation, overwritten or deleted rows, an append's own rows altered or its heading dropped, a dropped line or fence, an invented `clears` entry — and a rejected commit, and show none is committed or accepted silently. A commit SHA these stages record resolves, and a fabricated one is rejected. The interface returns each agent call's `CallResult` (flags, denials) to the orchestrator with its value. `tools/promptparity` passes with only these four stages' labels removed from the JavaScript comparison. The tests pass.
-- **Description**: Replaces `mechanical-stage-integrity`, with `code-merge-cleanup`. The spike's code stages parse their inputs out of prompt text (results, Build estimate); the interface passes them as values. Code stages journal through `rt.Step`, which reruns a failed step with `interrupted` set. The JavaScript orchestrator keeps its prompts until `script-retirement`. Load, ledger and completion report completed as model calls in the port's end-to-end run; the unit targets the integrity faults P-C1 to P-C4 record, not failures. `CallResult` reaches the orchestrator here because the interface is the one seam, and `runtime-signals` needs it for ledger rows. Split from merge and cleanup so the critical path does not wait on `retained-artefacts-design` (requester decision, 2026-10-06). **Flag:** four surfaces exceed the surface bound; the spike's code for each stage is the behavioural reference, and the promptparity change is a label exclusion, so the excess is not context. `orchestrator-port-loop` wrote three surfaces with six mid-implementation decisions and finished with context comfortable.
-
 ### code-merge-cleanup
 - **Type**: refactor
 - **Risk**: high — a merge done in code commits to the integration branch; a resume fault merges twice
@@ -163,8 +152,8 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: merge and cleanup as code stages
 - **Depends on**: code-stage-interface (logical, the code-stage interface); runtime-signals (logical, serialises the runtime and orchestrator files); arch-pin-refresh (knowledge, the merge stage's `architectureSha` and `merges[].sha`); retained-artefacts-design (design, which ignored files cleanup may delete)
 - **External gates**: `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`)
-- **Done condition**: Merge with its plan bookkeeping, and cleanup, run as code through the interface; the ported orchestrator has no agent prompt for them. Tests inject truncation, a dropped fence and a rejected commit into the bookkeeping and show none is committed silently. A merge conflict goes to a model call and an unresolvable one is reported. A returned SHA that does not resolve, including `architectureSha` and each `merges[].sha`, is rejected, and a clean merge without its SHA is not attributed to the whole wave. A kill between the merge step's commit and its record resumes with no second merge or bookkeeping commit. Cleanup removes the runtime's merged worktrees (`<state>/wt/<key>` on `lsf/<plan8>/<key>`) and keeps one holding ignored files unless the retained-artefact policy names them rebuildable. `runtime-signals`' tests that drove the merge or cleanup prompt pass against a stage that is still an agent. `tools/promptparity` passes with the merge and cleanup labels also removed from the JavaScript comparison. The tests pass.
-- **Description**: The merge and cleanup half of `mechanical-stage-integrity`'s replacement. The merge stage reports whatever branch the agent names; unit-stage branches are `lsf/<plan8>/<journal key>` with a hash suffix, and D17 aborts a unit whose completion report lacks a branch. Cleanup as code runs outside the agents' permissions, so P-C5's denial and P-C9's `--force` removal stop arising. **Flag:** four surfaces exceed the surface bound, as for `code-stage-interface`, whose interface it extends.
+- **Done condition**: Merge with its plan bookkeeping, and cleanup, run as code through the interface; the ported orchestrator has no agent prompt for them. Tests inject truncation, a dropped fence and a rejected commit into the bookkeeping and show none is committed silently. Every path of the bookkeeping commit (plan and archive) is verified as `verifyCommit` verifies one, and a test shows a pre-commit hook that stages another path leaves neither in the commit nor the index behind HEAD. A merge conflict goes to a model call and an unresolvable one is reported. A returned SHA that does not resolve, including `architectureSha` and each `merges[].sha`, is rejected, and a clean merge without its SHA is not attributed to the whole wave. A kill between the merge step's commit and its record resumes with no second merge or bookkeeping commit. Cleanup removes the runtime's merged worktrees (`<state>/wt/<key>` on `lsf/<plan8>/<key>`) and their completion-report branches, and keeps a worktree holding ignored files unless the retained-artefact policy names them rebuildable. `runtime-signals`' tests that drove the merge or cleanup prompt pass against a stage that is still an agent. `tools/promptparity` passes with the merge and cleanup labels also removed from the JavaScript comparison, and `stepParity` checks their step inputs against the JavaScript prompts. The tests pass.
+- **Description**: The merge and cleanup half of `mechanical-stage-integrity`'s replacement. The merge stage reports whatever branch the agent names; unit-stage branches are `lsf/<plan8>/<journal key>` with a hash suffix, and D17 aborts a unit whose completion report lacks a branch. The merge receives the completion-report branch, `lsf/<plan8>/<key of completion-report:<unit>>`, one commit on the unit's work branch. Build on `gitOps` in `orchestrator/git.go` (`writeAndCommit`, `verifyCommit`, `guard`, `adopt`, `checkReachable`); `writeAndCommit` resets the path's index entry after each commit because a pre-commit hook's `git add` reaches a `git commit -- path` commit on git 2.54. Cleanup as code runs outside the agents' permissions, so P-C5's denial and P-C9's `--force` removal stop arising. **Flag:** four surfaces exceed the surface bound, as for `code-stage-interface`, whose interface it extends.
 
 ### runtime-signals
 - **Type**: feature
@@ -176,8 +165,8 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: driver-event signal kinds
 - **Depends on**: code-stage-interface (logical, `CallResult` in the orchestrator; serialises the runtime and orchestrator files); runtime-core (logical, `CallResult` and telemetry)
 - **External gates**: `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`)
-- **Done condition**: A corrected SHA, a permission denial, uncommitted changes at a stage's return, a gate the agent omitted, a skill not loaded, a guard kill after a valid result (`guard-killed-after-result`, requester decision 2026-10-06), and a stage result carrying an enum value outside its schema each reach the ledger as a signal, and the decided ones stop the run. The runtime detects uncommitted changes at a call's return, which `runtime-core` does not. Tests reproduce postmortem §C's permission faults (a denied commit reported with HEAD as its SHA; a denied branch delete) and run #2's transient null, and show none yields its recorded outcome. A `gate-not-run` stop is not retried (requester decision, 2026-10-05). A test shows an out-of-schema merge status is not recorded as `claimed-disjoint-conflict` and an out-of-schema finding severity is not dropped. The tests pass.
-- **Description**: Replaces `stage-failure-handling`. In the spike these events reached telemetry only. The ported stop rule fails open on a schema-violating enum, faithfully to the JavaScript (orchestrator-port-plan report). The orchestrator writes the ledger rows, so the signals cross into it. **Flag:** four surfaces exceed the surface bound; the `plan` and `orchestrator` changes are signal kinds and their ledger mapping, so the excess is not context.
+- **Done condition**: A corrected SHA, a permission denial, uncommitted changes at a stage's return, a gate the agent omitted, a skill not loaded, a guard kill after a valid result (`guard-killed-after-result`, requester decision 2026-10-06), and a stage result carrying an enum value outside its schema each reach the ledger as a signal, and the decided ones stop the run. The runtime detects uncommitted changes at a call's return, which `runtime-core` does not. Tests reproduce postmortem §C's permission faults (a denied commit reported with HEAD as its SHA; a denied branch delete) and run #2's transient null, and show none yields its recorded outcome. A `gate-not-run` stop is not retried (requester decision, 2026-10-05). A test shows an out-of-schema merge status is not recorded as `claimed-disjoint-conflict` and an out-of-schema finding severity is not dropped. Every agent call site reads its `CallResult`, which is discarded as `_` and through `parallelAgents` today. A code-stage fault carries a signal kind of its own in place of D19's `agent-null`, with the reason it now carries in the statement. A repeated signal ends a code step's git, as `gitContext` does for worktree git: the `ctx` that `rt.Step` passes to its function ends on `killCh`. The tests pass.
+- **Description**: Replaces `stage-failure-handling`. In the spike these events reached telemetry only. The ported stop rule fails open on a schema-violating enum, faithfully to the JavaScript (orchestrator-port-plan report). The orchestrator writes the ledger rows, so the signals cross into it. The `CallResult`, fault-kind and `killCh` clauses are `code-stage-interface`'s deferrals. **Flag:** four surfaces exceed the surface bound; the `plan` and `orchestrator` changes are signal kinds and their ledger mapping, so the excess is not context. About eight planned items exceed the step bound; each is an event read from a `CallResult` or a step and mapped to a kind, so the excess is breadth of one pattern.
 
 ### declared-gates
 - **Type**: feature
@@ -202,8 +191,8 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: the runtime CLI (launch, status, pause, resume, watch)
 - **Depends on**: declared-gates (logical, serialises the runtime files); s2-permissions-design (design, the decided configuration); plan-preflight-check (logical, serialises `skills/lsf-drive/SKILL.md::startup`); relay-probe (knowledge, relay behaviour); runtime-core (logical, `Run` and the state-dir layout: `status.json`, `summary.json`, `lock`); orchestrator-port-loop (logical, `orchestrator.Body`; knowledge, `tools/fixturerun`'s launch sequence)
 - **External gates**: `claude-code-headless` (environment, Claude Code 2.1.289); `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`)
-- **Done condition**: `phronithm:lsf-drive` launches, pauses, resumes and reads the status of a run through the CLI, under the decided permission configuration. A fixture run launched from a turn in which the requester typed a message shows no agent transcript carrying a relayed message, cited by transcript (P-F1). The driver outlives the interactive session that launched it, or the skill says it runs from the requester's terminal. The Relaunch section keeps `gate-not-run`'s route: an environment or project change, not a decision. A launch resolves `claude` once (configuration, `LSF_CLAUDE_BIN` or `PATH`) to its versioned path, records the version from the first init stream, and runs every call on that path; a test shows a binary replaced mid-launch is not used (requester decision, 2026-10-06). The tests pass.
-- **Description**: Replaces `relay-mitigation`: headless calls carry no relay (results, check 3), so P-F1 reduces to the launch path. `tools/fixturerun` is a working launch: configuration from a file, args, `DISABLE_AUTOUPDATER=1` with a versioned `claude` checked before spending, a fresh state dir, then `lsfrt.Run(ctx, cfg, orchestrator.Body)`.
+- **Done condition**: `phronithm:lsf-drive` launches, pauses, resumes and reads the status of a run through the CLI, under the decided permission configuration. A fixture run launched from a turn in which the requester typed a message shows no agent transcript carrying a relayed message, cited by transcript (P-F1). The driver outlives the interactive session that launched it, or the skill says it runs from the requester's terminal. The Relaunch section keeps `gate-not-run`'s route: an environment or project change, not a decision. It gives the route for a code-stage integrity stop, which repeats at every launch until a requester repair commit lands: the repair commit, and exempting the code stages' paths from any hook that rewrites or stages files. A launch resolves `claude` once (configuration, `LSF_CLAUDE_BIN` or `PATH`) to its versioned path, records the version from the first init stream, and runs every call on that path; a test shows a binary replaced mid-launch is not used (requester decision, 2026-10-06). The tests pass.
+- **Description**: Replaces `relay-mitigation`: headless calls carry no relay (results, check 3), so P-F1 reduces to the launch path. `tools/fixturerun` is a working launch: configuration from a file, args, `DISABLE_AUTOUPDATER=1` with a versioned `claude` checked before spending, a fresh state dir, then `lsfrt.Run(ctx, cfg, orchestrator.Body)`. A code-stage stop arrives as `agent-null` with the statement `"<stage> failed: <reason>"` until `runtime-signals` gives it a kind (D19). **Flag:** three surfaces exceed the surface bound; the skill and design changes are sections of text, so the excess is not context.
 
 ### runtime-distribution
 - **Type**: integration
@@ -223,13 +212,13 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Risk**: low
 - **Clarity**: specified
 - **Iteration**: write-once
-- **Effort**: small
-- **Scope**: `workflows/`, `lsf-runtime/tools`, `lsf-runtime/orchestrator`, `docs/design/lsf-workflow.md::constraints`, `CLAUDE.md`
+- **Effort**: medium
+- **Scope**: `workflows/`, `lsf-runtime/tools`, `lsf-runtime/orchestrator`, `lsf-runtime/plan/graph.go`, `docs/design/lsf-workflow.md::constraints`, `docs/design/lsf-workflow.md::lifecycle-mapping`, `docs/design/lsf-workflow.md::wave-loop`, `docs/design/lsf-workflow.md::escalation`, `docs/design/lsf-workflow.md::persistence`, `docs/design/lsf-workflow.md::testing`, `CLAUDE.md`
 - **Publishes**: none
 - **Depends on**: runtime-cli-drive (testing, the replacement path runs through `phronithm:lsf-drive`); runtime-distribution (logical, plugin users get the runtime before the script is deleted)
 - **External gates**: none
-- **Done condition**: `workflows/` is deleted: the generated script, the JavaScript orchestrator and its tests, `build.js` and the spike. The JavaScript parity tools under `lsf-runtime/tools` (`graphparity`, `promptparity`) are deleted with it, and `go test` has no `node` dependency; the pinned plan fixtures and the divergence registers in `plan/doc.go` and `orchestrator/doc.go` stay. No `// js:` title in the orchestrator tests cites the deleted `implement.test.js` as if it existed: each is deleted, or amended to cite it at a named commit. `lsf-workflow.md`'s Constraints section describes the runtime, not the Workflow tool. `CLAUDE.md`'s Structure section names `lsf-runtime/` and no longer `workflows/`. The `lsf-runtime` tests pass.
-- **Description**: Ends `lsf-substrate.md`'s interim policy: the Workflow script is the supported Phase 3 path until this unit.
+- **Done condition**: `workflows/` is deleted: the generated script, the JavaScript orchestrator and its tests, `build.js` and the spike. The JavaScript parity tools under `lsf-runtime/tools` (`graphparity`, `promptparity`) are deleted with it, and `go test` has no `node` dependency; the pinned plan fixtures and the divergence registers in `plan/doc.go` and `orchestrator/doc.go` stay. No `// js:` title in the orchestrator tests cites the deleted `implement.test.js` as if it existed: each is deleted, or amended to cite it at a named commit. `lsf-workflow.md` describes the runtime's stages, not the Workflow script's: no copy, scribe or cleanup agent, load-stage agent, or model-call merge remains in the Constraints, Lifecycle mapping, Wave loop, Escalation, Persistence or Testing sections. No Go comment describes a stage the Go runs as code as an agent or copy stage (`plan/graph.go`, `orchestrator/report.go`, `prompts.go`, `orchtest/fixtures.go`, as of `code-stage-interface`). `CLAUDE.md`'s Structure section names `lsf-runtime/` and no longer `workflows/`. The `lsf-runtime` tests pass.
+- **Description**: Ends `lsf-substrate.md`'s interim policy: the Workflow script is the supported Phase 3 path until this unit, and the design document describes it until then. **Flag:** five surfaces exceed the surface bound; four are deletions or comment edits, so the context load is the design document's rewrite.
 
 ### empirical-script-support
 - **Type**: feature
@@ -601,9 +590,9 @@ units:
         pin: "2.1.289"
   - id: code-stage-interface
     type: refactor
-    complete: false
+    complete: true
     dependencies: [orchestrator-port-loop, runtime-core]
-    scope: [lsf-runtime/orchestrator, lsf-runtime/runtime, lsf-runtime/tools/promptparity, docs/design/lsf-workflow.md::model-tiers]
+    scope: [lsf-runtime/orchestrator, lsf-runtime/runtime, lsf-runtime/tools/promptparity, docs/design/lsf-workflow.md::model-tiers, docs/design/lsf-runtime.md::runtime, CLAUDE.md::lsf-runtime]
     publishes: [code-stage interface, CallResult in the orchestrator]
     gates:
       - name: lsf-toolchain
@@ -670,7 +659,7 @@ units:
     type: refactor
     complete: false
     dependencies: [runtime-cli-drive, runtime-distribution]
-    scope: [workflows, lsf-runtime/tools, lsf-runtime/orchestrator, docs/design/lsf-workflow.md::constraints, CLAUDE.md]
+    scope: [workflows, lsf-runtime/tools, lsf-runtime/orchestrator, lsf-runtime/plan/graph.go, docs/design/lsf-workflow.md::constraints, docs/design/lsf-workflow.md::lifecycle-mapping, docs/design/lsf-workflow.md::wave-loop, docs/design/lsf-workflow.md::escalation, docs/design/lsf-workflow.md::persistence, docs/design/lsf-workflow.md::testing, CLAUDE.md]
     publishes: []
     gates: []
   - id: empirical-script-support
@@ -805,7 +794,7 @@ graph TD
   RC[runtime-core: complete]
   OPP[orchestrator-port-plan: complete]
   OPL[orchestrator-port-loop: complete]
-  CSI[code-stage-interface]
+  CSI[code-stage-interface: complete]
   CMC[code-merge-cleanup]
   RS[runtime-signals]
   DG[declared-gates]
@@ -921,7 +910,7 @@ graph TD
 3. `empirical-criteria-design`, `retained-artefacts-design`, `substrate-spike`.
 4. `empirical-unit-design`, `findings-consumer-design`, `drive-decision-design`, `runtime-language-design`. Each design decision lands before any unit it governs starts.
 5. `runtime-core`, `s2-permissions-design`, `orchestrator-port-plan`, `plan-preflight-check`, `orchestrator-port-loop`. The permissions design states its options in the runtime's role shape. The runtime and the port; the plan model and the runtime can run side by side, and the pre-flight command uses the ported parser.
-6. `code-stage-interface`, `runtime-signals`, `code-merge-cleanup`, `declared-gates`, `runtime-cli-drive`, `runtime-distribution`, `script-retirement`. The rest of the S2 build, serial on `lsf-runtime/`. It leads the orchestrator stream so later units are built and tested on the runtime, not the Workflow script. Merge and cleanup follow `runtime-signals`, so `retained-artefacts-design` has two units of slack before the path needs it.
+6. `code-stage-interface`, `runtime-signals`, `code-merge-cleanup`, `declared-gates`, `runtime-cli-drive`, `runtime-distribution`, `script-retirement`. The rest of the S2 build, serial on `lsf-runtime/`. It leads the orchestrator stream so later units are built and tested on the runtime, not the Workflow script. Merge and cleanup follow `runtime-signals`, so `retained-artefacts-design` has one unit of slack before the path needs it.
 7. `empirical-script-support`, `findings-consumer-impl`. The rest of the orchestrator stream, serial on `lsf-runtime/plan` and `lsf-runtime/orchestrator`.
 8. `long-running-design`, `long-running-impl`. Last in the stream: the least certain unit, and the one most likely to be re-planned.
 9. `empirical-criteria-impl`, `phase2-gate-discipline`, `empirical-unit-impl`, `programme-close-out`, `drive-presentation-impl`, `drive-mechanics`. Skill text, each after its decision.
@@ -956,9 +945,9 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 
 ## Critical Path
 
-`code-stage-interface` → `runtime-signals` → `code-merge-cleanup` → `declared-gates` → `runtime-cli-drive` → `runtime-distribution` → `script-retirement` → `empirical-script-support` → `findings-consumer-impl` → `long-running-impl` → `shakedown-fixture` → `programme-close`.
+`runtime-signals` → `code-merge-cleanup` → `declared-gates` → `runtime-cli-drive` → `runtime-distribution` → `script-retirement` → `empirical-script-support` → `findings-consumer-impl` → `long-running-impl` → `shakedown-fixture` → `programme-close`.
 
-12 units remaining: three large, seven medium, two small. The S2 build's size is a conjectured estimate, and the runtime and the port each exceeded it (R1). `code-merge-cleanup` waits on `retained-artefacts-design`, a requester verdict; the path reaches it after `code-stage-interface` and `runtime-signals`.
+11 units remaining: two large, eight medium, one small. The S2 build's size is a conjectured estimate, and the runtime and the port each exceeded it (R1). `code-merge-cleanup` waits on `retained-artefacts-design`, a requester verdict; the path reaches it after `runtime-signals`.
 
 ## Meta-Tasks
 
@@ -1022,6 +1011,17 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 ## Plan Maintenance
 
 On each unit completion, run the re-plan step before starting its dependants.
+
+### 2026-10-07 — code-stage-interface complete
+Report: docs/plans/code-stage-interface-completion.md @ 65f3efc.
+scope-reassignment code-stage-interface — block records the writes to `lsf-runtime.md::runtime` (`Repo`, `Worktree`) and `CLAUDE.md::lsf-runtime`
+done-condition runtime-signals — call sites read `CallResult`; a code-stage fault kind replaces D19's `agent-null`; `rt.Step`'s `ctx` ends on `killCh`; step-bound flag
+done-condition code-merge-cleanup — multi-path bookkeeping verification and index reset under a staging hook; cleanup removes completion-report branches; `stepParity` covers merge and cleanup
+done-condition runtime-cli-drive — Relaunch gives the route for a code-stage integrity stop (repair commit, hook exemption); three-surface flag
+scope-reassignment script-retirement — adds the `lsf-workflow.md` sections still describing the script's agent stages and `plan/graph.go`; their stale prose and comments are rewritten there; effort medium; five-surface flag
+check code-merge-cleanup, runtime-signals, declared-gates — size budget re-checked on eight mid-implementation decisions, mostly from critique, and about 2,700 net lines over four surfaces finished with context comfortable; within budget under their flags
+check register — P-C1 to P-C4 and P-C8 (ledger SHAs) disposed by the report; no change
+check critical path — 11 units; `retained-artefacts-design` now has one unit of slack before `code-merge-cleanup`
 
 ### 2026-10-06 — decisions D16-D17, js-titles, code-stage-split
 check orchestrator-port-loop — D16 and D17 confirmed: Go fixes the JavaScript defects and records them
