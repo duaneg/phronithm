@@ -217,16 +217,8 @@ func (l *launch) scribeLedger(ctx context.Context, label string) error {
 		l.rt.Log(fmt.Sprintf("ledger scribe returned null (%s); %d row(s) stay unscribed", label, len(fresh)))
 		return nil
 	}
-	if err := l.liveReads(ctx, nil, &r.Result.PauseRequested); err != nil {
-		// The rows are committed; only the pause is unknown.
-		for _, s := range fresh {
-			l.scribed[s] = true
-		}
-		l.ledgerFault = stageFaultSignal(at, "live read: "+err.Error())
-		return nil
-	}
-	l.notePause(r.Result.PauseRequested, label)
 	if !committed(r.Result.Sha) {
+		l.notePause(r.Result.PauseRequested, label)
 		l.ledgerFault = plan.NoCommitSignal(plan.At{Stage: "ledger", Wave: l.waveOrNil(), Path: l.ctx.ledgerPath})
 		l.rt.Log(fmt.Sprintf("ledger scribe returned no commit SHA (%s); %d row(s) stay unscribed", label, len(fresh)))
 		return nil
@@ -234,6 +226,12 @@ func (l *launch) scribeLedger(ctx context.Context, label string) error {
 	for _, s := range fresh {
 		l.scribed[s] = true
 	}
+	if err := l.liveReads(ctx, nil, &r.Result.PauseRequested); err != nil {
+		// The rows are committed; only the pause is unknown.
+		l.ledgerFault = stageFaultSignal(at, "live read: "+err.Error())
+		return nil
+	}
+	l.notePause(r.Result.PauseRequested, label)
 	return nil
 }
 

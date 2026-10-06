@@ -894,3 +894,21 @@ func TestMainCheckoutEdgeCases(t *testing.T) {
 		t.Errorf("a reverted append was adopted: %+v %v", again, err)
 	}
 }
+
+// An interrupted ledger rerun neither adopts a commit that changed another
+// path nor appends its rows a second time.
+func TestLedgerRerunAfterFailedVerification(t *testing.T) {
+	r := newGitRepo(t)
+	o := gitOrch(t, r, nil)
+	r.write("wip.md", "requester work\n")
+	r.hook("pre-commit", "git add wip.md")
+	b := ledgerBlock(1, "one")
+	_, err := runStage(t, o.ledgerAppend(ledgerIn(b)), "ledger:w1", false)
+	errMatch(t, err, `want only `+ledgerPath)
+	r.hook("pre-commit", "")
+	bad := r.head()
+	_, err = runStage(t, o.ledgerAppend(ledgerIn(b)), "ledger:w1", true)
+	errMatch(t, err, `already holds these rows, but not in an intact commit of ledger:w1`)
+	eq(t, r.head(), bad)
+	eq(t, strings.Count(r.read(ledgerPath), "| one |"), 1)
+}

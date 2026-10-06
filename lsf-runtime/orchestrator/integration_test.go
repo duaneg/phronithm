@@ -65,6 +65,10 @@ func fakeClaude(table string) int {
 		}
 		err = json.Unmarshal(b, &list)
 		for _, e := range list {
+			if e.Contains == "" || len(e.Return) == 0 {
+				fmt.Fprintln(os.Stderr, "fake claude: table entry without contains or return")
+				return 3
+			}
 			if strings.Contains(string(prompt), e.Contains) {
 				v, ok = e.Return, true
 				break
@@ -394,15 +398,21 @@ func TestOnRuntimeCodeStages(t *testing.T) {
 	}
 	eq(t, first.Calls, spawns)
 
-	tips := r.git("for-each-ref", "--format=%(refname) %(objectname)", "refs/heads/")
+	refs := func() string {
+		return r.git("for-each-ref", "--format=%(refname) %(objectname)") + "\nHEAD " + r.head()
+	}
+	tips := refs()
 	firstEvents := events(t, cfg.StateDir)
 	again := launch()
 	eq(t, again.StopReason, lsfrt.StopReturned)
 	eq(t, string(again.Outcome), string(first.Outcome))
 	eq(t, again.Calls, 0, "the relaunch replays every call")
 	eq(t, calls(t, callDir), spawns, "no spawn on the relaunch")
-	eq(t, r.git("for-each-ref", "--format=%(refname) %(objectname)", "refs/heads/"), tips, "no new commit")
+	eq(t, refs(), tips, "no new commit, no ref moved")
+	eq(t, r.git("status", "--porcelain"), "", "the main checkout is still clean")
 	all := events(t, cfg.StateDir)
+	eq(t, all["cache-hit"]-firstEvents["cache-hit"], spawns, "every call replayed from the journal")
+	eq(t, all["cache-stale"], 0)
 	eq(t, all["step-replayed"]-firstEvents["step-replayed"], firstEvents["step"], "every step replayed")
 	eq(t, all["step"], firstEvents["step"], "no step ran again")
 }

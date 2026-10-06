@@ -287,7 +287,7 @@ func (o *orch) decisionLog(in decisionLogInput) stageFn {
 			return stageValue(scribeResult{Path: path, Sha: sha})
 		}
 		if interrupted {
-			sha, err := g.adopt(ctx, o.repo, branch, path, adoption{
+			sha, _, err := g.adopt(ctx, o.repo, branch, path, adoption{
 				label: label,
 				matches: func(parent []byte, parentOK bool, cand []byte) bool {
 					if !parentOK {
@@ -428,14 +428,13 @@ func (o *orch) ledgerAppend(in ledgerInput) stageFn {
 			return nil, err
 		}
 		done := func(sha string) (json.RawMessage, error) {
-			pause, err := g.pauseRequested(ctx, o.repo, in.PauseRef)
-			if err != nil {
-				return nil, err
-			}
+			// The caller re-reads the pause live; an error here must not fail
+			// a step whose commit has landed.
+			pause, _ := g.pauseRequested(ctx, o.repo, in.PauseRef)
 			return stageValue(scribeResult{Path: path, Sha: sha, PauseRequested: pause})
 		}
 		if interrupted {
-			sha, err := g.adopt(ctx, o.repo, branch, path, adoption{
+			sha, survived, err := g.adopt(ctx, o.repo, branch, path, adoption{
 				label: label,
 				matches: func(parent []byte, parentOK bool, cand []byte) bool {
 					return bytes.Equal(cand, appendLedger(parent, parentOK, in.Name, in.Block))
@@ -447,6 +446,12 @@ func (o *orch) ledgerAppend(in ledgerInput) stageFn {
 			}
 			if sha != "" {
 				return done(sha)
+			}
+			if survived {
+				// Appending would repeat the rows: the block is there, but in
+				// no commit this step can vouch for (a rewritten message, or a
+				// commit that failed verification).
+				return nil, fmt.Errorf("%s already holds these rows, but not in an intact commit of %s; check the ledger and relaunch with args.unscribed emptied of them", path, label)
 			}
 		}
 		sha, err := g.writeAndCommit(ctx, o.repo, branch, path, in.Subject, label, next, pre)
@@ -479,7 +484,10 @@ func (o *orch) completionReport(in completionInput) stageFn {
 		if err != nil {
 			return nil, err
 		}
-		base, err := g.out(ctx, wt, "rev-parse", "--verify", "--quiet", in.Base+"^{commit}")
+		if strings.HasPrefix(in.Base, "-") {
+			return nil, fmt.Errorf("unit branch %q is not a branch name", in.Base)
+		}
+		base, err := g.out(ctx, wt, "rev-parse", "--verify", "--quiet", "refs/heads/"+in.Base+"^{commit}")
 		if err != nil {
 			return nil, fmt.Errorf("unit branch %s does not resolve: %w", in.Base, err)
 		}

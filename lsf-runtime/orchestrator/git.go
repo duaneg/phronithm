@@ -216,18 +216,25 @@ type adoption struct {
 const adoptionWalk = 50
 
 // adopt returns the newest first-parent commit touching path on branch
-// that is intact, carries this step's label, matches its parent and whose
-// effect survives at the tip; "" when none does. The SHA is checked
-// before it is returned (checkReachable).
-func (g gitOps) adopt(ctx context.Context, dir, branch, path string, a adoption) (string, error) {
+// that is intact, carries this step's label, has one parent, changes only
+// path, matches its parent and whose effect survives at the tip; "" when
+// none does. survived reports whether the effect is at the tip at all. The
+// SHA is checked before it is returned (checkReachable).
+func (g gitOps) adopt(ctx context.Context, dir, branch, path string, a adoption) (sha string, survived bool, err error) {
 	ref := "refs/heads/" + branch
 	tip, tipOK, err := g.blob(ctx, dir, ref, path)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if !a.survives(tip, tipOK) {
-		return "", nil
+		return "", false, nil
 	}
+	sha, err = g.findAdoptable(ctx, dir, branch, path, a)
+	return sha, true, err
+}
+
+func (g gitOps) findAdoptable(ctx context.Context, dir, branch, path string, a adoption) (string, error) {
+	ref := "refs/heads/" + branch
 	list, err := g.out(ctx, dir, "log", "--first-parent", "-n", fmt.Sprint(adoptionWalk), "--format=%H", ref, "--", path)
 	if err != nil {
 		return "", err
@@ -245,12 +252,23 @@ func (g gitOps) adopt(ctx context.Context, dir, branch, path string, a adoption)
 			}
 			continue
 		}
+		parents, err := g.out(ctx, dir, "log", "-1", "--format=%P", c, "--")
+		if err != nil {
+			return "", err
+		}
+		files, err := g.changed(ctx, dir, c)
+		if err != nil {
+			return "", err
+		}
+		if len(strings.Fields(parents)) > 1 || len(files) != 1 || files[0] != path {
+			continue
+		}
 		cand, _, err := g.blob(ctx, dir, c, path)
 		if err != nil {
 			return "", err
 		}
-		parent, parentOK, err := g.blob(ctx, dir, c+"^", path)
-		if err != nil && exitCode(err) != 128 { // a root commit has no c^
+		parent, parentOK, err := g.blob(ctx, dir, c+"^", path) // not ok for a root commit
+		if err != nil {
 			return "", err
 		}
 		if !a.matches(parent, parentOK, cand) {
