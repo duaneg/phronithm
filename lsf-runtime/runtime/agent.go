@@ -18,6 +18,7 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 	hash := callHash(prompt, skill, o)
 	rt.noteLabel(key, hash, o.Label)
 	if res, ok := rt.replayCall(key, hash, o.Label); ok {
+		rt.recheckUncommitted(ctx, o, key, &res)
 		return res, nil
 	}
 	if err := rt.boundary(ctx); err != nil {
@@ -69,11 +70,13 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 				res.Flags = append(res.Flags, "guard-killed-after-result")
 				rt.Log(o.Label + ": the guard timeout killed the call after its result; the result stands")
 			}
+			rt.checkUncommitted(ctx, c, res)
 			rt.recordCall(key, hash, o.Label, *res)
 			return *res, nil
 		case classStopped:
 			return *res, rt.stopErr()
 		case classTimeout, classPermanent, classSpawnError:
+			rt.checkUncommitted(ctx, c, res)
 			return *res, nil
 		case classInvalid:
 			if retried == 0 {
@@ -81,6 +84,8 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 				continue
 			}
 			rt.Log(fmt.Sprintf("%s: no valid return after %d attempt(s) (%s); null", o.Label, res.Attempts, firstOr(v.errors, "invalid")))
+			res.Violations = v.errors
+			rt.checkUncommitted(ctx, c, res)
 			return *res, nil
 		case classTransient:
 			if transient < len(rt.cfg.Backoff) {
@@ -93,6 +98,7 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 				continue
 			}
 			rt.Log(fmt.Sprintf("%s: transient failure persisted over %d attempt(s); null", o.Label, res.Attempts))
+			rt.checkUncommitted(ctx, c, res)
 			return *res, nil
 		case classSessionLimit:
 			if waits < rt.cfg.MaxSessionWaits {
@@ -100,6 +106,7 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 				continue
 			}
 			rt.Log(fmt.Sprintf("%s: session limit persisted over %d wait(s); null", o.Label, waits))
+			rt.checkUncommitted(ctx, c, res)
 			return *res, nil
 		}
 		panic("unreachable: class " + v.class)
@@ -115,6 +122,8 @@ type callState struct {
 	role       Role
 	cwd        string // resolved at the first admitted attempt
 	res        CallResult
+	before     snapshot // a repo call's work tree at its first admitted attempt
+	beforeErr  error
 }
 
 // attempt takes a concurrency slot, admits, spawns and classifies one
@@ -136,6 +145,9 @@ func (rt *Runtime) attempt(ctx context.Context, c *callState) (*attempt, verdict
 			return nil, verdict{}, err
 		}
 		c.cwd = cwd
+		if c.o.Isolation == "" && rt.cfg.Repo != "" {
+			c.before, c.beforeErr = rt.snapshot(ctx, cwd, true)
+		}
 	}
 	sid := newUUID()
 	t0 := time.Now()

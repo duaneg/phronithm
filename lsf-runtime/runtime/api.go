@@ -58,13 +58,15 @@ func IsStop(err error) (StopReason, bool) {
 
 // CallResult is one logical call's outcome. Value nil is null.
 type CallResult struct {
-	Value    json.RawMessage
-	Class    string   // class of the last attempt
-	Flags    []string // e.g. "skill-not-loaded"
-	Denials  []string // the last attempt's permission_denials, "tool: input" truncated
-	Attempts int      // spawns for this call this launch; 0 when replayed
-	CostUSD  float64
-	Replayed bool
+	Value       json.RawMessage
+	Class       string   // class of the last attempt
+	Flags       []string // "skill-not-loaded", "guard-killed-after-result", "uncommitted-unchecked"
+	Denials     []string // the last attempt's permission_denials, "tool: input" truncated
+	Uncommitted []string // paths the call left uncommitted (see uncommitted.go); re-checked on a replay
+	Violations  []string // a null after invalid returns: the last attempt's schema violations
+	Attempts    int      // spawns for this call this launch; 0 when replayed
+	CostUSD     float64
+	Replayed    bool
 }
 
 // Summary is written to summary.json when a launch ends.

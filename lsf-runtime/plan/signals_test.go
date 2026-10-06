@@ -594,4 +594,27 @@ func TestGoOnlyKindsAreKinds(t *testing.T) {
 			t.Errorf("%s should stop", k)
 		}
 	}
+	for _, k := range []string{"residue-at-return", "permission-denied", "sha-corrected", "guard-killed-after-result"} {
+		if IsStopKind(k) || !slices.Contains(RecordKinds, k) {
+			t.Errorf("%s should be a record", k)
+		}
+	}
+}
+
+func TestSignalsFromCallEdges(t *testing.T) {
+	at := At{Stage: "review-gate", Wave: W(1)}
+	r, unknown := SignalsFromCall(CallEvents{Label: "g", Flags: []string{"uncommitted-unchecked", "odd", "odd"}}, at)
+	if len(r) != 1 || r[0].Kind != "residue-at-return" || r[0].Statement != "uncommitted check failed" {
+		t.Errorf("reader unchecked: %+v", r)
+	}
+	eqStrings(t, "unknown once", unknown, []string{"odd"})
+	five := []string{"a", "b", "c", "d", "e"}
+	f, _ := SignalsFromCall(CallEvents{Label: "g", Denials: five}, at)
+	if f[0].Statement != "5 permission denial(s): a; b; c; d; e" {
+		t.Errorf("exactly five: %q", f[0].Statement)
+	}
+	long, _ := SignalsFromCall(CallEvents{Label: "g", Denials: []string{strings.Repeat("x", 500)}}, at)
+	if n := len([]rune(long[0].Statement)); n > 260 {
+		t.Errorf("item not cut: %d runes", n)
+	}
 }

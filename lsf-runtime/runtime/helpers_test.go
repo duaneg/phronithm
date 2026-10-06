@@ -29,7 +29,7 @@ func testConfig(t *testing.T) (Config, string) {
 	t.Setenv("LSF_CLAUDE_BIN", "")
 	return Config{
 		StateDir:  t.TempDir(),
-		Repo:      t.TempDir(),
+		Repo:      gitRepo(t),
 		ClaudeBin: stubBin,
 		Roles: map[string]Role{
 			"worker": {Tools: "default", Allow: []string{"Read", "Bash"}, Deny: []string{"Bash(git push*)"}, PermissionMode: "dontAsk"},

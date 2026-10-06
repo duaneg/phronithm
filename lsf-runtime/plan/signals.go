@@ -318,7 +318,7 @@ func SignalsFromMerge(r MergeResult, at At) []*Signal {
 		case "resolved":
 			s.Kind, s.Statement = "claimed-disjoint-conflict", fmt.Sprintf("merge of %s conflicted in %s; resolved mechanically", m.Unit, files)
 		default: // D20: JS records any other status as claimed-disjoint-conflict
-			s.Kind, s.Statement = "schema-violation", fmt.Sprintf("merge of %s: status %s is outside the schema", m.Unit, strconv.Quote(m.Status))
+			s.Kind, s.Statement, s.Referent = "schema-violation", fmt.Sprintf("merge of %s: status %s is outside the schema", m.Unit, strconv.Quote(m.Status)), m.Unit
 		}
 		out = append(out, NewSignal(s))
 	}
@@ -395,9 +395,20 @@ type CallEvents struct {
 // Listed is how many paths, denials or violations a driver row names.
 const Listed = 5
 
-// listed is up to Listed items joined by sep, then "(and N more)".
+// ItemRunes bounds each listed item, so a row stays one short cell.
+const ItemRunes = 200
+
+// listed is up to Listed items, each cut to ItemRunes, joined by sep, then
+// "(and N more)".
 func listed(items []string, sep string) string {
-	s := strings.Join(items[:min(len(items), Listed)], sep)
+	cut := []string{}
+	for _, it := range items[:min(len(items), Listed)] {
+		if r := []rune(it); len(r) > ItemRunes {
+			it = string(r[:ItemRunes]) + "…"
+		}
+		cut = append(cut, it)
+	}
+	s := strings.Join(cut, sep)
 	if n := len(items) - Listed; n > 0 {
 		s += fmt.Sprintf(" (and %d more)", n)
 	}
@@ -462,6 +473,9 @@ var callFlags = []string{"skill-not-loaded", "uncommitted-unchecked", "guard-kil
 func ShaCorrectedSignal(at At, branch, reported, tip, err string) *Signal {
 	statement := fmt.Sprintf("%s: reported %s, tip %s; corrected", branch, reported, tip)
 	if tip == "" {
+		if err == "" {
+			err = "unknown error"
+		}
 		statement = fmt.Sprintf("%s: reported %s; not checked: %s", branch, reported, err)
 	}
 	return NewSignal(Signal{Kind: "sha-corrected", Source: "structural", Stage: at.Stage, Unit: at.Unit, Wave: at.Wave, Statement: statement, Referent: branch})

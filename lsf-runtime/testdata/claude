@@ -14,6 +14,8 @@
 # Modes: ok | cost:<usd> | nullout | invalid | slow:<secs> | transient |
 #        session | session-noreset | hang | hang-ignore-term |
 #        orphan-ignore-term | result-then-hang | fixture:<name> (cats streams/<name>.jsonl) |
+#        dirty:<path> (writes <path> in cwd, then ok) | modify:<path> (appends to it, then ok) |
+#        dirty-transient:<path> (writes <path>, then a 529) |
 #        file:<path> (cats a stream file)
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -95,6 +97,11 @@ case "$mode" in
   result-then-hang)   result_ok '{"verdict":"pass","n":3}'; hang default default ;;
   hang-ignore-term)   hang ignore ignore ;;
   orphan-ignore-term) hang default ignore ;;
+  dirty:*)   echo x > "${mode#dirty:}"; result_ok '{"verdict":"pass","n":3}' ;;
+  modify:*)  echo more >> "${mode#modify:}"; result_ok '{"verdict":"pass","n":3}' ;;
+  dirty-transient:*)
+             echo x > "${mode#dirty-transient:}"
+             echo '{"type":"result","subtype":"success","is_error":true,"api_error_status":529,"total_cost_usd":0}'; code=1 ;;
   fixture:*) cat "$here/streams/${mode#fixture:}.jsonl" ;;
   file:*)    cat "${mode#file:}" ;;
   *) echo "stub: unknown mode $mode" >&2; code=2 ;;

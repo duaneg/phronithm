@@ -86,15 +86,22 @@ const gitTimeout = 5 * time.Minute
 
 // gitContext ends at gitTimeout, at a repeated signal, or with ctx.
 func (rt *Runtime) gitContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	gctx, cancel := context.WithTimeout(ctx, gitTimeout)
+	kctx, kcancel := rt.killContext(ctx)
+	gctx, cancel := context.WithTimeout(kctx, gitTimeout)
+	return gctx, func() { cancel(); kcancel() }
+}
+
+// killContext ends at a repeated signal, or with ctx.
+func (rt *Runtime) killContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	kctx, cancel := context.WithCancel(ctx)
 	go func() {
 		select {
 		case <-rt.killCh:
 			cancel()
-		case <-gctx.Done():
+		case <-kctx.Done():
 		}
 	}()
-	return gctx, cancel
+	return kctx, cancel
 }
 
 type worktreeArgs struct {

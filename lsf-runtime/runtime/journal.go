@@ -12,19 +12,21 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"time"
 )
 
 // A journal record is a completed call or code step, keyed by label and
 // checked by hash, so a resume replays it instead of running it again.
 type record struct {
-	Label   string          `json:"label"`
-	Kind    string          `json:"kind"` // call | step
-	Hash    string          `json:"hash"`
-	Ret     json.RawMessage `json:"ret"`
-	Flags   []string        `json:"flags,omitempty"`
-	Denials []string        `json:"denials,omitempty"`
-	At      time.Time       `json:"at"`
+	Label       string          `json:"label"`
+	Kind        string          `json:"kind"` // call | step
+	Hash        string          `json:"hash"`
+	Ret         json.RawMessage `json:"ret"`
+	Flags       []string        `json:"flags,omitempty"`
+	Denials     []string        `json:"denials,omitempty"`
+	Uncommitted []string        `json:"uncommitted,omitempty"`
+	At          time.Time       `json:"at"`
 }
 
 var unsafeChars = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
@@ -115,13 +117,15 @@ func (rt *Runtime) replayCall(key, hash, label string) (CallResult, bool) {
 	}
 	rt.event("cache-hit", map[string]any{"label": label, "flags": r.Flags})
 	rt.Log(label + ": replayed from the journal")
-	return CallResult{Value: r.Ret, Class: string(classOK), Flags: r.Flags, Denials: r.Denials, Replayed: true}, true
+	return CallResult{Value: r.Ret, Class: string(classOK), Flags: r.Flags, Denials: r.Denials, Uncommitted: r.Uncommitted, Replayed: true}, true
 }
 
 // recordCall journals a call's non-null return. A null is not recorded, so a
 // resume retries it. A failed write is logged: the call's result still stands.
+// The unchecked flag is left out: a replay re-checks.
 func (rt *Runtime) recordCall(key, hash, label string, res CallResult) {
-	if err := rt.writeRecord(key, record{Label: label, Kind: "call", Hash: hash, Ret: res.Value, Flags: res.Flags, Denials: res.Denials}); err != nil {
+	flags := slices.DeleteFunc(slices.Clone(res.Flags), func(f string) bool { return f == flagUnchecked })
+	if err := rt.writeRecord(key, record{Label: label, Kind: "call", Hash: hash, Ret: res.Value, Flags: flags, Denials: res.Denials, Uncommitted: res.Uncommitted}); err != nil {
 		rt.Log(fmt.Sprintf("%s: journal write failed, a resume will re-run the call: %v", label, err))
 	}
 }
@@ -165,7 +169,11 @@ func (rt *Runtime) Step(ctx context.Context, label string, input []byte, fn func
 		return nil, rt.setStop(StopRuntimeError, fmt.Sprintf("step %s: intent: %v", label, err))
 	}
 	t0 := time.Now()
-	ret, err := fn(ctx, interrupted)
+	// A repeated signal ends the step's own git, as gitContext does for
+	// worktree git.
+	sctx, cancel := rt.killContext(ctx)
+	defer cancel()
+	ret, err := fn(sctx, interrupted)
 	if err == nil {
 		ret, err = compactJSON(ret)
 	}

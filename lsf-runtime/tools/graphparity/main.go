@@ -348,6 +348,7 @@ func marshalCase(c jsCase) (b []byte, err error) {
 // when verbose) to w. It returns the number of cases that differ and the
 // number run.
 func run(repo string, verbose bool, w io.Writer) (failed, total int, err error) {
+	d20Rewrites = 0
 	cases, err := buildCases(repo)
 	if err != nil {
 		return 0, 0, err
@@ -370,6 +371,9 @@ func run(repo string, verbose bool, w io.Writer) (failed, total int, err error) 
 		} else if verbose {
 			fmt.Fprintf(w, "ok   %s\n", c.Name)
 		}
+	}
+	if d20Rewrites == 0 {
+		return failed, len(cases), errors.New("no signal fixture has a merge status outside the schema (plan D20)")
 	}
 	return failed, len(cases), nil
 }
@@ -476,6 +480,9 @@ func constants(c jsCase) any {
 	}
 }
 
+// d20Rewrites counts the merges d20Merge rewrote: the fixtures must reach D20.
+var d20Rewrites int
+
 // mergeStatuses are MergeResultSchema's status enum.
 var mergeStatuses = []string{"clean", "resolved", "unresolvable", "regressed"}
 
@@ -491,10 +498,12 @@ func d20Merge(r plan.MergeResult, at plan.At) plan.MergeResult {
 		if slices.Contains(mergeStatuses, m.Status) {
 			continue
 		}
-		if !slices.ContainsFunc(sigs, func(s *plan.Signal) bool { return s.Kind == "schema-violation" && s.Unit == m.Unit }) {
-			panic("D20: merge of " + m.Unit + " with status " + m.Status + " is not a schema-violation")
+		mine := slices.DeleteFunc(slices.Clone(sigs), func(s *plan.Signal) bool { return s.Unit != m.Unit })
+		if len(mine) != 1 || mine[0].Kind != "schema-violation" || !plan.IsStopKind(mine[0].Kind) {
+			panic("D20: merge of " + m.Unit + " with status " + m.Status + " is not one schema-violation stop")
 		}
 		out.Merges[i].Status = "resolved"
+		d20Rewrites++
 	}
 	return out
 }

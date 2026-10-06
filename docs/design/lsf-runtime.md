@@ -155,7 +155,7 @@ The decision carries the cost of the distribution unit (`runtime-distribution`):
 | `testdata/` | the stub `claude` |
 | `tools/` | the two port units' cross-language comparison scripts, in Go; they run `node` on the JavaScript side until `script-retirement` |
 
-- `runtime` does not depend on `plan` until `runtime-signals` turns driver events into signal kinds; that unit edits both.
+- `runtime` does not depend on `plan`. It reports driver events in `CallResult`, and the orchestrator maps them to signal kinds.
 - `go test ./...` from `lsf-runtime/` is the suite that `script-retirement` and `programme-close` name.
 - The `runtime/` directory's package is named `lsfrt`, so it does not shadow the stdlib's `runtime`.
 
@@ -179,7 +179,16 @@ Unit `runtime-core`, plan `docs/plans/runtime-core-plan.md`. Package `lsfrt` in 
 
 - **`Run(ctx, cfg, body)`** is one launch. It takes an `flock` on the state dir, reaps orphans, installs the signal handlers, runs `body(ctx, rt)`, and writes `summary.json`. Its error is for setup failures only; how the body ended is the summary's `stop_reason`.
 - **`rt.Agent(ctx, prompt, opts)`** is the orchestrator's `agent()`. `(nil, nil)` is null. The only error is a `*StopError`, which the orchestrator propagates.
-- **`rt.Call`** is the same call, returning a `CallResult`: the value, the last attempt's class, flags such as `skill-not-loaded`, permission denials, attempts, cost, and whether it was replayed. A replay returns the flags and denials journaled with the call. It is the channel through which `runtime-signals` reads driver events; the orchestrator calls agents through it.
+- **`rt.Call`** is the same call, returning a `CallResult`, which carries:
+  - the value and the last attempt's class;
+  - flags: `skill-not-loaded`, `guard-killed-after-result`, `uncommitted-unchecked`;
+  - permission denials;
+  - uncommitted paths (see *Uncommitted at return*);
+  - for a null after invalid returns, the schema violations;
+  - attempts, cost, and whether it was replayed.
+
+  A replay returns the flags, denials and uncommitted paths journaled with the call, and re-checks the paths. The orchestrator calls agents through `rt.Call` and maps these driver events to signals.
+- **`ValidateOutput(schema, raw)`** is the validator, exported for the returns the runtime did not see: the orchestrator's seeds. An empty schema is no check.
 - **`rt.Parallel(ctx, thunks)`** runs every thunk. A branch's error or panic becomes a nil slot. A stop in any branch is returned once all branches finish.
 - **`rt.Step(ctx, label, input, fn)`** journals a code step (see Journal).
 - **`rt.Repo()`** is the config's `repo`, the main checkout.
@@ -241,6 +250,21 @@ Classification reads the `result` event first, because the CLI can recover from 
 - **Skill load.** A slash-command expansion is not echoed on stdout. In probes, the init event's `slash_commands` listed the command exactly when it expanded, and an unknown command was sent as plain text. So a prefixed call loaded its skill if the init event lists it. A `Skill` tool call naming it also counts.
 - **Guard timeout, or a second signal.** The process group gets SIGTERM, the leader SIGKILL after `killGrace`, and the group SIGKILL once the leader is reaped. This reaches a grandchild that ignores SIGTERM. A call that exits normally is not group-killed.
 
+### Uncommitted at return
+
+Every call that spawned and returns a value or a null reports the paths it left uncommitted: modified, staged or untracked, but not ignored. The check comes from `git status --porcelain=v1 -z --untracked-files=all`, run at the work tree's toplevel.
+
+- **An isolated call** reports every dirty path in its worktree. The worktree is the call's own.
+- **A repo call** snapshots the main checkout at its first admitted attempt, with a content hash for each dirty file. It reports only the paths that are new, or whose status or content changed, by its return. Dirt from a failed attempt before a retry is the call's.
+- **Excluded:** paths under the state dir, which are neither reported nor hashed.
+- **A stop or a dry run** gets no check.
+- **A failed check** (git error or timeout, before or after) sets `uncommitted-unchecked`. That flag is not journaled.
+- **The journal** keeps the paths. A replay re-checks them:
+  - an isolated call checks its worktree as it now stands; a removed worktree is clean;
+  - a repo call keeps the journaled paths that are still dirty.
+
+  So committing or removing the paths, then resuming, clears the signal.
+
 ### Journal and state dir
 
 | Path | Holds |
@@ -261,7 +285,7 @@ Classification reads the `result` event first, because the CLI can recover from 
 
 ### Supervision
 
-- **Signals.** The first SIGINT or SIGTERM sets the sticky stop `signal-SIGINT` or `signal-SIGTERM`. In-flight attempts finish and their results are journaled. Retries, backoff and gate waits are abandoned, and every later boundary returns the stop. A second signal cancels in-flight attempts. A journal replay is still served after a stop, since it costs nothing; the stop returns at the first call that would spawn.
+- **Signals.** The first SIGINT or SIGTERM sets the sticky stop `signal-SIGINT` or `signal-SIGTERM`. In-flight attempts finish and their results are journaled. Retries, backoff and gate waits are abandoned, and every later boundary returns the stop. A second signal cancels in-flight attempts and ends the ctx a running code step was given, so its git stops too. A journal replay is still served after a stop, since it costs nothing; the stop returns at the first call that would spawn.
 - **`stop_reason` precedence.** A stop the runtime recorded wins, even if the body swallowed it. Then a `StopError` from the body, then `cancelled` (the parent context), then `crashed` (a body error or panic), then `returned`.
 - **Caps** are checked at spawn. A cap that passes during a step or a backoff stops the run at the next spawn.
 - **Orphans.** At launch, every process whose arguments carry `--session-id <id>` for an id in `children.json` is a call left by a killed launch. Its group gets SIGTERM, then SIGKILL after `killGrace`; a zombie counts as gone. If `ps` fails, or a kill fails, those records are carried into this launch's `children.json` for the next launch to reap. A torn `children.json` is reported and treated as empty.
@@ -273,15 +297,15 @@ Classification reads the `result` event first, because the CLI can recover from 
 
 ### Not in this unit
 
-- Checking returned SHAs: `code-stage-interface` (rejection) and `runtime-signals` (the corrected-SHA signal).
 - Gates on a clean checkout: `declared-gates`.
-- Driver events as ledger signals (uncommitted at return, denials, `skill-not-loaded`): `runtime-signals`, through `CallResult`.
 - Cleanup's ignored-file policy: `code-stage-interface`.
 - A stop file, status readers and detaching: `runtime-cli-drive`.
 - The roles' content: `s2-permissions-design`.
 
 ### Known limits
 
+- **Uncommitted attribution.** A requester edit to the main checkout during a repo call is attributed to that call. The review gate and cleanup run in parallel in the main checkout, so a change made during them is attributed to both.
+- **A repo call's null re-run.** A repo call that returned null with dirt is not journaled. On resume it re-runs with that dirt in its before-state, so the dirt is not reported again.
 - **Session limits.** The shape of a session limit under `-p` is built from the binary's schema and interactive transcripts, not observed. The first real limit's stream is kept under `calls/`.
 - **Retries in a dirty worktree.** A retry after a worker made partial changes reruns in the same worktree.
 - **Group kill after reaping.** After the leader of a cancelled call is reaped, its pgid could in principle be reused before the group SIGKILL. Sequential pid allocation makes this need a wrapped pid space.

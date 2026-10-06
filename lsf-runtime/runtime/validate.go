@@ -9,6 +9,20 @@ import (
 	"strings"
 )
 
+// ValidateOutput is validateOutput for the orchestrator, which checks the
+// returns the runtime did not validate (seeds). An empty schema is no
+// check.
+func ValidateOutput(schema, raw json.RawMessage) []string {
+	if len(bytes.TrimSpace(schema)) == 0 {
+		return nil
+	}
+	return validateOutput(schema, raw)
+}
+
+// noOutput is the violation for a result with no structured output; the
+// orchestrator's mapper (plan.SignalsFromCall) words it as a missing return.
+const noOutput = "no structured_output"
+
 // validateOutput checks raw JSON against the JSON Schema subset the stage
 // schemas use: type, properties, required, items, enum (the spike's
 // validate.js). It returns one message per violation; none means valid.
