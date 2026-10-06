@@ -102,5 +102,39 @@ Minors not acted on, for Phase 5:
 | S8 | pass | evidenced / evidenced | `git diff --stat cfaf279 -- workflows/` is empty |
 | S9 | pass | evidenced / evidenced | `CLAUDE.md` entry updated (`36f6df3`) |
 
-## Remaining phases
-Complete Phase 5 (Review) as defined in the phronithm:feature skill.
+## Phase 5
+
+Both gates ran in subagents at the sonnet pin over `cfaf279..9e873ae`, and neither had Critical findings.
+
+**`phronithm:review`, all lenses.** `go vet` was clean; staticcheck is not installed. It raised two Significant findings, both JS defects the port had inherited. They are fixed in Go and recorded, following the plan package's fix-and-record policy (`dac326a`):
+- **D16.** `maxUnitsPerWave` below 1 is an args error. In JS, 0 runs no unit and returns `complete`.
+- **D17.** A completion report without a branch or commit aborts the unit. In JS, the unit is left out of the merge silently and re-runs every wave.
+
+Minor findings fixed:
+- promptparity fails on an allowlist entry that nothing matches any more;
+- fixturerun read errors are reported;
+- the long-gate test skips without bash and has a wider margin;
+- the fake claude reports a failure to create its count file;
+- a shadowed variable is renamed.
+
+Minor findings not acted on:
+- the size of `step` and `runUnit` (the JS has the same shape);
+- `orchtest` importing `testing`;
+- `carriedRow` recovering every panic;
+- the terse test-helper names.
+
+**Full-diff critique.** No Significant findings. Minors fixed (`4a0ff52`):
+- D9 states the validator's lack of an integer bound;
+- `commits` is not decoded;
+- the integration table fails fast on a null or missing return;
+- the fake-claude switch also requires `--session-id`;
+- fixturerun probes `mean` behaviourally.
+
+Minors not acted on:
+- **Handler returns are not schema-validated by the stub.** The integration test's real runtime validates the one scenario it runs. Otherwise the tests and scenarios are trusted to be on schema.
+- **The mutation checks are recorded, not committed as tests.**
+- **The integration test's cost under `-race`** is about 30 s.
+
+**Assertions that differ from the JS.** One ported test asserts something different from its JS original: the `{1: 42}` case of "a document that did not move…" expects a merge `agent-null` stop where the JS expects `complete` (D9). The others assert what the JS asserts. An error-message test matches on its substring.
+
+**End to end:** S4 above.
