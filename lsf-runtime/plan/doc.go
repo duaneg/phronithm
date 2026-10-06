@@ -58,6 +58,8 @@
 //     an int. ConfigFrom keeps the default for a null field (JS compares
 //     against null, i.e. 0) and rejects a non-integer (JS coerces).
 //
+// D9 onward are the orchestrator's: see orchestrator/doc.go.
+//
 // Not replicated: a YAML document nested thousands of levels deep, on
 // which JS throws a RangeError. The parser reads Go strings as bytes; its
 // inputs arrive through JSON decoding, so they are valid UTF-8.
