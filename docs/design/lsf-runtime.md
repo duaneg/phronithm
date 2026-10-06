@@ -170,3 +170,113 @@ The decision carries the cost of the distribution unit (`runtime-distribution`):
   - `testdata/` is in `runtime-core`'s Scope, and `tools/` in the two port units', which are serial.
   - `go.mod` changes only when a unit adds a dependency or a `tool` directive, which that unit records as a decision.
 - **No top-level `bin/`.** Skills invoke the runtime through `${CLAUDE_PLUGIN_ROOT}`, so organisation-sync installs keep working.
+
+## Runtime
+
+Unit `runtime-core`, plan `docs/plans/runtime-core-plan.md`. Package `lsfrt` in `lsf-runtime/runtime/`; tests run against the stub `lsf-runtime/testdata/claude` and streams recorded from Claude Code 2.1.289 (`testdata/streams/`).
+
+### Interface
+
+- **`Run(ctx, cfg, body)`** is one launch. It takes an `flock` on the state dir, reaps orphans, installs the signal handlers, runs `body(ctx, rt)`, and writes `summary.json`. Its error is for setup failures only; how the body ended is the summary's `stop_reason`.
+- **`rt.Agent(ctx, prompt, opts)`** is the orchestrator's `agent()`. `(nil, nil)` is null. The only error is a `*StopError`, which the orchestrator propagates.
+- **`rt.Call`** is the same call, returning a `CallResult`: the value, the last attempt's class, flags such as `skill-not-loaded`, permission denials, attempts, cost, and whether it was replayed. It is the channel through which `runtime-signals` reads driver events.
+- **`rt.Parallel(ctx, thunks)`** runs every thunk. A branch's error or panic becomes a nil slot. A stop in any branch is returned once all branches finish.
+- **`rt.Step(ctx, label, input, fn)`** journals a code step (see Journal).
+- **`rt.Log`** and **`rt.Args`**: `Args` is the config's `args`, passed through.
+
+`opts` mirrors the JavaScript: `label`, `phase` (telemetry only), `model`, `effort`, `agentType`, `isolation`, `schema`.
+
+### Configuration
+
+The JSON config is decoded strictly. `testdata/config.example.json` carries the spike's roles and rules as a worked example; it is not a default.
+
+- **Roles.** Each role is `tools`, `allow`, `deny` and `permissionMode`. They become `--tools`, `--allowedTools`, `--disallowedTools` and `--permission-mode`. The runtime has no built-in role; `s2-permissions-design` decides their content.
+- **Role rules.** `roleRules` map `agentType` and a label regex (both must match when both are set) to a role. The first match wins; otherwise `defaultRole` applies.
+- **Skills.** `skills` map a label regex to a skill. A matching call's prompt is sent as `/<skill> <prompt>`.
+- **Caps** are per launch: `maxCalls` (spawns), `maxWallClock`, `maxCostUSD` (summed `total_cost_usd`; in-flight calls can overshoot).
+- **Timing.**
+  - `guardTimeout`: per attempt, none by default.
+  - `killGrace`: 10 s.
+  - `backoff`: 5 s, 20 s, 60 s.
+  - `sessionLimitMargin`: 30 s past the reset.
+  - `sessionLimitFallback`: 15 min when the stream gives no reset.
+  - `maxSessionWaits`: 4 per call.
+- **`dryRun`.** The first call that would spawn logs its argv and stops the launch with `dry-run`. A step that is not replayed stops without running. Orphans are reported, not killed.
+
+### A call
+
+The prompt goes on stdin. Every call passes `-p --output-format stream-json --verbose --session-id <uuid> --strict-mcp-config --json-schema <schema>`, plus `--model`, `--effort` and the role's flags. Each call runs in its own process group.
+
+Order inside a call:
+
+1. The journal is checked; a replay returns at once and does not count against the caps.
+2. The stop is checked.
+3. The dry-run check runs.
+4. The worktree is created, if the call is isolated.
+5. Each attempt: wait out the session-limit gate, take a concurrency slot, then admit or stop in one critical section (stop, parent context, gate again, caps), then spawn.
+
+Classification reads the `result` event first, because the CLI can recover from a mid-stream error and still return a valid result. First match wins:
+
+| Class | When | Then |
+|---|---|---|
+| `stopped` | a repeated signal cancelled the attempt | the stop |
+| `timeout` | the guard timeout fired | null |
+| `spawn-error` | the process did not start | null |
+| `ok` | valid `structured_output`; skill loaded or none required | the value |
+| `skill-missing` | as `ok`, but no skill load | retry; on the second miss, the value, flagged `skill-not-loaded` |
+| `invalid` | clean result, `structured_output` missing, null or failing the schema | retry, then null |
+| `session-limit` | no clean result, and an assistant `error: rate_limit` | wait until `resetsAt` (from a `rejected` `rate_limit_event`, else the fallback) plus margin, then retry; null after `maxSessionWaits` |
+| `permanent` | assistant error `model_not_found`, `authentication_failed`, `billing_error`, `invalid_request` and the like, or status 400/401/403/404 | null |
+| `transient` | anything else | back off, then null |
+
+- `invalid` and `skill-missing` share one retry.
+- A session limit moves a runtime-wide gate that every call waits on. It is assumed to apply across models. It does not spend the transient budget.
+- The schema validator covers the subset the stage schemas use: `type`, `properties`, `required`, `items` and `enum`, with JavaScript's integer and number-equality semantics.
+- **Skill load.** A slash-command expansion is not echoed on stdout. In probes, the init event's `slash_commands` listed the command exactly when it expanded, and an unknown command was sent as plain text. So a prefixed call loaded its skill if the init event lists it. A `Skill` tool call naming it also counts.
+- **Guard timeout, or a second signal.** The process group gets SIGTERM, the leader SIGKILL after `killGrace`, and the group SIGKILL once the leader is reaped. This reaches a grandchild that ignores SIGTERM. A call that exits normally is not group-killed.
+
+### Journal and state dir
+
+| Path | Holds |
+|---|---|
+| `lock` | the launch's `flock` |
+| `journal/<key>.json` | a completed call's or step's record: label, kind, input hash, return, flags |
+| `journal/<key>.intent` | a step's input hash while it runs |
+| `calls/<key>.<launch>.a<n>.<session>.jsonl` | each attempt's stream |
+| `children.json` | session id → pid of live calls |
+| `wt/<key>` | isolated calls' worktrees, on `lsf/<plan8>/<key>` |
+| `status.json`, `summary.json`, `log.txt`, `telemetry.jsonl` | launch state, the `stop_reason`, the log, one event per line |
+
+- **Keys.** `<key>` is the label made filename-safe plus 8 hex digits of its hash. Labels must be unique per call: the journal keeps one record per label, and a label reused with other inputs in one launch is logged `label-reused`.
+- **Call records.** A call's hash covers the prompt (before the skill prefix), the schema, the model and the effort. Role and permissions are excluded, so changing them does not re-run completed work. A null return is not recorded, so a resume retries it.
+- **Step records.** A step writes an intent, runs, records its return (null included) and removes the intent. A step that errors keeps its intent, so the next launch reruns it with `interrupted=true` for its own effect check.
+- **Replays.** A replayed value is byte-identical to the live one (compacted JSON).
+- **File writes.** Records, intents, `children.json`, the status and the summary are written by temp file and rename.
+
+### Supervision
+
+- **Signals.** The first SIGINT or SIGTERM sets the sticky stop `signal-SIGINT` or `signal-SIGTERM`. In-flight attempts finish and their results are journaled. Retries, backoff and gate waits are abandoned, and every later boundary returns the stop. A second signal cancels in-flight attempts.
+- **`stop_reason` precedence.** A stop the runtime recorded wins, even if the body swallowed it. Then a `StopError` from the body, then `cancelled` (the parent context), then `crashed` (a body error or panic), then `returned`.
+- **Orphans.** At launch, every process whose arguments carry `--session-id <id>` for an id in `children.json` is a call left by a killed launch. Its group gets SIGTERM, then SIGKILL after `killGrace`. If `ps` fails, `children.json` is kept for the next launch. A torn `children.json` is reported and treated as empty.
+- **Worktrees.**
+  - Creation is serialised.
+  - An existing `wt/<key>` is reused only if it is a worktree on its branch; otherwise the run stops with `runtime-error`.
+  - A branch whose directory is gone is re-attached, not reset.
+  - Missing `planSha` or `integrationBranch` in `args` stops the run with `runtime-error`.
+
+### Not in this unit
+
+- Checking returned SHAs: `code-stage-interface` (rejection) and `runtime-signals` (the corrected-SHA signal).
+- Gates on a clean checkout: `declared-gates`.
+- Driver events as ledger signals (uncommitted at return, denials, `skill-not-loaded`): `runtime-signals`, through `CallResult`.
+- Cleanup's ignored-file policy: `code-stage-interface`.
+- A stop file, status readers and detaching: `runtime-cli-drive`.
+- The roles' content: `s2-permissions-design`.
+
+### Known limits
+
+- **Session limits.** The shape of a session limit under `-p` is built from the binary's schema and interactive transcripts, not observed. The first real limit's stream is kept under `calls/`.
+- **Retries in a dirty worktree.** A retry after a worker made partial changes reruns in the same worktree.
+- **Group kill after reaping.** After the leader of a cancelled call is reaped, its pgid could in principle be reused before the group SIGKILL. Sequential pid allocation makes this need a wrapped pid space.
+- **Orphan grandchildren.** An orphan whose group leader is gone is not signalled.
+- **macOS.** `ps -A -ww`, `flock` and process groups have not been run on macOS.

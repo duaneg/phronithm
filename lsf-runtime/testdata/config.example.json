@@ -1,0 +1,40 @@
+{
+  "stateDir": "/path/to/state",
+  "repo": "/path/to/repo",
+  "args": {"name": "example", "planSha": "0123456789abcdef", "integrationBranch": "main", "architectureDoc": "docs/architecture/example.md"},
+  "concurrency": 4,
+  "defaultRole": "worker",
+  "roles": {
+    "worker": {
+      "tools": "default",
+      "allow": ["Read", "Edit", "Write", "Glob", "Grep", "Skill", "Bash"],
+      "deny": ["Bash(git push*)", "Bash(git worktree *)", "Bash(git branch -D*)", "Bash(git branch -d*)", "Bash(git config*)", "Bash(git update-ref*)", "Bash(rm -rf*)",
+               "Edit(.git/**)", "Write(.git/**)", "Edit(.claude/**)", "Write(.claude/**)"],
+      "permissionMode": "dontAsk"
+    },
+    "critique": {
+      "tools": "Read,Grep,Glob,Skill,Bash",
+      "allow": ["Skill", "Read", "Grep", "Glob", "Bash"],
+      "deny": ["Bash(git push*)", "Bash(git worktree *)", "Bash(git branch -D*)", "Bash(git branch -d*)", "Bash(git config*)", "Bash(git update-ref*)", "Bash(rm -rf*)",
+               "Edit(.git/**)", "Write(.git/**)", "Edit(.claude/**)", "Write(.claude/**)",
+               "Bash(git commit*)", "Bash(git merge*)", "Bash(git rebase*)"],
+      "permissionMode": "dontAsk"
+    }
+  },
+  "roleRules": [
+    {"agentType": "phronithm:critic", "role": "critique"},
+    {"label": "^(critique-|lens-review|review-gate)", "role": "critique"}
+  ],
+  "skills": [
+    {"label": "^(critique-plan|critique-code|critique-design)", "skill": "phronithm:critique"},
+    {"label": "^lens-review", "skill": "phronithm:review"},
+    {"label": "^(replan|decision-replan)", "skill": "phronithm:breakdown"}
+  ],
+  "caps": {"maxCalls": 400, "maxWallClock": "48h", "maxCostUSD": 500},
+  "guardTimeout": "3h",
+  "killGrace": "10s",
+  "backoff": ["5s", "20s", "60s"],
+  "sessionLimitMargin": "30s",
+  "sessionLimitFallback": "15m",
+  "maxSessionWaits": 4
+}

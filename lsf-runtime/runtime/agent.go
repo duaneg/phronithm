@@ -60,7 +60,6 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 			cwd:        cwd,
 			transcript: filepath.Join(rt.cfg.StateDir, "calls", fmt.Sprintf("%s.%s.a%d.%s.jsonl", key, rt.launchID, res.Attempts, sid[:8])),
 		})
-		rt.release()
 		res.Attempts++
 		if r := a.acc.Result; r != nil {
 			res.CostUSD += r.CostUSD
@@ -68,9 +67,22 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 			rt.addCost(r.CostUSD)
 		}
 		if a.cause != nil && !errors.Is(a.cause, errGuard) && !errors.Is(a.cause, errKilled) {
+			rt.release()
 			return res, &StopError{Reason: StopCancelled}
 		}
 		v := classify(a, o.Schema, skill, skill != "")
+		if v.class == classSessionLimit {
+			// The gate moves before the slot frees, so a call queued for the
+			// slot cannot spawn into the limit. A reset already past (a stale
+			// event) still waits the margin. Other calls learn of the limit
+			// even when this one gives up.
+			until := time.Now().Add(rt.cfg.SessionLimitFallback.D())
+			if !v.resetsAt.IsZero() {
+				until = maxTime(v.resetsAt, time.Now()).Add(rt.cfg.SessionLimitMargin.D())
+			}
+			rt.extendLimit(until, o.Label)
+		}
+		rt.release()
 		res.Class = string(v.class)
 		rt.recordAttempt(o, roleName, sid, res.Attempts-1, a, v, time.Since(t0))
 
@@ -114,12 +126,6 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 			rt.Log(fmt.Sprintf("%s: transient failure persisted over %d attempt(s); null", o.Label, res.Attempts))
 			return res, nil
 		case classSessionLimit:
-			// A reset already past (a stale event) still waits the margin.
-			until := time.Now().Add(rt.cfg.SessionLimitFallback.D())
-			if !v.resetsAt.IsZero() {
-				until = maxTime(v.resetsAt, time.Now()).Add(rt.cfg.SessionLimitMargin.D())
-			}
-			rt.extendLimit(until, o.Label) // other calls learn of the limit even when this one gives up
 			if waits < rt.cfg.MaxSessionWaits {
 				waits++
 				continue

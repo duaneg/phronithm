@@ -112,3 +112,17 @@ func TestLoadConfigRejectsDurationsAndTrailing(t *testing.T) {
 		}
 	}
 }
+
+func TestExampleConfigLoads(t *testing.T) {
+	t.Setenv("LSF_CLAUDE_BIN", "")
+	c, err := LoadConfig(filepath.Join("..", "testdata", "config.example.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name, _ := c.roleFor(Opts{Label: "lens-review:general:r1:u1"}); name != "critique" {
+		t.Errorf("lens review role %s", name)
+	}
+	if s := c.skillFor("critique-code:r2:u1"); s != "phronithm:critique" {
+		t.Errorf("skill %q", s)
+	}
+}
