@@ -503,3 +503,95 @@ func TestFindingsRoundTripDigest(t *testing.T) {
 		t.Errorf("digest does not read the mapper's statements: %v %v", d.Attention.UnfixedSignificant.Map(), d.Attention.MinorFindings.Map())
 	}
 }
+
+// D20: a merge status outside the schema is not a claimed-disjoint
+// conflict, and a severity outside it is not dropped.
+func TestFailClosedMappers(t *testing.T) {
+	m := SignalsFromMerge(MergeResult{Merges: []Merge{{Unit: "B", Status: "weird", Files: []string{"a.go"}}}}, At{Wave: W(1)})
+	eqStrings(t, "merge kinds", kinds(m), []string{"schema-violation"})
+	if m[0].Statement != `merge of B: status "weird" is outside the schema` || m[0].Unit != "B" || !IsStopKind(m[0].Kind) {
+		t.Errorf("%+v", m[0])
+	}
+	f := SignalsFromFindings([]Finding{{Severity: "Major", Statement: "s", Location: "a.go:1", Stage: "critique-code", Round: 1}}, At{Stage: "review", Unit: "B", Wave: W(1)})
+	eqStrings(t, "finding kinds", kinds(f), []string{"schema-violation"})
+	if f[0].Source != "structural" || f[0].Stage != "critique-code" || f[0].Referent != "a.go:1" || !strings.Contains(f[0].Statement, `"Major"`) {
+		t.Errorf("%+v", f[0])
+	}
+}
+
+func TestSignalsFromCall(t *testing.T) {
+	at := At{Stage: "implement", Unit: "B", Wave: W(2)}
+	all := CallEvents{
+		Label: "implement:B", Writer: true,
+		Flags:       []string{"guard-killed-after-result", "skill-not-loaded", "mystery"},
+		Denials:     []string{"Bash: git commit -m x"},
+		Uncommitted: []string{"a.go", "b.go"},
+		Violations:  []string{"result.status: not in enum"},
+	}
+	sigs, unknown := SignalsFromCall(all, at)
+	eqStrings(t, "kinds", kinds(sigs), []string{"schema-violation", "skill-not-loaded", "uncommitted-at-return", "permission-denied", "guard-killed-after-result"})
+	eqStrings(t, "unknown", unknown, []string{"mystery"})
+	for _, s := range sigs {
+		if s.Source != "structural" || s.Referent != "implement:B" || s.Stage != "implement" || s.Unit != "B" || *s.Wave != 2 {
+			t.Errorf("%+v", s)
+		}
+	}
+	ev := EvaluateWave(sigs)
+	eqStrings(t, "stops", kinds(ev.Stops), []string{"schema-violation", "skill-not-loaded", "uncommitted-at-return"})
+	if sigs[2].Statement != "2 path(s) uncommitted at return: a.go, b.go" || sigs[3].Statement != "1 permission denial(s): Bash: git commit -m x" {
+		t.Errorf("statements %q %q", sigs[2].Statement, sigs[3].Statement)
+	}
+
+	reader := all
+	reader.Writer = false
+	sigs, _ = SignalsFromCall(reader, at)
+	if sigs[2].Kind != "residue-at-return" || IsStopKind(sigs[2].Kind) {
+		t.Errorf("reader: %+v", sigs[2])
+	}
+
+	unchecked, _ := SignalsFromCall(CallEvents{Label: "merge:w1", Writer: true, Flags: []string{"uncommitted-unchecked"}}, At{Stage: "merge", Wave: W(1)})
+	if len(unchecked) != 1 || unchecked[0].Kind != "uncommitted-at-return" || unchecked[0].Statement != "uncommitted check failed" {
+		t.Errorf("unchecked: %+v", unchecked)
+	}
+
+	noOut, _ := SignalsFromCall(CallEvents{Label: "x", Violations: []string{"no structured_output"}}, at)
+	if noOut[0].Statement != "no structured output after retry (missing, or cut off at the output limit)" {
+		t.Errorf("no output: %q", noOut[0].Statement)
+	}
+
+	many := []string{"a", "b", "c", "d", "e", "f", "g"}
+	capped, _ := SignalsFromCall(CallEvents{Label: "x", Uncommitted: many, Violations: many}, at)
+	if capped[0].Statement != "7 schema violation(s): a; b; c; d; e (and 2 more)" || capped[1].Statement != "7 path(s) uncommitted at return: a, b, c, d, e (and 2 more)" {
+		t.Errorf("caps %q %q", capped[0].Statement, capped[1].Statement)
+	}
+
+	none, unknown := SignalsFromCall(CallEvents{Label: "x"}, at)
+	if len(none) != 0 || len(unknown) != 0 {
+		t.Errorf("quiet call: %v %v", none, unknown)
+	}
+}
+
+func TestShaCorrectedSignal(t *testing.T) {
+	at := At{Stage: "implement", Unit: "B", Wave: W(1)}
+	s := ShaCorrectedSignal(at, "lsf/x/impl", "abc1234", "def5678aaaa", "")
+	if s.Kind != "sha-corrected" || IsStopKind(s.Kind) || s.Statement != "lsf/x/impl: reported abc1234, tip def5678aaaa; corrected" || s.Referent != "lsf/x/impl" {
+		t.Errorf("%+v", s)
+	}
+	f := ShaCorrectedSignal(at, "b", "abc1234", "", "exit 128")
+	if f.Statement != "b: reported abc1234; not checked: exit 128" {
+		t.Errorf("%q", f.Statement)
+	}
+}
+
+func TestGoOnlyKindsAreKinds(t *testing.T) {
+	for _, k := range GoOnlyKinds {
+		if !slices.Contains(StopKinds, k) && !slices.Contains(RecordKinds, k) {
+			t.Errorf("%s is not a kind", k)
+		}
+	}
+	for _, k := range []string{"uncommitted-at-return", "skill-not-loaded", "schema-violation", "stage-fault", "gate-omitted"} {
+		if !IsStopKind(k) {
+			t.Errorf("%s should stop", k)
+		}
+	}
+}

@@ -138,6 +138,7 @@ const MinorLocations = 5
 // Significant finding is one row, against the stage and round that raised
 // it; Minor findings are one count row, naming up to MinorLocations
 // locations and no text. Critical findings are fixed, not recorded here.
+// Any other severity is outside the schema and stops (D20).
 func SignalsFromFindings(findings []Finding, at At) []*Signal {
 	out := []*Signal{}
 	var minors []Finding
@@ -158,6 +159,16 @@ func SignalsFromFindings(findings []Finding, at At) []*Signal {
 			}))
 		case "Minor":
 			minors = append(minors, f)
+		case "Critical":
+		default: // D20: JS drops any other severity
+			stage := f.Stage
+			if stage == "" {
+				stage = at.Stage
+			}
+			out = append(out, NewSignal(Signal{
+				Kind: "schema-violation", Source: "structural", Stage: stage, Unit: at.Unit, Wave: at.Wave,
+				Statement: fmt.Sprintf("finding severity %s is outside the schema: %s", strconv.Quote(f.Severity), f.Statement), Referent: f.Location,
+			}))
 		}
 	}
 	if len(minors) > 0 {
@@ -289,7 +300,8 @@ type MergeResult struct {
 }
 
 // SignalsFromMerge maps the merge stage's result: unresolvable and
-// regressed merges stop; a conflict resolved mechanically is a record.
+// regressed merges stop; a conflict resolved mechanically is a record; any
+// other status is outside the schema and stops (D20).
 func SignalsFromMerge(r MergeResult, at At) []*Signal {
 	out := []*Signal{}
 	for _, m := range r.Merges {
@@ -303,8 +315,10 @@ func SignalsFromMerge(r MergeResult, at At) []*Signal {
 			s.Kind, s.Statement = "merge-conflict-unresolvable", fmt.Sprintf("merge of %s conflicts in %s", m.Unit, files)
 		case "regressed":
 			s.Kind, s.Statement = "merge-regression", fmt.Sprintf("merge of %s was clean but the test suite failed in %s; merge undone", m.Unit, files)
-		default:
+		case "resolved":
 			s.Kind, s.Statement = "claimed-disjoint-conflict", fmt.Sprintf("merge of %s conflicted in %s; resolved mechanically", m.Unit, files)
+		default: // D20: JS records any other status as claimed-disjoint-conflict
+			s.Kind, s.Statement = "schema-violation", fmt.Sprintf("merge of %s: status %s is outside the schema", m.Unit, strconv.Quote(m.Status))
 		}
 		out = append(out, NewSignal(s))
 	}
@@ -366,6 +380,91 @@ func DistressSignals(d Distress, at At, cfg Config) []*Signal {
 		Kind: "execution-distress", Source: "reported", Stage: "implement", Unit: at.Unit, Wave: at.Wave,
 		Statement: strings.Join(reasons, "; "), Referent: at.Unit,
 	})}
+}
+
+// CallEvents are the driver-detected events of one agent call.
+type CallEvents struct {
+	Label       string   // the call's final label: the referent; it locates the transcript under calls/
+	Writer      bool     // the stage commits: uncommitted changes stop
+	Flags       []string // CallResult.Flags
+	Denials     []string
+	Uncommitted []string
+	Violations  []string // CallResult.Violations, or the orchestrator's own schema check
+}
+
+// Listed is how many paths, denials or violations a driver row names.
+const Listed = 5
+
+// listed is up to Listed items joined by sep, then "(and N more)".
+func listed(items []string, sep string) string {
+	s := strings.Join(items[:min(len(items), Listed)], sep)
+	if n := len(items) - Listed; n > 0 {
+		s += fmt.Sprintf(" (and %d more)", n)
+	}
+	return s
+}
+
+// noOutput is the runtime's violation for a result with no structured
+// output, which an output-token cut-off also produces.
+const noOutput = "no structured_output"
+
+// SignalsFromCall maps a call's driver events (orchestrator D21), in this
+// order: schema-violation (stop); skill-not-loaded (stop);
+// uncommitted-at-return for a writer (stop) or residue-at-return for a
+// reader (record), also for flag uncommitted-unchecked; permission-denied
+// (record); guard-killed-after-result (record). Every row is structural,
+// its referent the call's label. Flags it does not know are returned for
+// the caller to log.
+func SignalsFromCall(ev CallEvents, at At) (sigs []*Signal, unknownFlags []string) {
+	sigs = []*Signal{}
+	add := func(kind, statement string) {
+		sigs = append(sigs, NewSignal(Signal{Kind: kind, Source: "structural", Stage: at.Stage, Unit: at.Unit, Wave: at.Wave, Statement: statement, Referent: ev.Label}))
+	}
+	if len(ev.Violations) > 0 {
+		if len(ev.Violations) == 1 && ev.Violations[0] == noOutput {
+			add("schema-violation", "no structured output after retry (missing, or cut off at the output limit)")
+		} else {
+			add("schema-violation", fmt.Sprintf("%d schema violation(s): %s", len(ev.Violations), listed(ev.Violations, "; ")))
+		}
+	}
+	has := func(f string) bool { return slices.Contains(ev.Flags, f) }
+	for _, f := range ev.Flags {
+		if !slices.Contains(callFlags, f) && !slices.Contains(unknownFlags, f) {
+			unknownFlags = append(unknownFlags, f)
+		}
+	}
+	if has("skill-not-loaded") {
+		add("skill-not-loaded", "skill not loaded after retry; return accepted unverified")
+	}
+	uncommitted := "residue-at-return"
+	if ev.Writer {
+		uncommitted = "uncommitted-at-return"
+	}
+	if len(ev.Uncommitted) > 0 {
+		add(uncommitted, fmt.Sprintf("%d path(s) uncommitted at return: %s", len(ev.Uncommitted), listed(ev.Uncommitted, ", ")))
+	} else if has("uncommitted-unchecked") {
+		add(uncommitted, "uncommitted check failed")
+	}
+	if len(ev.Denials) > 0 {
+		add("permission-denied", fmt.Sprintf("%d permission denial(s): %s", len(ev.Denials), listed(ev.Denials, "; ")))
+	}
+	if has("guard-killed-after-result") {
+		add("guard-killed-after-result", "the guard timeout killed the call after its result; the result stands")
+	}
+	return sigs, unknownFlags
+}
+
+// callFlags are the CallResult flags SignalsFromCall maps.
+var callFlags = []string{"skill-not-loaded", "uncommitted-unchecked", "guard-killed-after-result"}
+
+// ShaCorrectedSignal records a returned SHA that was not branch's tip.
+// tip "" means the check could not be made; err says why.
+func ShaCorrectedSignal(at At, branch, reported, tip, err string) *Signal {
+	statement := fmt.Sprintf("%s: reported %s, tip %s; corrected", branch, reported, tip)
+	if tip == "" {
+		statement = fmt.Sprintf("%s: reported %s; not checked: %s", branch, reported, err)
+	}
+	return NewSignal(Signal{Kind: "sha-corrected", Source: "structural", Stage: at.Stage, Unit: at.Unit, Wave: at.Wave, Statement: statement, Referent: branch})
 }
 
 // ReplanItemKinds are the kinds the re-plan is handed with ids and must

@@ -28,6 +28,12 @@ var StopKinds = []string{
 	"precondition",
 	"invalid-plan",
 	"unserialised-overlap",
+	// Go only (orchestrator D19, D21, D22): driver-detected and code-stage stops.
+	"uncommitted-at-return", // driver: a stage that commits returned with changes no commit holds, or the check failed
+	"skill-not-loaded",      // driver: the call's skill did not load after the runtime's retry
+	"schema-violation",      // driver: a stage result outside its schema (an enum value, a missing field)
+	"stage-fault",           // a code stage failed; the statement gives the reason
+	"gate-omitted",          // implement or code-fix stage: no gate reported, or a gate the implement stage ran left out
 }
 
 // RecordKinds reach the ledger and, where the re-plan can act on them, the
@@ -50,6 +56,18 @@ var RecordKinds = []string{
 	"standing-obligation-carried", // obligations: discharge lies outside this plan by the obligation's own terms, and the referent names where it is now recorded
 	"direct-edit",                 // re-plan or termination: an edit outside the plan, made by a scribe stage without a gate; the referent is the path
 	"document-oversize",           // plan or completion-report stage: the committed document is past twice its size target; the stage never trims to length
+	// Go only (orchestrator D21): driver-detected records.
+	"residue-at-return",         // driver: a read-only stage returned with changes in its checkout
+	"permission-denied",         // driver: the call had permission denials
+	"sha-corrected",             // driver: a returned SHA was not its branch's tip and was replaced by it
+	"guard-killed-after-result", // driver: the guard timeout killed the call after its result; the result stands
+}
+
+// GoOnlyKinds are the kinds the JavaScript does not have (orchestrator D19,
+// D21, D22). tools/graphparity leaves them out of the constants comparison.
+var GoOnlyKinds = []string{
+	"uncommitted-at-return", "skill-not-loaded", "schema-violation", "stage-fault", "gate-omitted",
+	"residue-at-return", "permission-denied", "sha-corrected", "guard-killed-after-result",
 }
 
 var Sources = []string{"structural", "reported", "gate"}

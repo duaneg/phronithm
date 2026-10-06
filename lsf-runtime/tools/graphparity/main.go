@@ -11,6 +11,11 @@
 // document; the signal mappers, stop rule, digest and ledger over
 // plan/testdata/signals; and the exported constants.
 //
+// Two documented divergences are normalised: the Go-only kinds
+// (plan.GoOnlyKinds) are left out of the constants, and a merge status
+// outside the schema is checked to be Go's schema-violation (plan D20),
+// then compared as the JS maps it.
+//
 // Inputs reach node as JSON, so invalid UTF-8 arrives there as U+FFFD while
 // Go parses the raw bytes; the fixtures are valid UTF-8.
 package main
@@ -464,11 +469,40 @@ func constants(c jsCase) any {
 		DefaultConfig            plan.Config     `json:"DEFAULT_CONFIG"`
 		OversizeFactor           int             `json:"OVERSIZE_FACTOR"`
 	}{
-		plan.StopKinds, plan.RecordKinds, plan.Sources, plan.GateKinds, plan.UnitTypes, plan.AmendmentKinds,
+		goOnly(plan.StopKinds), goOnly(plan.RecordKinds), plan.Sources, plan.GateKinds, plan.UnitTypes, plan.AmendmentKinds,
 		plan.InvalidationFields, plan.StageCommonRequired, plan.StageCommonProperties, plan.InvalidationSchema,
 		plan.PlanSchema, plan.MergeResultSchema, plan.DistressSchema, plan.StageSchema(json.RawMessage(c.Text)),
 		plan.BlockingGateKinds, plan.ReplanItemKinds, plan.PlanSupersedingStopKinds, plan.DefaultConfig, plan.OversizeFactor,
 	}
+}
+
+// mergeStatuses are MergeResultSchema's status enum.
+var mergeStatuses = []string{"clean", "resolved", "unresolvable", "regressed"}
+
+// d20Merge checks plan D20 on r, then returns r as the JS maps it: a
+// status outside the schema is a schema-violation stop in Go and a
+// claimed-disjoint-conflict record in the JS, whose row for it is the
+// row for "resolved" (the statement does not name the status).
+func d20Merge(r plan.MergeResult, at plan.At) plan.MergeResult {
+	sigs := plan.SignalsFromMerge(r, at)
+	out := r
+	out.Merges = slices.Clone(r.Merges)
+	for i, m := range out.Merges {
+		if slices.Contains(mergeStatuses, m.Status) {
+			continue
+		}
+		if !slices.ContainsFunc(sigs, func(s *plan.Signal) bool { return s.Kind == "schema-violation" && s.Unit == m.Unit }) {
+			panic("D20: merge of " + m.Unit + " with status " + m.Status + " is not a schema-violation")
+		}
+		out.Merges[i].Status = "resolved"
+	}
+	return out
+}
+
+// goOnly is kinds without the Go-only ones (plan.GoOnlyKinds: orchestrator
+// D19, D21, D22), which the JS lists do not have.
+func goOnly(kinds []string) []string {
+	return slices.DeleteFunc(slices.Clone(kinds), func(k string) bool { return slices.Contains(plan.GoOnlyKinds, k) })
 }
 
 // signals runs a signal fixture: mapper calls, then the stop rule, the
@@ -521,7 +555,7 @@ func signals(c jsCase) any {
 		case "merge":
 			var r plan.MergeResult
 			must(json.Unmarshal(k.Result, &r))
-			sigs = append(sigs, plan.SignalsFromMerge(r, k.At)...)
+			sigs = append(sigs, plan.SignalsFromMerge(d20Merge(r, k.At), k.At)...)
 		case "distress":
 			var r plan.Distress
 			must(json.Unmarshal(k.Result, &r))
