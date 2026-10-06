@@ -11,9 +11,9 @@ import (
 // Stage results, decoded from the stage returns (D9). JSON tags follow the
 // schemas; unknown fields are ignored, as in JS.
 
-// jsInt is a schema `integer`: what the runtime validator accepts, a finite
-// integral number, 3.0 included, within ±2^53 (an int an agent might report;
-// past it float64 is not exact).
+// jsInt is a schema `integer`: a finite integral number, 3.0 included, as
+// the runtime validator accepts, within ±2^53 (past it float64 is not
+// exact; the validator has no bound, see D9).
 type jsInt int
 
 func (n *jsInt) UnmarshalJSON(b []byte) error {

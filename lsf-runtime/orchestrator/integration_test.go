@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -22,7 +23,7 @@ import (
 // answers the prompt on stdin from a table keyed by the prompt's SHA-256,
 // and counts its invocations in LSF_FAKE_CLAUDE_STATE/count.
 func TestMain(m *testing.M) {
-	if table := os.Getenv("LSF_FAKE_CLAUDE_TABLE"); table != "" {
+	if table := os.Getenv("LSF_FAKE_CLAUDE_TABLE"); table != "" && slices.Contains(os.Args, "--session-id") {
 		os.Exit(fakeClaude(table))
 	}
 	os.Exit(m.Run())
@@ -128,6 +129,9 @@ func TestOnRuntimeLabelsUniqueAndReplay(t *testing.T) {
 	for _, c := range s.Calls {
 		sum := sha256.Sum256([]byte(c.Prompt))
 		k := hex.EncodeToString(sum[:])
+		if r := s.Returns[c.Label]; len(r) == 0 || string(r) == "null" {
+			t.Fatalf("%s: no return to serve (the runtime would retry a null)", c.Label)
+		}
 		if prev, ok := table[k]; ok && string(prev) != string(s.Returns[c.Label]) {
 			t.Fatalf("%s: prompt shared with another label that has a different return", c.Label)
 		}

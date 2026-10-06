@@ -75,16 +75,9 @@ func stripSeedPause(s json.RawMessage) json.RawMessage {
 	return b
 }
 
-// commit is one entry of a stage's `commits`.
-type commit struct {
-	Branch string `json:"branch"`
-	Sha    string `json:"sha"`
-}
-
-// ret is a stage return: `result` and `commits`.
+// ret is a stage return's `result`; its `commits` is not read.
 type ret[T any] struct {
-	Result  T        `json:"result"`
-	Commits []commit `json:"commits"`
+	Result T
 }
 
 // decode reads a stage return into its typed struct. Null is nil; a return
@@ -94,9 +87,10 @@ func decode[T any](rt Runtime, label string, raw json.RawMessage) *ret[T] {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil
 	}
+	// commits is not read, so it is not decoded either: a wrong-typed one
+	// must not null a good stage.
 	var r struct {
-		Result  *T       `json:"result"`
-		Commits []commit `json:"commits"`
+		Result *T `json:"result"`
 	}
 	err := json.Unmarshal(raw, &r)
 	if err == nil && r.Result == nil {
@@ -106,7 +100,7 @@ func decode[T any](rt Runtime, label string, raw json.RawMessage) *ret[T] {
 		rt.Log(fmt.Sprintf("%s: return does not decode (%v); treated as null", label, err))
 		return nil
 	}
-	return &ret[T]{Result: *r.Result, Commits: r.Commits}
+	return &ret[T]{Result: *r.Result}
 }
 
 // call is agent plus decode.

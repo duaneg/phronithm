@@ -15,15 +15,17 @@
 //     becomes the stage's agent-null (TestDecodeFailureIsAgentNull; the
 //     {1: 42} case of TestUnmovedDocumentKeepsPin). JS ignores the type
 //     where it tests with typeof or truthiness, and otherwise fails later
-//     with a TypeError. A schema integer accepts what the runtime validator
-//     does: a finite integral number, 3.0 included, within ±2^53. A missing
+//     with a TypeError. A schema integer accepts a finite integral number,
+//     3.0 included, within ±2^53; the runtime validator has no bound, so a
+//     larger integral value is validated and journaled and then decodes as
+//     null on every replay. A missing
 //     field decodes to its zero value, where JS reads undefined, and
 //     encoding/json matches keys case-insensitively. Under the runtime,
 //     schema validation rejects such returns before the orchestrator sees
-//     them (retried, then an unjournaled null), so this arises from args.seed
-//     returns, which bypass validation in both languages (a journal replay
-//     was validated when recorded): a seed is trusted, as the caller vouches
-//     for it.
+//     them (retried, then an unjournaled null), so, past ±2^53, this
+//     arises from args.seed returns, which bypass validation in both
+//     languages (a journal replay was validated when recorded): a seed is
+//     trusted, as the caller vouches for it.
 //   - D10. The nth real call (n ≥ 2) with a label in a launch is label#n,
 //     so the journal keeps one record per call. JS reuses ledger:w<n> when a
 //     stop or pause scribes after the wave's own scribe, and at wave 0 after

@@ -230,10 +230,12 @@ func run(root, claude, dir, example string, dryRun bool) error {
 	if merges, err := git(cfg.Repo, "log", "--merges", "--oneline", "main"); err != nil || strings.TrimSpace(merges) == "" {
 		problems = append(problems, "main has no merge commit")
 	}
-	src, _ := os.ReadFile(filepath.Join(cfg.Repo, "src", "stats.js"))
-	test, _ := os.ReadFile(filepath.Join(cfg.Repo, "test", "stats.test.js"))
-	if !bytes.Contains(src, []byte("export function mean")) || !bytes.Contains(test, []byte("RangeError")) {
-		problems = append(problems, "main lacks mean or its RangeError test")
+	probe := exec.Command("node", "--input-type=module", "-e", `const { mean } = await import('./src/stats.js');
+if (mean([1, 2, 3]) !== 2) throw new Error('mean([1, 2, 3]) is ' + mean([1, 2, 3]));
+try { mean([]); throw new Error('mean([]) did not throw'); } catch (e) { if (!(e instanceof RangeError)) throw e; }`)
+	probe.Dir = cfg.Repo
+	if b, err := probe.CombinedOutput(); err != nil {
+		problems = append(problems, fmt.Sprintf("mean on main: %v %s", err, b))
 	}
 	for _, gate := range [][]string{{"node", "--test"}, {"node", "scripts/lint.js"}} {
 		cmd := exec.Command(gate[0], gate[1:]...)
