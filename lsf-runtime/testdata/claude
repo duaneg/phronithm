@@ -5,21 +5,28 @@
 # STUB_SCRIPT   comma list of modes, one per invocation, the last repeating
 #               (STUB_MODE is the single-mode form; default ok).
 # STUB_STATE    directory for per-invocation records: count, argv.<n> (NUL-
-#               separated), stdin.<n>, pids.<n> ("leader grandchild"), and
-#               active/maxactive (concurrent invocations).
+#               separated), stdin.<n>, started.<n> (unix seconds), pids.<n>
+#               ("leader grandchild"), reset.<n> (session mode's resetsAt),
+#               and active/maxactive (concurrent invocations).
 # STUB_PIDFILE  also receives the grandchild pid of a hang mode.
 # STUB_RESET_IN seconds from now to the session-limit reset (default 1).
 #
 # Modes: ok | cost:<usd> | nullout | invalid | slow:<secs> | transient |
 #        session | session-noreset | hang | hang-ignore-term |
-#        orphan-ignore-term | fixture:<name> (cats streams/<name>.jsonl)
+#        orphan-ignore-term | fixture:<name> (cats streams/<name>.jsonl) |
+#        file:<path> (cats a stream file)
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 state="${STUB_STATE:-}"
-prompt=$(cat)
 n=1
 
-lock() { while ! mkdir "$state/.lock" 2>/dev/null; do sleep 0.01; done; }
+lock() { # a lock older than ~2 s belongs to a killed stub
+  local i=0
+  while ! mkdir "$state/.lock" 2>/dev/null; do
+    i=$((i + 1)); [ "$i" -gt 200 ] && rmdir "$state/.lock" 2>/dev/null
+    sleep 0.01
+  done
+}
 unlock() { rmdir "$state/.lock"; }
 bump() { # name delta: adds delta to a counter file; tracks maxactive
   local v
@@ -36,8 +43,10 @@ if [ -n "$state" ]; then
   bump active 1
   unlock
   printf '%s\0' "$@" > "$state/argv.$n"
-  printf '%s' "$prompt" > "$state/stdin.$n"
+  cat > "$state/stdin.$n"
+  date +%s > "$state/started.$n"
 fi
+[ -z "$state" ] && cat > /dev/null
 finish() { if [ -n "$state" ]; then lock; bump active -1; unlock; fi; }
 
 session=stub
@@ -58,7 +67,7 @@ hang() { # $1: leader TERM disposition, $2: grandchild TERM disposition
   g=$!
   [ -n "${STUB_PIDFILE:-}" ] && echo "$g" > "$STUB_PIDFILE"
   [ -n "$state" ] && echo "$$ $g" > "$state/pids.$n"
-  while :; do wait; done
+  while :; do wait; sleep 1; done
 }
 
 case "$mode" in
@@ -78,6 +87,7 @@ case "$mode" in
              echo '{"type":"assistant","error":"rate_limit","message":{"content":[{"type":"text","text":"You'"'"'ve hit your session limit"}]}}'
              if [ "$mode" = session ]; then
                r=$(( $(date +%s) + ${STUB_RESET_IN:-1} ))
+               [ -n "$state" ] && echo "$r" > "$state/reset.$n"
                echo "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"rejected\",\"resetsAt\":$r,\"rateLimitType\":\"five_hour\"}}"
              fi
              echo '{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"total_cost_usd":0}'; code=1 ;;
@@ -85,6 +95,7 @@ case "$mode" in
   hang-ignore-term)   hang ignore ignore ;;
   orphan-ignore-term) hang default ignore ;;
   fixture:*) cat "$here/streams/${mode#fixture:}.jsonl" ;;
+  file:*)    cat "${mode#file:}" ;;
   *) echo "stub: unknown mode $mode" >&2; code=2 ;;
 esac
 finish

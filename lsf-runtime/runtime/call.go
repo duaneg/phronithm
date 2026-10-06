@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -55,8 +56,10 @@ type spawnSpec struct {
 // spawn runs one attempt and waits for it. A guard timeout or a repeated
 // signal cancels it: SIGTERM to its process group, SIGKILL to the leader
 // after KillGrace, then SIGKILL to the group once the leader is reaped, which
-// reaches survivors such as a TERM-ignoring grandchild (the pgid cannot be
-// reused while any member lives).
+// reaches survivors such as a TERM-ignoring grandchild. While a member lives
+// the pgid cannot be reused; if none does, the pid is free and a new group
+// leader could take it between Wait and the kill. That window is accepted:
+// pids are allocated in sequence, so reuse within it needs a wrapped pid space.
 func (rt *Runtime) spawn(ctx context.Context, sp spawnSpec) *attempt {
 	a := &attempt{}
 	actx, cancel := context.WithCancelCause(ctx)
@@ -88,12 +91,20 @@ func (rt *Runtime) spawn(ctx context.Context, sp spawnSpec) *attempt {
 	cmd.Stdout = lw
 	cmd.Stderr = stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
+	var cancelledRunning atomic.Bool // set when the context ends while the process runs
+	cmd.Cancel = func() error {
+		cancelledRunning.Store(true)
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	}
 	cmd.WaitDelay = rt.cfg.KillGrace.D()
 
 	rt.addChild(sp.sessionID)
 	defer rt.removeChild(sp.sessionID)
 	if err := cmd.Start(); err != nil {
+		if actx.Err() != nil { // cancelled before it started: not a spawn failure
+			a.cause = context.Cause(actx)
+			return a
+		}
 		a.spawnErr = err
 		return a
 	}
@@ -102,7 +113,10 @@ func (rt *Runtime) spawn(ctx context.Context, sp spawnSpec) *attempt {
 	rt.event("spawn", map[string]any{"pid": pid, "session": sp.sessionID, "cwd": sp.cwd})
 	werr := cmd.Wait()
 	lw.flush()
-	if actx.Err() != nil {
+	if lw.fileErr != nil {
+		rt.Log(fmt.Sprintf("transcript %s: %v", sp.transcript, lw.fileErr))
+	}
+	if cancelledRunning.Load() {
 		a.cause = context.Cause(actx)
 		if err := syscall.Kill(-pid, syscall.SIGKILL); err == nil {
 			rt.event("group-killed", map[string]any{"pid": pid, "session": sp.sessionID})
@@ -119,15 +133,23 @@ func (rt *Runtime) spawn(ctx context.Context, sp spawnSpec) *attempt {
 
 // lineWriter tees the stream to the transcript and feeds complete lines to
 // the accumulator. exec's copier calls Write from one goroutine.
+// A file error stops the tee, not the parse: returning it would stop exec's
+// copier and leave the child blocked on a full pipe.
 type lineWriter struct {
-	file *os.File
-	acc  *streamAcc
-	buf  []byte
+	file    *os.File
+	fileErr error
+	acc     *streamAcc
+	buf     []byte
 }
 
+// maxLine bounds a buffered line; a longer one is dropped as a bad line.
+const maxLine = 64 << 20
+
 func (w *lineWriter) Write(p []byte) (int, error) {
-	if _, err := w.file.Write(p); err != nil {
-		return 0, err
+	if w.fileErr == nil {
+		if _, err := w.file.Write(p); err != nil {
+			w.fileErr = err
+		}
 	}
 	w.buf = append(w.buf, p...)
 	for {
@@ -137,6 +159,10 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 		}
 		w.acc.add(w.buf[:i])
 		w.buf = w.buf[i+1:]
+	}
+	if len(w.buf) > maxLine {
+		w.acc.BadLines++
+		w.buf = nil
 	}
 	return len(p), nil
 }

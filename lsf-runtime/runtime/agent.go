@@ -1,0 +1,276 @@
+package lsfrt
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"path/filepath"
+	"time"
+)
+
+// Call runs one headless call (design §2.5), or replays it from the journal.
+// The only non-nil error is *StopError.
+func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult, error) {
+	key := journalKey(o.Label)
+	hash := callHash(prompt, o)
+	if res, ok := rt.replayCall(key, hash, o.Label); ok {
+		return res, nil
+	}
+	if err := rt.boundary(ctx); err != nil {
+		return CallResult{}, err
+	}
+	roleName, role := rt.cfg.roleFor(o)
+	skill := rt.cfg.skillFor(o.Label)
+	sent := withSkill(skill, prompt)
+	if rt.cfg.DryRun {
+		argv := buildArgv(o, role, "<session-id>")
+		rt.event("dry-run", map[string]any{"label": o.Label, "role": roleName, "argv": argv, "stdin": truncateRunes(sent, 200)})
+		rt.Log(fmt.Sprintf("dry run: %s would run %s %q", o.Label, rt.cfg.ClaudeBin, argv))
+		return CallResult{}, rt.setStop(StopDryRun, o.Label)
+	}
+	cwd, err := rt.cwdFor(o, key)
+	if err != nil {
+		return CallResult{}, err
+	}
+
+	var res CallResult
+	var retried, transient, waits int // shared invalid/skill-missing retry; transient retries; session-limit waits
+	for {
+		if err := rt.waitLimit(ctx); err != nil {
+			return res, err
+		}
+		if err := rt.acquire(ctx); err != nil {
+			return res, err
+		}
+		if err := rt.admit(); err != nil {
+			rt.release()
+			return res, err
+		}
+		sid := newUUID()
+		t0 := time.Now()
+		a := rt.spawn(ctx, spawnSpec{
+			prompt:     sent,
+			argv:       buildArgv(o, role, sid),
+			sessionID:  sid,
+			cwd:        cwd,
+			transcript: filepath.Join(rt.cfg.StateDir, "calls", fmt.Sprintf("%s.%s.a%d.jsonl", key, rt.launchID, res.Attempts)),
+		})
+		rt.release()
+		res.Attempts++
+		if r := a.acc.Result; r != nil {
+			res.CostUSD += r.CostUSD
+			res.Denials = r.Denials
+			rt.addCost(r.CostUSD)
+		}
+		if ctx.Err() != nil && a.cause != errGuard && a.cause != errKilled {
+			return res, &StopError{Reason: StopCancelled}
+		}
+		v := classify(a, o.Schema, skill, skill != "")
+		res.Class = string(v.class)
+		rt.recordAttempt(o, roleName, sid, res.Attempts-1, a, v, time.Since(t0))
+
+		switch v.class {
+		case classOK:
+			res.Value, _ = compactJSON(v.output) // validated, so JSON
+			rt.recordCall(key, hash, o.Label, res)
+			return res, nil
+		case classStopped:
+			return res, rt.stopped()
+		case classTimeout, classPermanent, classSpawnError:
+			return res, nil
+		case classSkillMissing:
+			if retried == 0 && rt.stopped() == nil {
+				retried++
+				continue
+			}
+			res.Value, _ = compactJSON(v.output)
+			res.Flags = append(res.Flags, "skill-not-loaded")
+			rt.event("skill-not-loaded", map[string]any{"label": o.Label, "skill": skill})
+			rt.Log(fmt.Sprintf("%s: skill %s not loaded after %d attempt(s); return accepted and flagged", o.Label, skill, res.Attempts))
+			rt.recordCall(key, hash, o.Label, res)
+			return res, nil
+		case classInvalid:
+			if retried == 0 {
+				retried++
+				continue
+			}
+			rt.Log(fmt.Sprintf("%s: no valid return after %d attempt(s) (%s); null", o.Label, res.Attempts, firstOr(v.errors, "invalid")))
+			return res, nil
+		case classTransient:
+			if transient < len(rt.cfg.Backoff) {
+				d := rt.cfg.Backoff[transient].D()
+				transient++
+				rt.Log(fmt.Sprintf("%s: attempt %d failed (exit %d); retrying in %v", o.Label, res.Attempts, a.exitCode, d))
+				if err := rt.sleep(ctx, d); err != nil {
+					return res, err
+				}
+				continue
+			}
+			rt.Log(fmt.Sprintf("%s: transient failure persisted over %d attempt(s); null", o.Label, res.Attempts))
+			return res, nil
+		case classSessionLimit:
+			if waits < rt.cfg.MaxSessionWaits {
+				waits++
+				until := time.Now().Add(rt.cfg.SessionLimitFallback.D())
+				if !v.resetsAt.IsZero() {
+					until = v.resetsAt.Add(rt.cfg.SessionLimitMargin.D())
+				}
+				rt.extendLimit(until, o.Label)
+				continue
+			}
+			rt.Log(fmt.Sprintf("%s: session limit persisted over %d wait(s); null", o.Label, waits))
+			return res, nil
+		}
+		panic("unreachable: class " + v.class)
+	}
+}
+
+// Agent is Call's value: the orchestrator's agent(). (nil, nil) is null.
+func (rt *Runtime) Agent(ctx context.Context, prompt string, o Opts) (json.RawMessage, error) {
+	res, err := rt.Call(ctx, prompt, o)
+	return res.Value, err
+}
+
+// boundary is the check at a call boundary: a sticky stop or an ended parent
+// context ends the run.
+func (rt *Runtime) boundary(ctx context.Context) error {
+	if s := rt.stopped(); s != nil {
+		return s
+	}
+	if ctx.Err() != nil {
+		return &StopError{Reason: StopCancelled}
+	}
+	return nil
+}
+
+// wait blocks for d, or until a stop or the end of ctx.
+func (rt *Runtime) sleep(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-rt.stopCh:
+		return rt.stopped()
+	case <-ctx.Done():
+		return &StopError{Reason: StopCancelled}
+	}
+}
+
+// waitLimit holds a spawn until the session limit resets. limitUntil can move
+// while a call waits, so it is re-read on wake.
+func (rt *Runtime) waitLimit(ctx context.Context) error {
+	for {
+		rt.mu.Lock()
+		until := rt.limitUntil
+		rt.mu.Unlock()
+		d := time.Until(until)
+		if d <= 0 {
+			return nil
+		}
+		if max := rt.cfg.Caps.MaxWallClock.D(); max > 0 && until.After(rt.started.Add(max)) {
+			return rt.setStop(StopMaxWallClock, fmt.Sprintf("session limit resets at %s, past the wall-clock cap", until.Format(time.RFC3339)))
+		}
+		if err := rt.sleep(ctx, d); err != nil {
+			return err
+		}
+	}
+}
+
+// extendLimit moves the runtime-wide session-limit gate. The limit is taken
+// to apply across models (the five-hour session limit).
+func (rt *Runtime) extendLimit(until time.Time, label string) {
+	rt.mu.Lock()
+	if until.After(rt.limitUntil) {
+		rt.limitUntil = until
+	}
+	until = rt.limitUntil
+	rt.mu.Unlock()
+	rt.event("session-limit-wait", map[string]any{"label": label, "until": until.UTC().Format(time.RFC3339)})
+	rt.Log(fmt.Sprintf("%s: session limit; calls wait until %s", label, until.Format(time.RFC3339)))
+}
+
+// acquire takes a concurrency slot.
+func (rt *Runtime) acquire(ctx context.Context) error {
+	select {
+	case rt.sem <- struct{}{}:
+		return nil
+	case <-rt.stopCh:
+		return rt.stopped()
+	case <-ctx.Done():
+		return &StopError{Reason: StopCancelled}
+	}
+}
+
+func (rt *Runtime) release() { <-rt.sem }
+
+// admit is the per-spawn check, in one critical section: the sticky stop,
+// then the caps; a spawn it admits is counted.
+func (rt *Runtime) admit() error {
+	rt.mu.Lock()
+	if rt.stop != nil {
+		s := rt.stop
+		rt.mu.Unlock()
+		return s
+	}
+	c := rt.cfg.Caps
+	var reason StopReason
+	var detail string
+	switch {
+	case c.MaxCalls > 0 && rt.calls >= c.MaxCalls:
+		reason, detail = StopMaxCalls, fmt.Sprintf("%d calls", rt.calls)
+	case c.MaxWallClock > 0 && time.Since(rt.started) >= c.MaxWallClock.D():
+		reason, detail = StopMaxWallClock, time.Since(rt.started).Round(time.Second).String()
+	case c.MaxCostUSD > 0 && rt.cost >= c.MaxCostUSD:
+		reason, detail = StopMaxCost, fmt.Sprintf("$%.4f", rt.cost)
+	default:
+		rt.calls++
+		rt.mu.Unlock()
+		return nil
+	}
+	s, set := rt.setStopLocked(reason, detail)
+	rt.mu.Unlock()
+	if set {
+		rt.stopEvent(s)
+	}
+	return s
+}
+
+func (rt *Runtime) addCost(c float64) {
+	rt.mu.Lock()
+	rt.cost += c
+	rt.mu.Unlock()
+}
+
+func (rt *Runtime) recordAttempt(o Opts, role, sid string, n int, a *attempt, v verdict, d time.Duration) {
+	f := map[string]any{
+		"label": o.Label, "phase": o.Phase, "attempt": n, "class": v.class, "session": sid,
+		"model": o.Model, "effort": o.Effort, "role": role, "exit": a.exitCode, "secs": d.Seconds(),
+	}
+	if r := a.acc.Result; r != nil {
+		f["cost"] = r.CostUSD
+		f["denials"] = r.Denials
+		f["terminal_reason"] = r.TerminalReason
+		f["api_error_status"] = r.APIErrorStatus
+	}
+	if len(a.acc.AssistantErrors) > 0 {
+		f["assistant_errors"] = a.acc.AssistantErrors
+	}
+	if len(v.errors) > 0 {
+		f["errors"] = v.errors[:min(3, len(v.errors))]
+	}
+	if a.acc.BadLines > 0 {
+		f["bad_lines"] = a.acc.BadLines
+	}
+	if a.exitCode != 0 && a.stderr != "" {
+		f["stderr"] = a.stderr
+	}
+	rt.event("call", f)
+}
+
+func firstOr(xs []string, def string) string {
+	if len(xs) > 0 {
+		return xs[0]
+	}
+	return def
+}

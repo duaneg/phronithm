@@ -27,12 +27,15 @@ func (rt *Runtime) watchSignals() func() {
 				count++
 				first := count == 1
 				rt.mu.Lock()
-				rt.setStopLocked(reason, "")
+				stop, set := rt.setStopLocked(reason, "")
 				if !first && !rt.killed {
 					rt.killed = true
 					close(rt.killCh)
 				}
 				rt.mu.Unlock()
+				if set {
+					rt.stopEvent(stop)
+				}
 				if first {
 					rt.Log(string(reason) + " received; stopping at the next call boundary (signal again to kill in-flight calls)")
 				} else {

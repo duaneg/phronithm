@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -83,9 +85,9 @@ func Run(ctx context.Context, cfg Config, body func(ctx context.Context, rt *Run
 	}
 	defer rt.telFile.Close()
 
-	rt.reapOrphans()
 	stopSignals := rt.watchSignals()
 	defer stopSignals()
+	rt.reapOrphans()
 
 	rt.Log(fmt.Sprintf("launch %s: state dir %s", rt.launchID, cfg.StateDir))
 	rt.event("launch", map[string]any{"launch": rt.launchID, "pid": os.Getpid(), "dryRun": cfg.DryRun})
@@ -93,10 +95,14 @@ func Run(ctx context.Context, cfg Config, body func(ctx context.Context, rt *Run
 
 	outcome, bodyErr, panicked := runBody(ctx, rt, body)
 	s := rt.summarise(ctx, outcome, bodyErr, panicked)
-	if b, err := json.MarshalIndent(s, "", "  "); err == nil {
-		if err := writeFileAtomic(filepath.Join(cfg.StateDir, "summary.json"), append(b, '\n')); err != nil {
-			rt.Log("summary.json: " + err.Error())
-		}
+	b, err := json.MarshalIndent(s, "", "  ")
+	if err != nil { // an outcome that is not valid JSON
+		s.Error = strings.TrimSpace(s.Error + "; outcome dropped: " + err.Error())
+		s.Outcome = nil
+		b, _ = json.MarshalIndent(s, "", "  ")
+	}
+	if err := writeFileAtomic(filepath.Join(cfg.StateDir, "summary.json"), append(b, '\n')); err != nil {
+		rt.Log("summary.json: " + err.Error())
 	}
 	rt.writeStatus(string(s.StopReason))
 	rt.event("end", map[string]any{"stop_reason": s.StopReason, "calls": s.Calls, "cost": s.CostUSD})
@@ -108,6 +114,7 @@ func runBody(ctx context.Context, rt *Runtime, body func(context.Context, *Runti
 	defer func() {
 		if p := recover(); p != nil {
 			panicked = p
+			rt.Log(fmt.Sprintf("body panicked: %v\n%s", p, debug.Stack()))
 		}
 	}()
 	out, err = body(ctx, rt)
@@ -145,17 +152,28 @@ func (rt *Runtime) summarise(ctx context.Context, outcome json.RawMessage, bodyE
 // in force.
 func (rt *Runtime) setStop(reason StopReason, detail string) *StopError {
 	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	return rt.setStopLocked(reason, detail)
+	s, set := rt.setStopLocked(reason, detail)
+	rt.mu.Unlock()
+	if set {
+		rt.stopEvent(s)
+	}
+	return s
 }
 
-func (rt *Runtime) setStopLocked(reason StopReason, detail string) *StopError {
+// setStopLocked sets the stop under rt.mu; set reports a new stop, whose
+// event the caller emits with stopEvent after unlocking.
+func (rt *Runtime) setStopLocked(reason StopReason, detail string) (s *StopError, set bool) {
 	if rt.stop == nil {
 		rt.stop = &StopError{Reason: reason, Detail: detail}
 		close(rt.stopCh)
-		go rt.event("stop", map[string]any{"reason": reason, "detail": detail})
+		set = true
 	}
-	return rt.stop
+	return rt.stop, set
+}
+
+func (rt *Runtime) stopEvent(s *StopError) {
+	rt.event("stop", map[string]any{"reason": s.Reason, "detail": s.Detail})
+	rt.Log("stop: " + s.Error())
 }
 
 // stopped returns the sticky stop, or nil.
