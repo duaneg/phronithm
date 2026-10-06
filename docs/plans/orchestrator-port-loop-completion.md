@@ -90,7 +90,7 @@ None. Nothing in Scope is left undone.
 ## Execution signals
 
 - **Context.** Comfortable at completion.
-- **Size.** About 7,500 lines added. Of those, roughly 2,300 are orchestrator code, 2,900 tests, 900 parity tooling, and the rest plan documents. The unit's flag held: the JS was the reference, so the size cost wall clock, not context.
+- **Size.** About 7,900 lines added: about 2,600 orchestrator code, 2,800 tests, 500 in the `orchtest` harness, 1,300 in the two tools (tests included), and the rest plan documents. The unit's flag held: the JS was the reference, so the size cost wall clock, not context.
 - **Design decisions taken mid-implementation, rather than at the design pass.** There were six:
   - the ordered-object schema builder (byte-identical schemas);
   - the mechanical template conversion;
