@@ -257,16 +257,16 @@ func (o *orch) decisionLog(in decisionLogInput) stageFn {
 			return nil, err
 		}
 		branch, path := in.IntegrationBranch, in.Path
-		headBlob := func() ([]byte, error) {
-			b, ok, err := g.blob(ctx, o.repo, "HEAD", path)
-			if err == nil && !ok {
-				b = decisionSkeleton(in.Name)
-			}
-			return b, err
-		}
-		prior, err := headBlob()
+		pre, err := g.head(ctx, o.repo)
 		if err != nil {
 			return nil, err
+		}
+		prior, ok, err := g.blob(ctx, o.repo, pre, path)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			prior = decisionSkeleton(in.Name)
 		}
 		// The interrupted rerun's own write: the prior decisions plus these.
 		ownWrite := func(b []byte) bool {
@@ -340,7 +340,7 @@ func (o *orch) decisionLog(in decisionLogInput) stageFn {
 		if err != nil {
 			return nil, err
 		}
-		sha, err := g.writeAndCommit(ctx, o.repo, branch, path, in.Subject, label, next)
+		sha, err := g.writeAndCommit(ctx, o.repo, branch, path, in.Subject, label, next, pre)
 		if err != nil {
 			return nil, err
 		}
@@ -382,4 +382,130 @@ func stageFaultSignal(at plan.At, reason string) *plan.Signal {
 	}
 	return plan.NewSignal(plan.Signal{Kind: "agent-null", Source: "structural", Stage: at.Stage, Unit: at.Unit, Wave: at.Wave,
 		Statement: at.Stage + " failed: " + reason, Referent: ref})
+}
+
+type ledgerInput struct {
+	Path              string `json:"path"`
+	Name              string `json:"name"`
+	IntegrationBranch string `json:"integrationBranch"`
+	Block             string `json:"block"`
+	Subject           string `json:"subject"`
+	PauseRef          string `json:"pauseRef"`
+}
+
+// appendLedger is a ledger's text with block appended after one blank
+// line; a new ledger starts with its heading.
+func appendLedger(prior []byte, priorOK bool, name, block string) []byte {
+	p := string(prior)
+	if !priorOK {
+		p = plan.LedgerHeading(name)
+	}
+	return []byte(strings.TrimRight(p, "\n") + "\n\n" + block)
+}
+
+// ledgerAppend appends the rendered rows to the ledger in the main
+// checkout and commits it. The prior text's integrity rests on the guard:
+// an earlier stage commit must be intact, and text the requester committed
+// is theirs. The pause ref is journaled here and re-read live by the
+// caller.
+func (o *orch) ledgerAppend(in ledgerInput) stageFn {
+	return func(ctx context.Context, label string, interrupted bool) (json.RawMessage, error) {
+		g, err := o.gitFor()
+		if err != nil {
+			return nil, err
+		}
+		branch, path := in.IntegrationBranch, in.Path
+		pre, err := g.head(ctx, o.repo)
+		if err != nil {
+			return nil, err
+		}
+		prior, priorOK, err := g.blob(ctx, o.repo, pre, path)
+		if err != nil {
+			return nil, err
+		}
+		next := appendLedger(prior, priorOK, in.Name, in.Block)
+		if err := o.mainPrecheck(ctx, g, branch, path, interrupted, func(b []byte) bool { return bytes.Equal(b, next) }); err != nil {
+			return nil, err
+		}
+		done := func(sha string) (json.RawMessage, error) {
+			pause, err := g.pauseRequested(ctx, o.repo, in.PauseRef)
+			if err != nil {
+				return nil, err
+			}
+			return stageValue(scribeResult{Path: path, Sha: sha, PauseRequested: pause})
+		}
+		if interrupted {
+			sha, err := g.adopt(ctx, o.repo, branch, path, adoption{
+				label: label,
+				matches: func(parent []byte, parentOK bool, cand []byte) bool {
+					return bytes.Equal(cand, appendLedger(parent, parentOK, in.Name, in.Block))
+				},
+				survives: func(tip []byte, ok bool) bool { return ok && bytes.Contains(tip, []byte(in.Block)) },
+			})
+			if err != nil {
+				return nil, err
+			}
+			if sha != "" {
+				return done(sha)
+			}
+		}
+		sha, err := g.writeAndCommit(ctx, o.repo, branch, path, in.Subject, label, next, pre)
+		if err != nil {
+			return nil, err
+		}
+		return done(sha)
+	}
+}
+
+type completionInput struct {
+	Unit    string `json:"unit"`
+	Base    string `json:"base"`
+	Path    string `json:"path"`
+	Text    string `json:"text"`
+	Subject string `json:"subject"`
+}
+
+// completionReport commits the rendered report on the step's own branch,
+// one commit on top of the unit's branch (base). A tip that already is
+// that commit, intact, is reused; any other tip, an earlier attempt's
+// included, is reset away: the branch is the step's alone.
+func (o *orch) completionReport(in completionInput) stageFn {
+	return func(ctx context.Context, label string, _ bool) (json.RawMessage, error) {
+		g, err := o.gitFor()
+		if err != nil {
+			return nil, err
+		}
+		wt, branch, err := o.rt.Worktree(ctx, label)
+		if err != nil {
+			return nil, err
+		}
+		base, err := g.out(ctx, wt, "rev-parse", "--verify", "--quiet", in.Base+"^{commit}")
+		if err != nil {
+			return nil, fmt.Errorf("unit branch %s does not resolve: %w", in.Base, err)
+		}
+		done := func(sha string) (json.RawMessage, error) {
+			return stageValue(completionResult{Branch: branch, Sha: sha, Path: in.Path})
+		}
+		text := []byte(in.Text)
+		tip, err := g.out(ctx, wt, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok, err := g.intact(ctx, wt, tip, in.Path); err != nil {
+			return nil, err
+		} else if ok && g.verifyCommit(ctx, wt, branch, tip, base, in.Path, text) == nil {
+			return done(tip)
+		}
+		if _, err := g.r.run(ctx, wt, "reset", "-q", "--hard", base); err != nil {
+			return nil, err
+		}
+		if _, err := g.r.run(ctx, wt, "clean", "-fdq"); err != nil {
+			return nil, err
+		}
+		sha, err := g.writeAndCommit(ctx, wt, branch, in.Path, in.Subject, label, text, base)
+		if err != nil {
+			return nil, err
+		}
+		return done(sha)
+	}
 }

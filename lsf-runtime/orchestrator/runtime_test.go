@@ -144,11 +144,6 @@ func TestDecode(t *testing.T) {
 
 func TestSchemasAreJSKeyOrdered(t *testing.T) {
 	// Spot check against implement.js's objects; promptparity compares all.
-	want := `{"type":"object","properties":{"result":{"type":"object","properties":{"path":{"type":"string"},"sha":{"type":"string","description":"The commit SHA as ` +
-		"`git rev-parse --short HEAD`" + ` prints it after the commit, copied from that output"},"pauseRequested":{"type":"boolean","description":"Whether the pause ref named in the prompt exists"}},"required":["path","sha","pauseRequested"]},"commits":{"type":"array","items":{"type":"object","properties":{"branch":{"type":"string"},"sha":{"type":"string"}},"required":["branch","sha"]}}},"required":["result","commits"]}`
-	if string(ledgerSchema) != want {
-		t.Errorf("ledger schema\n%s\nwant\n%s", ledgerSchema, want)
-	}
 	var m struct {
 		Properties struct {
 			Result struct {

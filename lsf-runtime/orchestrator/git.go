@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -31,13 +32,26 @@ func (execGit) run(ctx context.Context, dir string, args ...string) ([]byte, err
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = append(scrubbedEnv(), "GIT_TERMINAL_PROMPT=0")
 	var out, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &stderr
 	if err := cmd.Run(); err != nil {
 		return out.Bytes(), &gitError{args: args, err: err, stderr: strings.TrimSpace(stderr.String())}
 	}
 	return out.Bytes(), nil
+}
+
+// scrubbedEnv is the environment without the variables that would point
+// git at another repository or index (set when run from inside a hook).
+func scrubbedEnv() []string {
+	return slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		for _, k := range []string{"GIT_DIR=", "GIT_INDEX_FILE=", "GIT_WORK_TREE=", "GIT_COMMON_DIR=", "GIT_OBJECT_DIRECTORY="} {
+			if strings.HasPrefix(kv, k) {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 // gitError is a failed git command.
@@ -335,14 +349,16 @@ func (g gitOps) verifyCommit(ctx context.Context, dir, branch, sha, pre, path st
 }
 
 // writeAndCommit writes want to path in dir and commits path alone on
-// branch, with the stage trailers; it returns the verified commit. A
-// rejected commit makes no commit: path is unstaged and its prior bytes
-// restored (a new file removed). A commit that fails verification stays,
-// named in the error.
-func (g gitOps) writeAndCommit(ctx context.Context, dir, branch, path, subject, label string, want []byte) (string, error) {
-	pre, err := g.head(ctx, dir)
-	if err != nil {
+// branch, with the stage trailers; it returns the verified commit. pre is
+// the tip the stage rendered want from: a branch that has moved since is
+// refused. A rejected commit makes no commit: path is unstaged and its
+// prior bytes restored (a new file removed). A commit that landed and fails
+// verification stays, named in the error.
+func (g gitOps) writeAndCommit(ctx context.Context, dir, branch, path, subject, label string, want []byte, pre string) (string, error) {
+	if cur, err := g.head(ctx, dir); err != nil {
 		return "", err
+	} else if cur != pre {
+		return "", fmt.Errorf("%s moved from %s to %s while the stage ran; relaunch", branch, pre, cur)
 	}
 	file := filepath.Join(dir, path)
 	prior, readErr := os.ReadFile(file)
@@ -357,27 +373,34 @@ func (g gitOps) writeAndCommit(ctx context.Context, dir, branch, path, subject, 
 		return "", err
 	}
 	msg := subject + "\n\n" + trailerStep + ": " + label + "\n" + trailerContent + ": " + contentDigest(want) + "\n"
-	_, err = g.r.run(ctx, dir, "add", "--", path)
+	_, err := g.r.run(ctx, dir, "add", "--", path)
 	if err == nil {
 		_, err = g.r.run(ctx, dir, "commit", "-q", "-m", msg, "--", path)
 	}
 	// A hook's own `git add` reaches the commit through its temporary
 	// index; resetting path's entry leaves the real index as HEAD has it.
 	_, resetErr := g.r.run(context.WithoutCancel(ctx), dir, "reset", "-q", "--", path)
-	if err != nil {
+	sha, headErr := g.head(context.WithoutCancel(ctx), dir)
+	if err != nil && headErr == nil && sha == pre {
+		// No commit landed: put the file back.
+		var restoreErr error
 		if existed {
-			os.WriteFile(file, prior, 0o644)
-		} else {
-			os.Remove(file)
+			restoreErr = os.WriteFile(file, prior, 0o644)
+		} else if e := os.Remove(file); e != nil && !errors.Is(e, os.ErrNotExist) {
+			restoreErr = e
 		}
-		return "", fmt.Errorf("commit of %s rejected: %w", path, err)
+		return "", errors.Join(fmt.Errorf("commit of %s rejected: %w", path, err), resetErr, restoreErr)
 	}
-	sha, err := g.head(ctx, dir)
-	if err != nil {
-		return "", err
+	if headErr != nil {
+		return "", errors.Join(err, headErr)
 	}
+	// A commit landed, even if git reported an error after it (a
+	// post-commit hook): it is checked like any other.
 	if err := g.verifyCommit(ctx, dir, branch, sha, pre, path, want); err != nil {
 		return "", err
+	}
+	if _, ok, err := g.intact(ctx, dir, sha, path); err != nil || !ok {
+		return "", errors.Join(fmt.Errorf("commit %s does not carry the %s trailer of its content (a commit-msg hook may have rewritten the message)", sha, trailerContent), err)
 	}
 	if resetErr != nil {
 		return "", fmt.Errorf("commit %s: %w", sha, resetErr)
@@ -387,6 +410,6 @@ func (g gitOps) writeAndCommit(ctx context.Context, dir, branch, path, subject, 
 
 // pathClean reports whether path has no staged or unstaged change.
 func (g gitOps) pathClean(ctx context.Context, dir, path string) (bool, error) {
-	s, err := g.out(ctx, dir, "status", "--porcelain", "--", path)
+	s, err := g.out(ctx, dir, "status", "--porcelain", "--untracked-files=all", "--", path)
 	return s == "", err
 }

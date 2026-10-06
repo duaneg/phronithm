@@ -183,11 +183,11 @@ func (l *launch) notePause(requested bool, label string) {
 	l.rt.Log(fmt.Sprintf("pause requested (%s seen by %s); the run pauses at the next wave boundary", l.ctx.pauseRef, label))
 }
 
-// scribeLedger appends the rows no scribe has committed. A null scribe
-// leaves its rows for the next append and, at return, for unscribed. A
-// scribe that returns without a commit SHA may have left its append
-// uncommitted in the main checkout, where the next merge would meet it as a
-// conflict: that is a stop, and no later scribe runs over the leftover.
+// scribeLedger appends the rows no scribe has committed, as a code step. A
+// null value (scripted) leaves its rows for the next append and, at
+// return, for unscribed. A step that fails, or returns without a commit
+// SHA, is a stop, and no later append runs. The pause ref is re-read live
+// after the step, replayed or not.
 func (l *launch) scribeLedger(ctx context.Context, label string) error {
 	if label == "" {
 		label = "ledger:w" + itoa(l.wave)
@@ -201,14 +201,28 @@ func (l *launch) scribeLedger(ctx context.Context, label string) error {
 	if l.ledgerFault != nil || len(fresh) == 0 {
 		return nil
 	}
-	t := l.ctx.tierFor("mechanical")
-	r, _, err := call[scribeResult](ctx, l.orch, ledgerPrompt(l.ctx, l.ref(), l.wave, fresh),
-		lsfrt.Opts{Label: label, Model: t.Model, Effort: t.Effort, Phase: "Ledger", Schema: ledgerSchema})
+	c := l.ctx
+	in := ledgerInput{Path: c.ledgerPath, Name: c.name, IntegrationBranch: c.integrationBranch, Block: plan.RenderLedger(fresh, l.wave),
+		Subject: "docs(" + c.name + "): append " + plan.LedgerLabel(fresh, l.wave) + " signal ledger entries", PauseRef: c.pauseRef}
+	at := plan.At{Stage: "ledger", Wave: l.waveOrNil(), Path: c.ledgerPath}
+	r, fault, err := step[scribeResult](ctx, l.orch, label, in, l.ledgerAppend(in))
 	if err != nil {
 		return err
 	}
+	if fault != "" {
+		l.ledgerFault = stageFaultSignal(at, fault)
+		return nil
+	}
 	if r == nil {
 		l.rt.Log(fmt.Sprintf("ledger scribe returned null (%s); %d row(s) stay unscribed", label, len(fresh)))
+		return nil
+	}
+	if err := l.liveReads(ctx, nil, &r.Result.PauseRequested); err != nil {
+		// The rows are committed; only the pause is unknown.
+		for _, s := range fresh {
+			l.scribed[s] = true
+		}
+		l.ledgerFault = stageFaultSignal(at, "live read: "+err.Error())
 		return nil
 	}
 	l.notePause(r.Result.PauseRequested, label)

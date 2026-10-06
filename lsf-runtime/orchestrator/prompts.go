@@ -249,10 +249,6 @@ func designCritiquePrompt(c *runCtx, p planRef, u *plan.Unit, branch string, rou
 	return header(c, p) + "\n" + worktree(branch) + "\n\n" + unitBlock(p, u) + "\n\nThis is a design unit: its deliverable is a decision record, not code. Run the phronithm:critique skill with type critique-design over the documents this branch adds or changes relative to " + c.integrationBranch + ". Round " + itoa(round) + " of the critique gate. Pass bar: no Critical findings. A done condition that is not met is a Critical finding. Do not modify anything and do not spawn subagents.\n" + returnFields
 }
 
-func completionScribePrompt(c *runCtx, p planRef, u *plan.Unit, branch, text string) string {
-	return header(c, p) + "\n" + worktree(branch) + "\n\nCopy stage. Write the Markdown between the markers below to " + completionPath(u) + ", every character unchanged, replacing the file if it exists. Do not reword, reorder, or drop anything, and change nothing else. Commit on this branch. " + commitMessage("docs("+c.name+"): "+u.ID+" completion report") + " Return the branch, the path, and the " + shortSha + ".\n\n<<<REPORT\n" + text + "REPORT>>>\n" + returnFields
-}
-
 func mergePrompt(c *runCtx, p planRef, wave int, merges []unitResult) string {
 	ml := []string{}
 	for _, m := range merges {
@@ -292,8 +288,4 @@ func obligationsPrompt(c *runCtx, p planRef) string {
 
 func cleanupPrompt(c *runCtx, p planRef, wave int) string {
 	return header(c, p) + "\n\nCleanup stage, wave " + itoa(wave) + ". You are in the main checkout on " + c.integrationBranch + ". Remove the worktrees this workflow's finished agents left behind. For each entry of `git worktree list --porcelain` whose path is under `.claude/worktrees/` and whose branch is named `worktree-wf_*` and is fully merged into " + c.integrationBranch + " (it appears in `git branch --merged " + c.integrationBranch + "`): run `git worktree remove --force <path>`, then `git branch -d <branch>`. Never touch the main checkout, a worktree on any other branch, or a branch not fully merged — those hold work still in flight. Finish with `git worktree prune`. Commit nothing. Return `removed` (the count of worktrees removed) and `kept` (the `worktree-wf_*` branches left in place).\n" + returnFields
-}
-
-func ledgerPrompt(c *runCtx, p planRef, wave int, entries []*plan.Signal) string {
-	return header(c, p) + "\n\nAppend stage. You are in the main checkout on " + c.integrationBranch + ". Append the Markdown between the markers below to the end of " + c.ledgerPath + ", every character unchanged, preceded by one blank line. If the file does not exist, create its directory (`mkdir -p $(dirname " + c.ledgerPath + ")`) and the file with this heading first:\n\n" + plan.LedgerHeading(c.name) + "\nDo not reword, reorder, merge, or drop rows, and never edit earlier content. Commit on " + c.integrationBranch + ". " + ownFilesOnly(c.ledgerPath) + " " + commitMessage("docs("+c.name+"): append "+plan.LedgerLabel(entries, wave)+" signal ledger entries") + " Return the path and the " + shortSha + ". " + pauseClause(c) + "\n\n<<<LEDGER\n" + plan.RenderLedger(entries, wave) + "LEDGER>>>\n" + returnFields
 }

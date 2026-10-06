@@ -27,10 +27,9 @@ type tier struct {
 	Effort string `json:"effort"`
 }
 
-// defaultTiers are the model and effort per role. Copy and append stages
-// are mechanical: the content is rendered here or pinned to a SHA, the
-// agent only moves it into the repo, and the parser checks the result on
-// the next load.
+// defaultTiers are the model and effort per role. Mechanical is worktree
+// cleanup; the load, decision-log, ledger and completion-report stages are
+// code steps and take no tier (D18).
 func defaultTiers() map[string]*tier {
 	return map[string]*tier{
 		"critique":   {Model: "opus", Effort: "low"},

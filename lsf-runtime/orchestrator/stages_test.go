@@ -3,15 +3,19 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/duaneg/phronithm/lsf-runtime/orchestrator/orchtest"
 	"github.com/duaneg/phronithm/lsf-runtime/plan"
+	lsfrt "github.com/duaneg/phronithm/lsf-runtime/runtime"
 )
 
 // gitRepo is a temporary repository on branch integration with one commit.
@@ -230,9 +234,25 @@ type gitRT struct {
 	*orchtest.Stub
 	repo     string
 	replayed map[string]json.RawMessage
+	wtRoot   string
 }
 
 func (r gitRT) Repo() string { return r.repo }
+
+// Worktree is a step's worktree on lsf/t/<label>, created from integration
+// on first use.
+func (r gitRT) Worktree(ctx context.Context, label string) (string, string, error) {
+	safe := strings.NewReplacer(":", "_", "#", "_").Replace(label)
+	path, branch := filepath.Join(r.wtRoot, safe), "lsf/t/"+safe
+	if _, err := os.Stat(path); err == nil {
+		return path, branch, nil
+	}
+	out, err := exec.Command("git", "-C", r.repo, "worktree", "add", "-q", "-b", branch, path, "integration").CombinedOutput()
+	if err != nil {
+		return "", "", fmt.Errorf("worktree add: %v %s", err, out)
+	}
+	return path, branch, nil
+}
 
 func (r gitRT) Step(ctx context.Context, label string, input []byte, fn func(context.Context, bool) (json.RawMessage, error)) (json.RawMessage, error) {
 	if v, ok := r.replayed[label]; ok {
@@ -244,7 +264,7 @@ func (r gitRT) Step(ctx context.Context, label string, input []byte, fn func(con
 // loadLaunch is a launch over r whose load steps read git through g.
 func loadLaunch(t *testing.T, r *gitRepo, g gitRunner, replayed map[string]json.RawMessage) *launch {
 	t.Helper()
-	rt := gitRT{orchtest.New(t, orchtest.TwoWaves(), nil, nil), r.dir, replayed}
+	rt := gitRT{orchtest.New(t, orchtest.TwoWaves(), nil, nil), r.dir, replayed, t.TempDir()}
 	o := newOrch(rt, runCtxFor(t, M{"planPath": "docs/plans/f-breakdown.md"}), nil)
 	if g != nil {
 		o.git = g
@@ -505,4 +525,372 @@ func TestDecisionLogInterruptedAdopts(t *testing.T) {
 		t.Errorf("%+v %v", res, err)
 	}
 	eq(t, strings.Count(r.read(decPath), `id: "d1"`), 1)
+}
+
+// --- ledger ---
+
+const ledgerPath = "docs/plans/f-signals/plan0.md"
+
+func ledgerBlock(wave int, statements ...string) string {
+	b := fmt.Sprintf("## Wave %d\n\n| Wave | Unit | Stage | Source | Kind | Statement | Referent | Disposition |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n", wave)
+	for _, st := range statements {
+		b += fmt.Sprintf("| %d | A | implement | reported | deviation | %s | A | recorded |\n", wave, st)
+	}
+	return b
+}
+
+func ledgerIn(block string) ledgerInput {
+	return ledgerInput{Path: ledgerPath, Name: "f", IntegrationBranch: "integration", Block: block, Subject: "docs(f): append signal ledger entries", PauseRef: "refs/lsf/f/pause"}
+}
+
+func TestLedgerAppends(t *testing.T) {
+	r := newGitRepo(t)
+	o := gitOrch(t, r, nil)
+	b1, b2 := ledgerBlock(1, "one"), ledgerBlock(2, "two")
+	res, err := runStage(t, o.ledgerAppend(ledgerIn(b1)), "ledger:w1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, r.read(ledgerPath), plan.LedgerHeading("f")+"\n"+b1)
+	eq(t, res.Sha, r.head())
+	eq(t, res.PauseRequested, false)
+	r.git("update-ref", "refs/lsf/f/pause", "HEAD")
+	res, err = runStage(t, o.ledgerAppend(ledgerIn(b2)), "ledger:w2", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, r.read(ledgerPath), plan.LedgerHeading("f")+"\n"+b1+"\n"+b2)
+	eq(t, res.PauseRequested, true)
+	match(t, r.git("log", "-1", "--format=%B"), `Lsf-Step: ledger:w2\nLsf-Content: sha256:`)
+}
+
+func TestLedgerContentFaultsStop(t *testing.T) {
+	faults := map[string]string{
+		"overwritten earlier row": `s/| one |/| uno |/`,
+		"deleted earlier row":     `/| one |/d`,
+		"own rows altered":        `s/| two |/| deux |/`,
+		"heading dropped":         `1d`,
+		"deleted wave section":    `/^## Wave 1$/,/^| 1 |/d`,
+	}
+	for name, script := range faults {
+		t.Run(name, func(t *testing.T) {
+			r := newGitRepo(t)
+			o := gitOrch(t, r, nil)
+			if _, err := runStage(t, o.ledgerAppend(ledgerIn(ledgerBlock(1, "one"))), "ledger:w1", false); err != nil {
+				t.Fatal(err)
+			}
+			r.hook("pre-commit", sedHook(ledgerPath, script))
+			_, err := runStage(t, o.ledgerAppend(ledgerIn(ledgerBlock(2, "two"))), "ledger:w2", false)
+			bad := r.head()
+			errMatch(t, err, `^commit `+bad+` fails verification`)
+			r.hook("pre-commit", "")
+			for label, block := range map[string]string{"ledger:w2": ledgerBlock(2, "two"), "ledger:w3": ledgerBlock(3, "three")} {
+				_, err := runStage(t, o.ledgerAppend(ledgerIn(block)), label, false)
+				errMatch(t, err, `^stage commit `+bad+` left `)
+				eq(t, r.head(), bad, label)
+			}
+			r.git("reset", "-q", "--hard", bad+"~1")
+			r.commit(ledgerPath, r.read(ledgerPath)+"\n"+ledgerBlock(2, "two"), "repair")
+			if _, err := runStage(t, o.ledgerAppend(ledgerIn(ledgerBlock(3, "three"))), "ledger:w3", false); err != nil {
+				t.Errorf("after a repair: %v", err)
+			}
+		})
+	}
+}
+
+func TestLedgerRefusals(t *testing.T) {
+	r := newGitRepo(t)
+	o := gitOrch(t, r, nil)
+	r.hook("pre-commit", "exit 1")
+	tip := r.head()
+	_, err := runStage(t, o.ledgerAppend(ledgerIn(ledgerBlock(1, "one"))), "ledger:w1", false)
+	errMatch(t, err, `rejected`)
+	eq(t, r.head(), tip)
+	eq(t, r.git("status", "--porcelain"), "")
+	r.hook("pre-commit", "")
+
+	_, err = runStage(t, gitOrch(t, r, fabricateAfterCommit()).ledgerAppend(ledgerIn(ledgerBlock(1, "one"))), "ledger:w1", false)
+	errMatch(t, err, `fff fails verification`)
+
+	r.git("checkout", "-q", "-b", "side")
+	_, err = runStage(t, o.ledgerAppend(ledgerIn(ledgerBlock(2, "two"))), "ledger:w2", false)
+	errMatch(t, err, `on side, not integration`)
+	r.git("checkout", "-q", "integration")
+	r.write(ledgerPath, r.read(ledgerPath)+"requester edit\n")
+	_, err = runStage(t, o.ledgerAppend(ledgerIn(ledgerBlock(2, "two"))), "ledger:w2", false)
+	errMatch(t, err, `uncommitted changes this stage did not make`)
+	match(t, r.read(ledgerPath), `requester edit\n$`)
+}
+
+// onRuntime runs body as a launch of the real runtime over r, with state
+// in stateDir.
+func onRuntime(t *testing.T, r *gitRepo, stateDir string, body func(ctx context.Context, o *orch)) {
+	t.Helper()
+	cfg := lsfrt.Config{StateDir: stateDir, Repo: r.dir, Args: json.RawMessage(`{"planSha":"0123456789ab","integrationBranch":"integration"}`),
+		Roles: map[string]lsfrt.Role{"worker": {Tools: "default", PermissionMode: "dontAsk"}}, DefaultRole: "worker"}
+	if _, err := lsfrt.Run(context.Background(), cfg, func(ctx context.Context, rt *lsfrt.Runtime) (json.RawMessage, error) {
+		o := newOrch(rt, runCtxFor(t, nil), nil)
+		o.today = func() string { return "2026-10-07" }
+		body(ctx, o)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// killed is fn, then a kill before the step's record: the commit lands,
+// the intent stays.
+func killed(fn stageFn) stageFn {
+	return func(ctx context.Context, label string, interrupted bool) (json.RawMessage, error) {
+		if _, err := fn(ctx, label, interrupted); err != nil {
+			return nil, err
+		}
+		return nil, errors.New("killed after the commit")
+	}
+}
+
+// S5: a step killed between its commit and its record reruns interrupted
+// and adopts its commit; nothing else is adopted.
+func TestLedgerInterruptedAdopts(t *testing.T) {
+	r := newGitRepo(t)
+	state := t.TempDir()
+	b1, b2a, b2b := ledgerBlock(1, "one"), ledgerBlock(2, "two-a"), ledgerBlock(2, "two-b")
+	var commit string
+	onRuntime(t, r, state, func(ctx context.Context, o *orch) {
+		if _, f, err := step[scribeResult](ctx, o, "ledger:w1", ledgerIn(b1), o.ledgerAppend(ledgerIn(b1))); f != "" || err != nil {
+			t.Fatal(f, err)
+		}
+		if _, f, err := step[scribeResult](ctx, o, "ledger:w2", ledgerIn(b2a), o.ledgerAppend(ledgerIn(b2a))); f != "" || err != nil {
+			t.Fatal(f, err)
+		}
+		_, f, err := step[scribeResult](ctx, o, "ledger:w2", ledgerIn(b2b), killed(o.ledgerAppend(ledgerIn(b2b))))
+		if err != nil || f != "killed after the commit" {
+			t.Fatal(f, err)
+		}
+		commit = r.head()
+	})
+	// A requester commit to the ledger after the stage's own.
+	r.commit(ledgerPath, r.read(ledgerPath)+"\nA requester note.\n", "note")
+	onRuntime(t, r, state, func(ctx context.Context, o *orch) {
+		for _, b := range []string{b1, b2a} { // replayed
+			if _, f, err := step[scribeResult](ctx, o, map[string]string{b1: "ledger:w1", b2a: "ledger:w2"}[b], ledgerIn(b), nil); f != "" || err != nil {
+				t.Fatal(f, err)
+			}
+		}
+		got, f, err := step[scribeResult](ctx, o, "ledger:w2", ledgerIn(b2b), o.ledgerAppend(ledgerIn(b2b)))
+		if err != nil || f != "" || got.Result.Sha != commit {
+			t.Fatalf("%+v %q %v: want the adopted %s", got, f, err, commit)
+		}
+	})
+	eq(t, strings.Count(r.read(ledgerPath), "two-b"), 1, "no second append")
+	evs := events(t, state)
+	eq(t, evs["step-interrupted-rerun"], 1)
+	eq(t, evs["step-replayed"], 2)
+
+	// An interrupted rerun whose own commit never landed appends: an
+	// earlier launch's intact commit with the same label and other rows is
+	// not adopted, and is no stop.
+	o := gitOrch(t, r, nil)
+	b3 := ledgerBlock(1, "a later launch's wave 1")
+	res, err := runStage(t, o.ledgerAppend(ledgerIn(b3)), "ledger:w1", true)
+	if err != nil || res.Sha != r.head() || res.Sha == commit {
+		t.Fatalf("%+v %v", res, err)
+	}
+	match(t, r.read(ledgerPath), `(?s)one.*two-a.*two-b.*requester note.*a later launch`)
+}
+
+// A replayed ledger step reports the pause ref as it stands now.
+func TestLedgerLivePause(t *testing.T) {
+	r := newGitRepo(t)
+	l := loadLaunch(t, r, nil, nil)
+	l.scribed = map[*plan.Signal]bool{}
+	stale, _ := stageValue(scribeResult{Path: ledgerPath, Sha: r.head(), PauseRequested: false})
+	l.rt = gitRT{l.rt.(gitRT).Stub, r.dir, map[string]json.RawMessage{"ledger:w1": stale}, t.TempDir()}
+	l.wave = 1
+	l.ledger = []*plan.Signal{plan.NewSignal(plan.Signal{Kind: "deviation", Source: "reported", Stage: "implement", Unit: "A", Wave: plan.W(1), Statement: "d", Referent: "A"})}
+	r.git("update-ref", "refs/lsf/f/pause", "HEAD")
+	if err := l.scribeLedger(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if l.ledgerFault != nil || !l.pauseRequested {
+		t.Errorf("fault %+v pause %v", l.ledgerFault, l.pauseRequested)
+	}
+}
+
+// --- completion report ---
+
+const reportPath = "docs/plans/A-completion.md"
+
+func reportLaunch(t *testing.T, r *gitRepo, g gitRunner) *orch {
+	t.Helper()
+	l := loadLaunch(t, r, g, nil)
+	l.today = func() string { return "2026-10-07" }
+	return l.orch
+}
+
+func reportIn(text string) completionInput {
+	return completionInput{Unit: "A", Base: "unit-A", Path: reportPath, Text: text, Subject: "docs(f): A completion report"}
+}
+
+func TestCompletionReport(t *testing.T) {
+	r := newGitRepo(t)
+	r.git("branch", "unit-A")
+	r.git("checkout", "-q", "unit-A")
+	r.commit("src/A.go", "package a\n", "unit work")
+	base := r.head()
+	r.git("checkout", "-q", "integration")
+	o := reportLaunch(t, r, nil)
+	text := "# A — completion report\n\nDone.\n\nGates: green.\n"
+	raw, err := o.completionReport(reportIn(text))(context.Background(), "completion-report:A", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v struct{ Result completionResult }
+	json.Unmarshal(raw, &v)
+	rep := v.Result
+	eq(t, rep.Branch, "lsf/t/completion-report_A")
+	eq(t, rep.Path, reportPath)
+	eq(t, r.git("rev-parse", rep.Branch), rep.Sha)
+	eq(t, r.git("rev-parse", rep.Sha+"^"), base)
+	eq(t, r.git("show", rep.Sha+":"+reportPath)+"\n", text)
+	eq(t, r.git("status", "--porcelain"), "", "the main checkout is untouched")
+
+	// A rerun reuses the matching tip.
+	raw, err = o.completionReport(reportIn(text))(context.Background(), "completion-report:A", true)
+	json.Unmarshal(raw, &v)
+	if err != nil || v.Result.Sha != rep.Sha {
+		t.Fatalf("%+v %v", v.Result, err)
+	}
+
+	// Content faults through a hook stop, naming the commit.
+	for name, script := range map[string]string{"dropped line": `/Gates: green./d`, "altered phrase": `s/Done./Mostly done./`} {
+		r.hook("pre-commit", sedHook(reportPath, script))
+		text := text + name + "\n"
+		_, err := o.completionReport(reportIn(text))(context.Background(), "completion-report:A", false)
+		bad := r.git("rev-parse", rep.Branch)
+		errMatch(t, err, `^commit `+bad+` fails verification`, name)
+		r.hook("pre-commit", "")
+		// The bad tip is reset away, never built on.
+		raw, err = o.completionReport(reportIn(text))(context.Background(), "completion-report:A", false)
+		json.Unmarshal(raw, &v)
+		if err != nil || v.Result.Sha == bad || r.git("rev-parse", v.Result.Sha+"^") != base {
+			t.Errorf("%s: %+v %v", name, v.Result, err)
+		}
+	}
+
+	// A stale tip (the unit branch moved) is reset and recommitted.
+	r.git("checkout", "-q", "unit-A")
+	newBase := r.commit("src/A.go", "package a // fixed\n", "fix")
+	r.git("checkout", "-q", "integration")
+	raw, err = o.completionReport(reportIn(text))(context.Background(), "completion-report:A", false)
+	json.Unmarshal(raw, &v)
+	if err != nil || r.git("rev-parse", v.Result.Sha+"^") != newBase {
+		t.Errorf("%+v %v", v.Result, err)
+	}
+
+	r.hook("pre-commit", "exit 1")
+	_, err = o.completionReport(reportIn(text+"x\n"))(context.Background(), "completion-report:A", false)
+	errMatch(t, err, `rejected`)
+	wt := filepath.Join(o.rt.(gitRT).wtRoot, "completion-report_A")
+	eq(t, r.git("-C", wt, "status", "--porcelain"), "")
+	eq(t, r.git("rev-parse", rep.Branch), newBase, "no commit on the report branch")
+	r.hook("pre-commit", "")
+
+	o.git = fabricateAfterCommit()
+	_, err = o.completionReport(reportIn(text+"y\n"))(context.Background(), "completion-report:A", false)
+	errMatch(t, err, `fff fails verification`)
+}
+
+// --- through Run ---
+
+// A code stage's failure is a stop naming the reason: the ledger's ends the
+// run at the ledger, the completion report's aborts its unit.
+func TestCodeStageFaultsStop(t *testing.T) {
+	boom := func(Call, *State) any { return errors.New("git: boom") }
+	out := run(t, stub(t, twoWaves(), Hs{"ledger": boom, "implement": implemented(M{"deviations": []string{"d"}})}, nil))
+	eq(t, out.Status, "stopped")
+	eq(t, out.Escalation.Stage, "ledger")
+	st := out.stops()
+	if len(st) != 1 || st[0].Kind != "agent-null" || st[0].Statement != "ledger failed: git: boom" || st[0].Referent != "docs/plans/f-signals/plan0.md" {
+		t.Errorf("%+v", st)
+	}
+
+	s := stub(t, one("A", "feature"), Hs{"completion-report": boom}, nil)
+	out = run(t, s)
+	eq(t, out.Status, "stopped")
+	found := false
+	for _, sig := range out.stops() {
+		if sig.Stage == "completion-report" && sig.Unit == "A" && sig.Statement == "completion-report failed: git: boom" {
+			found = true
+		}
+	}
+	if !found || hasPrefix(s.Labels(), "merge:") {
+		t.Errorf("%+v %v", out.stops(), s.Labels())
+	}
+
+	d := run(t, stub(t, twoWaves(), Hs{"decision-log": boom}, M{"decisions": []M{{"id": "d1", "question": "q", "decision": "yes"}}}))
+	eq(t, d.Escalation.Stage, "decision-log")
+	eq(t, d.stops()[0].Statement, "decision-log failed: git: boom")
+	ld := run(t, stub(t, twoWaves(), Hs{"load": boom}, nil))
+	eq(t, ld.Escalation.Stage, "load")
+	eq(t, ld.stops()[0].Statement, "load failed: git: boom")
+}
+
+// S1: a whole launch makes no agent call for the four code stages; each
+// runs as a step.
+func TestCodeStagesMakeNoAgentCall(t *testing.T) {
+	carried := []M{{"kind": "deviation", "source": "reported", "stage": "implement", "unit": "Z", "wave": 3, "statement": "dev-Z", "referent": "src/Z", "raisedBy": "implement", "disposition": "recorded"}}
+	s := stub(t, twoWaves(), merged(discovering(), Hs{"load": loadWith(M{"decisionsBlock": decisionsBlock("2026-09-12", "yes")})}), M{"decisions": []M{{"id": "d1", "question": "q", "decision": "yes"}}, "unscribed": carried})
+	out := run(t, s)
+	eq(t, out.Status, "complete", out.stopKinds())
+	code := []string{"load", "decision-log", "ledger", "completion-report"}
+	for _, c := range agentCalls(s) {
+		if slices.Contains(code, c.Prefix) {
+			t.Errorf("agent call %s", c.Label)
+		}
+	}
+	steps := map[string]bool{}
+	for _, c := range s.Calls {
+		if c.Step {
+			steps[c.Prefix] = true
+		}
+	}
+	for _, p := range code {
+		if !steps[p] {
+			t.Errorf("no %s step", p)
+		}
+	}
+}
+
+// A hook that stages another path is caught: the commit changes more than
+// the stage's path. An untracked draft at a new path is refused whatever
+// the status config. A reverted effect is not adopted.
+func TestMainCheckoutEdgeCases(t *testing.T) {
+	r := newGitRepo(t)
+	o := gitOrch(t, r, nil)
+	r.write("wip.md", "requester work\n")
+	r.hook("pre-commit", "git add wip.md")
+	_, err := runStage(t, o.ledgerAppend(ledgerIn(ledgerBlock(1, "one"))), "ledger:w1", false)
+	errMatch(t, err, `fails verification: changes .*want only `+ledgerPath)
+	r.hook("pre-commit", "")
+
+	r2 := newGitRepo(t)
+	r2.git("config", "status.showUntrackedFiles", "no")
+	r2.write(decPath, "requester draft\n")
+	_, err = runStage(t, gitOrch(t, r2, nil).decisionLog(decIn(dec("d1", "q", "yes"))), "decision-log", false)
+	errMatch(t, err, `uncommitted changes this stage did not make`)
+	eq(t, r2.read(decPath), "requester draft\n")
+
+	r3 := newGitRepo(t)
+	o3 := gitOrch(t, r3, nil)
+	b := ledgerBlock(1, "one")
+	first, err := runStage(t, o3.ledgerAppend(ledgerIn(b)), "ledger:w1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r3.git("revert", "--no-edit", first.Sha)
+	again, err := runStage(t, o3.ledgerAppend(ledgerIn(b)), "ledger:w1", true)
+	if err != nil || again.Sha == first.Sha {
+		t.Errorf("a reverted append was adopted: %+v %v", again, err)
+	}
 }

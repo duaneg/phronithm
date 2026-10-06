@@ -172,7 +172,7 @@ func TestNullScribe(t *testing.T) {
 	out := run(t, s)
 	eq(t, out.Status, "complete")
 	eq(t, len(out.Unscribed), 0)
-	match(t, s.Prompt("ledger:w2"), `(?s)dev-A.*dev-B`, "wave 1 rows the null scribe left ride in the wave 2 append")
+	match(t, ledgerText(t, s, "ledger:w2"), `(?s)dev-A.*dev-B`, "wave 1 rows the null scribe left ride in the wave 2 append")
 
 	never := run(t, stub(t, twoWaves(), Hs{"implement": deviating(), "ledger": func(Call, *State) any { return nil }}, nil))
 	eq(t, never.Status, "complete")
@@ -333,12 +333,13 @@ func TestUnitStagePrompts(t *testing.T) {
 	fix := s.Prompt("fix-plan:r1:A")
 	noMatch(t, fix, `12 KB|planText`)
 	match(t, fix, `do not shorten the plan to length`)
-	report := s.CallOf("completion-report:A")
-	match(t, report.Prompt, `Copy stage\. Write the Markdown between the markers below to docs/plans/A-completion\.md, every character unchanged`)
-	match(t, report.Prompt, `(?s)<<<REPORT\n# A — completion report\n.*REPORT>>>`, "the rendered report travels in the prompt")
-	match(t, report.Prompt, `subject line "docs\(f\): A completion report"`)
-	noMatch(t, report.Prompt, `Assemble it|phronithm:feature|KB`)
-	eq(t, report.Opts.Model+"/"+report.Opts.Effort, "haiku/low", "a copy stage, at the mechanical tier")
+	report := input(t, s, "completion-report:A")
+	eq(t, report["path"], any("docs/plans/A-completion.md"))
+	eq(t, report["unit"], any("A"))
+	eq(t, report["base"], any("impl-A"), "the report goes on top of the unit's branch")
+	match(t, report["text"].(string), `^# A — completion report\n`, "the rendered report is the step's input")
+	eq(t, report["subject"], any("docs(f): A completion report"))
+	noMatch(t, report["text"].(string), `Assemble it|phronithm:feature`)
 }
 
 func gateInvalidation(over M) M {
@@ -426,7 +427,7 @@ func TestGateNotRunStops(t *testing.T) {
 	if hasPrefix(s.Labels(), "critique-code") || hasPrefix(s.Labels(), "lens-review") {
 		t.Error(s.Labels())
 	}
-	match(t, s.Prompt("ledger:w1"), `note from the stopped unit`, "the stopped unit keeps its discovery record")
+	match(t, ledgerText(t, s, "ledger:w1"), `note from the stopped unit`, "the stopped unit keeps its discovery record")
 }
 
 // js: an implement return with no gate reported stops before review as a gate not run
@@ -480,7 +481,7 @@ func TestReviewReadsFixGates(t *testing.T) {
 	if !has(schemaOf(t, fix).Properties.Result.Required, "gates") {
 		t.Error("a code fix must return its gate runs")
 	}
-	match(t, s.Prompt("completion-report:A"), "Gates at HEAD:\n\n- `pytest -q` — green: 99 passed \\(fix\\)")
+	match(t, input(t, s, "completion-report:A")["text"].(string), "Gates at HEAD:\n\n- `pytest -q` — green: 99 passed \\(fix\\)")
 }
 
 // js: a second fix round: review reads the round-2 fix's runs, each fix is given the implement stage's set, and a red fix gate still reaches review
@@ -913,7 +914,7 @@ func TestWaveStopStillReplans(t *testing.T) {
 	match(t, rp, `docs/plans/B-completion\.md`)
 	match(t, rp, `Merge conflicts: none`, "the unresolvable conflict is not an item to absorb")
 	match(t, rp, `(?s)The run stops after this re-plan.*"kind": "merge-conflict-unresolvable"`)
-	eq(t, strings.Count(s.Prompt("ledger:w1"), "merge-conflict-unresolvable"), 1, "the stop is scribed once")
+	eq(t, strings.Count(ledgerText(t, s, "ledger:w1"), "merge-conflict-unresolvable"), 1, "the stop is scribed once")
 }
 
 // js: a re-plan cannot verdict during a wave stop joins the same escalation
@@ -1018,7 +1019,7 @@ func TestTerminationAppendsMetaUnits(t *testing.T) {
 	}
 	before(t, l, "direct-edits", "plan:M")
 	match(t, s.Prompt("direct-edits"), `(?s)termination stage.*README\.md.*mention M`)
-	match(t, s.Prompt("ledger:w2"), `\| termination \| reported \| direct-edit \| mention M \| README\.md \| recorded \|`)
+	match(t, ledgerText(t, s, "ledger:w2"), `\| termination \| reported \| direct-edit \| mention M \| README\.md \| recorded \|`)
 	eqs(t, out.Digest.Attention.DirectEdits, []string{"README.md — mention M"})
 }
 
@@ -1047,7 +1048,7 @@ func TestReplanDirectEdits(t *testing.T) {
 	match(t, de.Prompt, `(?s)src/A/README\.md.*note the widened signature`)
 	match(t, de.Prompt, `@ replan-1`, "the header names the re-planned SHA")
 	eq(t, de.Opts.Phase, "Re-plan")
-	match(t, s.Prompt("ledger:w1"), `\| 1 \| — \| replan \| reported \| direct-edit \| note the widened signature \| src/A/README\.md \| recorded \|`)
+	match(t, ledgerText(t, s, "ledger:w1"), `\| 1 \| — \| replan \| reported \| direct-edit \| note the widened signature \| src/A/README\.md \| recorded \|`)
 	eqs(t, out.Digest.Attention.DirectEdits, []string{"src/A/README.md — note the widened signature"})
 	match(t, s.Prompt("replan:w1"), "(?s)`directEdits`.*not made by the re-plan|not made by the re-plan.*`directEdits`")
 }
@@ -1071,7 +1072,7 @@ func TestNullDirectEdits(t *testing.T) {
 	if !has(s.Labels(), "direct-edits:w1") {
 		t.Error("the edits are made before the stop")
 	}
-	match(t, s.Prompt("ledger:w1"), `direct-edit \| g \| docs/guide\.md \| recorded`)
+	match(t, ledgerText(t, s, "ledger:w1"), `direct-edit \| g \| docs/guide\.md \| recorded`)
 }
 
 func decisionsBlock(date, decision string) string {
@@ -1137,9 +1138,9 @@ func TestCarriedObligation(t *testing.T) {
 	out := run(t, s)
 	eq(t, out.Status, "complete", out.stopKinds())
 	eq(t, out.Digest.ByKind["standing-obligation-carried"], 1)
-	scribe := s.Prompt("ledger:w1")
+	scribe := ledgerText(t, s, "ledger:w1")
 	match(t, scribe, `append termination signal ledger entries`)
-	match(t, scribe, "<<<LEDGER\n## Termination\n")
+	match(t, scribe, "\n## Termination\n")
 	match(t, scribe, `\| obligations \| reported \| standing-obligation-carried \| perf numbers carried until a later stream reads them \| docs/debt\.md row 7 \| recorded \|`)
 	match(t, s.Prompt("obligations"), "recorded nowhere outside this plan is `undischarged`")
 
@@ -1164,7 +1165,7 @@ func TestOwnFilesOnly(t *testing.T) {
 		},
 	}), M{"decisions": []M{{"id": "d1", "question": "q", "decision": "yes"}}})
 	run(t, s)
-	committing := []string{"decision-replan", "merge", "replan", "ledger", "termination", "direct-edits"}
+	committing := []string{"decision-replan", "merge", "replan", "termination", "direct-edits"}
 	seen := map[string]bool{}
 	for _, c := range agentCalls(s) {
 		if !has(committing, c.Prefix) {
@@ -1184,7 +1185,6 @@ func TestOwnFilesOnly(t *testing.T) {
 		}
 		return ""
 	}
-	match(t, at("ledger"), `Commit only the files this stage wrote \(docs/plans/f-signals/plan0\.md\)`)
 	match(t, at("replan"), "Commit only the files this stage wrote \\(docs/plans/f-breakdown\\.md, and docs/architecture/f\\.md if you made a `document-text` correction\\)")
 	m := at("merge")
 	match(t, m, `Commit only the files this stage wrote \(docs/plans/f-breakdown\.md and docs/plans/f-archive\.md\)`)
@@ -1211,7 +1211,7 @@ func TestDecisionsFirst(t *testing.T) {
 	noMatch(t, rp, `"clears"`)
 	eq(t, input(t, s, "load")["sha"], any("decided1"), "loads the re-planned SHA")
 	eq(t, out.LedgerPath, "docs/plans/f-signals/plan0.md", "the ledger is named by the SHA the launch started from, not the decision re-plan's")
-	match(t, s.Calls[2].Prompt, `mkdir -p \$\(dirname docs/plans/f-signals/plan0\.md\)`)
+	eq(t, input(t, s, "ledger:w0")["path"], any("docs/plans/f-signals/plan0.md"))
 	match(t, rp, `### <date, date -I> — decisions d1`)
 	match(t, rp, `<kind> <unit> — <one clause>`)
 	match(t, s.Prompt("plan:A"), `@ decided1`)
@@ -1222,7 +1222,7 @@ func TestDecisionsFirst(t *testing.T) {
 		}
 	}
 	eqs(t, w0, []string{"decision-replan/verdict", "decision-replan/amendment"})
-	match(t, s.Calls[2].Prompt, `(?s)## Wave 0.*decision-replan \| reported \| verdict \| d1 amended: edge added — q`)
+	match(t, ledgerText(t, s, "ledger:w0"), `(?s)## Wave 0.*decision-replan \| reported \| verdict \| d1 amended: edge added — q`)
 }
 
 // js: a decision the re-plan cannot carry out stops before load, with both SHAs in the record
@@ -1307,7 +1307,7 @@ func TestFixedCriticalsInLedger(t *testing.T) {
 	out := run(t, s)
 	eq(t, out.Status, "complete", out.stopKinds())
 	eq(t, out.Digest.ByKind["critical-fixed"], 2)
-	match(t, s.Prompt("ledger:w1"), `critical-fixed`)
+	match(t, ledgerText(t, s, "ledger:w1"), `critical-fixed`)
 }
 
 // js: role tiers reach every call: critique opus/low, gate opus/medium, planning opus/high, mechanical haiku/low, default opus/low
@@ -1345,11 +1345,11 @@ func TestWaveStopScribesOnce(t *testing.T) {
 	}, nil)
 	run(t, s)
 	eqs(t, filterPrefix(s.Labels(), "ledger:w1"), []string{"ledger:w1"})
-	p := s.Prompt("ledger:w1")
-	match(t, p, "<<<LEDGER\n## Wave 1\n")
+	p := ledgerText(t, s, "ledger:w1")
+	match(t, p, "\n## Wave 1\n")
 	match(t, p, `\| 1 \| A \| implement \| reported \| deviation \| a \\\| b \| A \| recorded \|`)
 	match(t, p, `\| architecture-invalidated \| section: §4\.8; [^|]* \| §4\.8 \| stopped \|`)
-	match(t, p, `# Signal ledger: f`)
+	eq(t, input(t, s, "ledger:w1")["name"], any("f"), "a new ledger starts with the heading for the name")
 }
 
 // js: args.tiers overrides a role without disturbing the others
@@ -1427,7 +1427,7 @@ func TestAppendStagePrompts(t *testing.T) {
 	s := stub(t, twoWaves(), Hs{"load": loadWith(M{"decisionsBlock": decisionsBlock("2026-09-19", "yes")}), "implement": implemented(M{"deviations": []string{"d"}})},
 		M{"decisions": []M{{"id": "d1", "question": "q", "decision": "yes"}}})
 	run(t, s)
-	match(t, s.Prompt("ledger:w1"), `subject line "docs\(f\): append wave 1 signal ledger entries", then a blank line, then any trailer lines`)
+	match(t, ledgerText(t, s, "ledger:w1"), `^docs\(f\): append wave 1 signal ledger entries\n`)
 	log := input(t, s, "decision-log")
 	eq(t, log["subject"], any("docs(f): append decision(s) d1"))
 	eq(t, log["path"], any("docs/plans/f-decisions.md"))
@@ -1459,7 +1459,7 @@ func TestCarriedRows(t *testing.T) {
 	out := run(t, s)
 	eq(t, out.Status, "complete")
 	eq(t, s.Labels()[0], "ledger:carried")
-	match(t, s.Calls[0].Prompt, `(?s)## Wave 3.*dev-Z`)
+	match(t, ledgerText(t, s, "ledger:carried"), `(?s)## Wave 3.*dev-Z`)
 	eq(t, len(out.Unscribed), 0)
 	if _, ok := out.Digest.ByKind["deviation"]; ok {
 		t.Error("carried rows stay out of the digest")
@@ -1504,7 +1504,7 @@ func TestPauseAtMerge(t *testing.T) {
 		t.Error(s.Logs)
 	}
 	match(t, s.Prompt("merge:w1"), `git show-ref --verify --quiet refs/lsf/f/pause`)
-	match(t, s.Prompt("ledger:w1"), `refs/lsf/f/pause`)
+	eq(t, input(t, s, "ledger:w1")["pauseRef"], any("refs/lsf/f/pause"))
 }
 
 // js: a pause ref present at load pauses before any unit starts; args.pauseRef names the ref

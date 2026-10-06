@@ -161,8 +161,6 @@ var (
 		{"summary", desc(str, "One paragraph: what the unit delivered. Rendered verbatim into the completion report")},
 	})))
 
-	completionSchema = stage(object(commitFields.spread(obj{{"path", str}})))
-
 	mergeSchema = stage(mergeResultSchema())
 
 	gateSchema = stage(object(obj{
@@ -208,7 +206,6 @@ var (
 	}))
 
 	scribeSchema = stage(object(obj{{"path", str}, {"sha", shaField}}))
-	ledgerSchema = stage(object(obj{{"path", str}, {"sha", shaField}}.spread(pauseField)))
 )
 
 // mergeResultSchema is MERGE_SCHEMA's result: MERGE_RESULT_SCHEMA's

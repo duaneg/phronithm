@@ -159,6 +159,16 @@ func input(t *testing.T, s *orchtest.Stub, l string) map[string]any {
 	return m
 }
 
+// ledgerText is a ledger step's commit subject, a newline, and the block
+// it appends.
+func ledgerText(t *testing.T, s *orchtest.Stub, l string) string {
+	t.Helper()
+	in := input(t, s, l)
+	subject, _ := in["subject"].(string)
+	block, _ := in["block"].(string)
+	return subject + "\n" + block
+}
+
 func has(labels []string, l string) bool { return slices.Contains(labels, l) }
 
 func hasPrefix(labels []string, p string) bool {

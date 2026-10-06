@@ -13,8 +13,8 @@
 // interleaved and the stub runs them in turn, but each lane's order is
 // fixed in both.
 //
-// Load and the decision log are code steps in Go (orchestrator D18) and
-// agent calls in the JS: the JS calls are answered from the Go step's
+// Load, the decision log, ledger appends and completion reports are code
+// steps in Go (orchestrator D18) and agent calls in the JS: the JS calls are answered from the Go step's
 // recorded value and left out of the comparison; the coverage checks count
 // the Go steps.
 //
@@ -259,7 +259,8 @@ func normOpts(raw json.RawMessage) (string, error) {
 // code step.
 func codeStep(label string) bool {
 	base, _, _ := strings.Cut(label, "#")
-	return base == "load" || strings.HasPrefix(base, "load:") || base == "decision-log"
+	return base == "load" || base == "decision-log" ||
+		strings.HasPrefix(base, "load:") || strings.HasPrefix(base, "ledger:") || strings.HasPrefix(base, "completion-report:")
 }
 
 // compare returns the differences between the two sides of one scenario.

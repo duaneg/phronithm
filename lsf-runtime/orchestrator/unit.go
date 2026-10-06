@@ -337,7 +337,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 		return abort("review")
 	}
 
-	// 5. completion report: rendered here, committed by a copy stage
+	// 5. completion report: rendered here, committed by a code step
 	review := reviewOutcome{rounds: reviewGate.rounds, findings: reviewGate.findings, fixedGates: fixedGates}
 	if fixedGates {
 		review.gates = gr.gates
@@ -346,10 +346,14 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	ca := at("completion-report")
 	ca.Path, ca.TargetKB = completionPath(u), completionReportTargetKB
 	sigs = append(sigs, plan.SignalsFromDocumentSize(float64(len(text)), ca)...)
-	report, _, err := call[completionResult](ctx, o, completionScribePrompt(c, pr, u, branch, text),
-		o.unitOpts(u, "completion-report", "mechanical", lsfrt.Opts{Isolation: "worktree", Schema: completionSchema}))
+	in := completionInput{Unit: u.ID, Base: branch, Path: completionPath(u), Text: text, Subject: "docs(" + c.name + "): " + u.ID + " completion report"}
+	report, fault, err := step[completionResult](ctx, o, "completion-report:"+u.ID, in, o.completionReport(in))
 	if err != nil {
 		return nil, err
+	}
+	if fault != "" {
+		sigs = append(sigs, stageFaultSignal(plan.At{Stage: "completion-report", Unit: u.ID, Wave: plan.W(wave), Path: completionPath(u)}, fault))
+		return abort("completion-report")
 	}
 	if report == nil {
 		sigs = append(sigs, plan.NullReturnSignal(at("completion-report")))
