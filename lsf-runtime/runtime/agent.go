@@ -17,15 +17,9 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 	skill := rt.cfg.skillFor(o.Label)
 	hash := callHash(prompt, skill, o)
 	rt.noteLabel(key, hash, o.Label)
-	if res, unchecked, ok := rt.replayCall(key, hash, o.Label); ok {
-		// The record was valid when written; a changed validator or an
-		// edited record re-runs the call rather than replay an invalid value.
-		if errs := ValidateOutput(o.Schema, res.Value); len(errs) > 0 {
-			rt.Log(fmt.Sprintf("%s: journaled return fails its schema (%s); the call re-runs", o.Label, firstOr(errs, "")))
-		} else {
-			rt.recheckUncommitted(ctx, o, key, unchecked, &res)
-			return res, nil
-		}
+	if res, unchecked, ok := rt.replayCall(key, hash, o.Label, o.Schema); ok {
+		rt.recheckUncommitted(ctx, o, key, unchecked, &res)
+		return res, nil
 	}
 	if err := rt.boundary(ctx); err != nil {
 		return CallResult{}, err

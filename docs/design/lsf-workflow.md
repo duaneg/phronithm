@@ -439,7 +439,8 @@ declare are only those whose consequence the script can check.
    driver-detected events: what the runtime observes about a call, rather
    than reads from its result. These are permission denials, changes left
    uncommitted at a call's return, a skill that did not load, a guard
-   kill after a valid result, and a result outside its stage's schema.
+   kill after a valid result, a result outside its stage's schema, and a
+   reported SHA that is not its branch's tip (corrected from git).
 2. **Adjudicated** — one judgement per wave, in a form the script checks: the
    wave gate's complete invalidation, and the re-plan's verdict on each item
    it was handed. Measured recall on premise- and requirements-level defects
@@ -466,8 +467,9 @@ applied Critical fix, gate note, mechanically resolved claimed-disjoint
 conflict, re-plan amendment, re-plan verdict of `amended`, `no-change`, or
 `document-text` with the architecture amendment it made, an over-budget
 unit repaired by extraction or flagged with rationale, a permission
-denial, changes a read-only stage left in its checkout, and a guard kill
-after a valid result (the result stands).
+denial, changes a read-only stage left in its checkout, a guard kill
+after a valid result (the result stands), and a unit stage's reported SHA
+corrected to its branch's tip.
 
 STOP (return an escalation record):
 

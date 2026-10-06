@@ -20,9 +20,10 @@
 // are then left out of the comparison. The coverage checks count the Go
 // steps.
 //
-// The Go side's documented kind divergences are rewritten to the JS form
-// before comparing (toJSKinds): gate-omitted to gate-not-run, statement
-// included (orchestrator D22), and stage-fault to agent-null (D19).
+// The Go side's gate-omitted is rewritten to the JS's gate-not-run before
+// comparing, statement included (toJSKinds; orchestrator D22). No scenario
+// reaches a code-stage fault, so stage-fault (D19) is not rewritten: one
+// would show as a difference.
 //
 // Node runs under precise coverage. The check fails unless every named
 // function in implement.js ran and every block that did not is listed in
@@ -326,18 +327,23 @@ func trunc(s string) string {
 	return s
 }
 
-// jsKinds rewrites the Go side's documented kind divergences to the JS
-// form before comparing: gate-omitted is the JS's gate-not-run, statement
-// included (orchestrator D22), and stage-fault its agent-null (D19). The
-// rewrite covers the outcome, the logs, every prompt and every step input,
-// since stop text reaches the re-plan prompt and the ledger.
+// jsKinds rewrites the Go side's gate-omitted to the JS's gate-not-run,
+// statement included (orchestrator D22), over the outcome, the logs, every
+// prompt and every step input, since stop text reaches the re-plan prompt
+// and the ledger. A scenario with both kinds is two Go stops against one JS
+// stop, and shows as a difference.
 var jsKinds = strings.NewReplacer(
 	"gate(s) omitted:", "gate(s) not run:",
 	"gate-omitted", "gate-not-run",
-	"stage-fault", "agent-null",
 )
 
+// rewritten counts the scenarios toJSKinds changed: the rewrite must be live.
+var rewritten int
+
 func toJSKinds(g result) result {
+	if strings.Contains(string(g.Outcome), "gate-omitted") {
+		rewritten++
+	}
 	g.Outcome = json.RawMessage(jsKinds.Replace(string(g.Outcome)))
 	g.Logs = slices.Clone(g.Logs)
 	for i, l := range g.Logs {
@@ -540,6 +546,7 @@ func run(repo string, verbose bool, w io.Writer) (failed, total int, err error) 
 	if err != nil {
 		return 0, 0, err
 	}
+	rewritten = 0
 	seen := map[string]bool{}      // prefixes reached, by calls and steps
 	seenLabel := map[string]bool{} // labels reached, by calls and steps
 	for i, sc := range scenarios {
@@ -554,6 +561,10 @@ func run(repo string, verbose bool, w io.Writer) (failed, total int, err error) 
 		} else if verbose {
 			fmt.Fprintf(w, "ok   %s (%d calls)\n", sc.name, len(goResults[i].Calls))
 		}
+	}
+	if rewritten == 0 {
+		failed++
+		fmt.Fprintln(w, "FAIL coverage: no scenario reaches gate-omitted, so its rewrite is untested")
 	}
 	for _, l := range labels {
 		if !seenLabel[l] {

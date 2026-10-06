@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -187,6 +188,48 @@ func gateSignals(at plan.At, gates, ran []gateRun) []*plan.Signal {
 	return out
 }
 
+// shaHex is a SHA as a stage reports it: at least 7 hex digits.
+var shaHex = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
+
+// checkSha is the reported SHA of a stage that commits on branch, checked
+// against the branch's tip. A SHA that is not a prefix of the tip is
+// replaced by it, with a sha-corrected record. An unresolvable branch
+// leaves the SHA as reported, with no signal: the stages after it fail on
+// the branch itself. Another git error records that the SHA was not
+// checked. With no repository there is nothing to check; with ctx done the
+// error is the cancellation's stop.
+func (o *orch) checkSha(ctx context.Context, at plan.At, branch, reported string) (string, *plan.Signal, error) {
+	if o.git == nil || branch == "" || strings.HasPrefix(branch, "-") {
+		return reported, nil, nil
+	}
+	tip, err := gitOps{o.git}.out(ctx, o.repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
+	switch {
+	case err != nil && ctx.Err() != nil:
+		return reported, nil, &lsfrt.StopError{Reason: lsfrt.StopCancelled}
+	case err != nil && exitCode(err) == 1:
+		return reported, nil, nil
+	case err != nil:
+		return reported, plan.ShaCorrectedSignal(at, branch, reported, "", err.Error()), nil
+	}
+	if r := strings.ToLower(jsTrim(reported)); shaHex.MatchString(r) && strings.HasPrefix(tip, r) {
+		return reported, nil, nil
+	}
+	return tip, plan.ShaCorrectedSignal(at, branch, reported, tip, ""), nil
+}
+
+// correctSha applies checkSha to a result's SHA field.
+func (o *orch) correctSha(ctx context.Context, at plan.At, branch string, sha *string, sigs *[]*plan.Signal) error {
+	fixed, sig, err := o.checkSha(ctx, at, branch, *sha)
+	if err != nil {
+		return err
+	}
+	*sha = fixed
+	if sig != nil {
+		*sigs = append(*sigs, sig)
+	}
+	return nil
+}
+
 // unitOpts are a unit stage's options: label `<label>:<unit>`, phase Units,
 // the default tier with role's set fields over it.
 func (o *orch) unitOpts(u *plan.Unit, label, role string, opts lsfrt.Opts) lsfrt.Opts {
@@ -198,6 +241,16 @@ func (o *orch) unitOpts(u *plan.Unit, label, role string, opts lsfrt.Opts) lsfrt
 	}
 	opts.Model, opts.Effort = t.Model, t.Effort
 	return opts
+}
+
+// fixCall is a plan or code fix's call, its SHA checked against its branch.
+func (o *orch) fixCall(ctx context.Context, at plan.At, prompt string, opts lsfrt.Opts) (*ret[fixResult], []*plan.Signal, error) {
+	r, sigs, err := call[fixResult](ctx, o, site{at, true}, prompt, opts)
+	if err != nil || r == nil {
+		return r, sigs, err
+	}
+	err = o.correctSha(ctx, at, r.Result.Branch, &r.Result.Sha, &sigs)
+	return r, sigs, err
 }
 
 // runUnit runs the five stages for one unit. A stage that returns null or
@@ -228,6 +281,9 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 		sigs = append(sigs, plan.NullReturnSignal(at("plan")))
 		return abort("plan")
 	}
+	if err := o.correctSha(ctx, at("plan"), planned.Result.Branch, &planned.Result.Sha, &sigs); err != nil {
+		return nil, err
+	}
 	pa := at("plan")
 	pa.Path = planned.Result.Path
 	sigs = append(sigs, plan.SignalsFromReadings(len(planned.Result.Readings), pa)...)
@@ -246,7 +302,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 			return []reviewer{{"critique-plan", r, rs}}, err
 		},
 		func(n int, criticals []critical) (*ret[fixResult], []*plan.Signal, error) {
-			return call[fixResult](ctx, o, site{at("fix"), true}, fixPrompt(c, pr, u, branch, "plan", criticals, n, nil),
+			return o.fixCall(ctx, at("fix"), fixPrompt(c, pr, u, branch, "plan", criticals, n, nil),
 				o.unitOpts(u, fmt.Sprintf("fix-plan:r%d", n), "", lsfrt.Opts{Isolation: "worktree", Schema: fixSchema}))
 		},
 		func(fixed *ret[fixResult], n int) []*plan.Signal { branch = fixed.Result.Branch; return nil },
@@ -282,6 +338,9 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 		return abort("implement")
 	}
 	branch = impl.Result.Branch
+	if err := o.correctSha(ctx, at("implement"), branch, &impl.Result.Sha, &sigs); err != nil {
+		return nil, err
+	}
 	sigs = append(sigs, plan.SignalsFromImplement(impl.Result.ImplementResult, at("implement"))...)
 	sigs = append(sigs, plan.DistressSignals(impl.Result.Distress.plan(), plan.At{Unit: u.ID, Wave: plan.W(wave)}, c.config)...)
 	if hasStop(cs) {
@@ -339,7 +398,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 			if design {
 				schema = fixSchema
 			}
-			return call[fixResult](ctx, o, site{at("fix"), true}, fixPrompt(c, pr, u, branch, "code", criticals, n, impl.Result.Gates),
+			return o.fixCall(ctx, at("fix"), fixPrompt(c, pr, u, branch, "code", criticals, n, impl.Result.Gates),
 				o.unitOpts(u, fmt.Sprintf("fix-code:r%d", n), "", lsfrt.Opts{Isolation: "worktree", Schema: schema}))
 		},
 		func(fixed *ret[fixResult], n int) []*plan.Signal {

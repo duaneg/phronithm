@@ -104,8 +104,10 @@ func (rt *Runtime) writeRecord(key string, r record) error {
 
 // replayCall returns a completed call's recorded return, and whether its
 // uncommitted check failed. A replay costs nothing and does not count
-// against the caps.
-func (rt *Runtime) replayCall(key, hash, label string) (CallResult, bool, bool) {
+// against the caps. A return that fails schema now (a changed validator,
+// an edited record) is not replayed: the call re-runs, and its record is
+// replaced only if the re-run returns a value.
+func (rt *Runtime) replayCall(key, hash, label string, schema json.RawMessage) (CallResult, bool, bool) {
 	r, err := rt.readRecord(key)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -115,6 +117,11 @@ func (rt *Runtime) replayCall(key, hash, label string) (CallResult, bool, bool) 
 		return CallResult{}, false, false
 	case r.Kind != "call" || r.Hash != hash:
 		rt.event("cache-stale", map[string]any{"label": label})
+		return CallResult{}, false, false
+	}
+	if errs := ValidateOutput(schema, r.Ret); len(errs) > 0 {
+		rt.event("cache-invalid", map[string]any{"label": label, "errors": errs[:min(3, len(errs))]})
+		rt.Log(fmt.Sprintf("%s: journaled return fails its schema (%s); not replayed, the call re-runs", label, errs[0]))
 		return CallResult{}, false, false
 	}
 	rt.event("cache-hit", map[string]any{"label": label, "flags": r.Flags})

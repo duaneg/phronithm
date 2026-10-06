@@ -532,7 +532,7 @@ func TestFixGateNotRun(t *testing.T) {
 			t.Fatalf("%d: %v", i, out.stopKinds())
 		}
 		eq(t, stop.Stage, "fix")
-		want := []string{`not run: xtask ci`, `omitted: \(no gate reported\)`, `omitted: ruff check \.$`}[i]
+		want := []string{`^gate\(s\) not run: xtask ci$`, `^gate\(s\) omitted: \(no gate reported\), pytest -q, ruff check \.$`, `^gate\(s\) omitted: ruff check \.$`}[i]
 		match(t, stop.Statement, want)
 		if has(s.Labels(), "critique-code:r2:A") {
 			t.Error("no round-2 review")

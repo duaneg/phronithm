@@ -135,7 +135,10 @@
 //     enum only: a schema using another keyword is not checked for it.
 //   - D22. A gate a stage left out of its return (none reported, or one
 //     the implement stage ran that a fix did not report) is gate-omitted;
-//     gate-not-run is a gate reported not run. JS has gate-not-run for
-//     both; promptparity maps gate-omitted back, with its statement.
+//     gate-not-run is a gate reported not run. JS has one gate-not-run
+//     stop for both, listing the not-run gates first; Go raises
+//     gate-omitted, then gate-not-run, so a fix with a gate not run and a
+//     gate dropped is two stops. promptparity maps gate-omitted back, with
+//     its statement; no scenario has both.
 //     declared-gates raises gate-omitted for a declared gate missing.
 package orchestrator

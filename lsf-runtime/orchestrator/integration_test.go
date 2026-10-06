@@ -26,6 +26,9 @@ import (
 // LSF_FAKE_CLAUDE_STATE. The table is an object keyed by the prompt's
 // SHA-256, or an ordered list of {contains, return} answered by the first
 // entry whose substring the prompt contains. No answer is an API error.
+// A list entry may also carry shell (a bash command run in the call's cwd
+// before answering), denials (Bash commands reported in the result's
+// permission_denials) and failFirst (the entry's first call is an API 529).
 func TestMain(m *testing.M) {
 	if table := os.Getenv("LSF_FAKE_CLAUDE_TABLE"); table != "" && slices.Contains(os.Args, "--session-id") {
 		os.Exit(fakeClaude(table))
@@ -57,20 +60,30 @@ func fakeClaude(table string) int {
 	sum := sha256.Sum256(prompt)
 	var v json.RawMessage
 	ok := false
+	var entry struct {
+		Shell     string   `json:"shell"`
+		Denials   []string `json:"denials"`
+		FailFirst bool     `json:"failFirst"`
+	}
+	entryIdx := -1
 	b, err := os.ReadFile(table)
 	if err == nil && strings.HasPrefix(strings.TrimSpace(string(b)), "[") {
 		var list []struct {
-			Contains string          `json:"contains"`
-			Return   json.RawMessage `json:"return"`
+			Contains  string          `json:"contains"`
+			Return    json.RawMessage `json:"return"`
+			Shell     string          `json:"shell"`
+			Denials   []string        `json:"denials"`
+			FailFirst bool            `json:"failFirst"`
 		}
 		err = json.Unmarshal(b, &list)
-		for _, e := range list {
+		for i, e := range list {
 			if e.Contains == "" || len(e.Return) == 0 {
 				fmt.Fprintln(os.Stderr, "fake claude: table entry without contains or return")
 				return 3
 			}
 			if strings.Contains(string(prompt), e.Contains) {
 				v, ok = e.Return, true
+				entry.Shell, entry.Denials, entry.FailFirst, entryIdx = e.Shell, e.Denials, e.FailFirst, i
 				break
 			}
 		}
@@ -89,7 +102,27 @@ func fakeClaude(table string) int {
 		fmt.Println(`{"type":"result","subtype":"success","is_error":true,"api_error_status":400,"total_cost_usd":0}`)
 		return 1
 	}
-	fmt.Printf(`{"type":"result","subtype":"success","is_error":false,"structured_output":%s,"total_cost_usd":0.01}`+"\n", v)
+	if entry.FailFirst {
+		marker := filepath.Join(os.Getenv("LSF_FAKE_CLAUDE_STATE"), fmt.Sprintf("failed-%d", entryIdx))
+		if _, err := os.Stat(marker); err != nil {
+			os.WriteFile(marker, nil, 0o644)
+			fmt.Println(`{"type":"assistant","error":"overloaded","message":{"content":[{"type":"text","text":"Overloaded"}]}}`)
+			fmt.Println(`{"type":"result","subtype":"success","is_error":true,"api_error_status":529,"total_cost_usd":0}`)
+			return 1
+		}
+	}
+	if entry.Shell != "" {
+		if out, err := exec.Command("bash", "-c", entry.Shell).CombinedOutput(); err != nil {
+			fmt.Fprintf(os.Stderr, "fake claude: shell: %v %s\n", err, out)
+			return 3
+		}
+	}
+	denials := []map[string]any{}
+	for _, d := range entry.Denials {
+		denials = append(denials, map[string]any{"tool_name": "Bash", "tool_use_id": "t", "tool_input": map[string]string{"command": d}})
+	}
+	db, _ := json.Marshal(denials)
+	fmt.Printf(`{"type":"result","subtype":"success","is_error":false,"structured_output":%s,"total_cost_usd":0.01,"permission_denials":%s}`+"\n", v, db)
 	return 0
 }
 

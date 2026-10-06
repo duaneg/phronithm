@@ -309,3 +309,13 @@ func TestGateNotRunNotRetried(t *testing.T) {
 	eqs(t, out.stopKinds(), []string{"gate-not-run"})
 	eq(t, len(filterPrefix(s.Labels(), "implement:")), 1, "implement calls")
 }
+
+// D22: a fix with a gate not run and a gate dropped is two stops,
+// gate-omitted then gate-not-run, each naming its gates.
+func TestFixGateOmittedAndNotRun(t *testing.T) {
+	s := stub(t, graph("plan0", unit("A")), Hs{"critique-code": criticalOnce(), "fix-code": fixCode(g("pytest -q", "not-run", "timed out"))}, nil)
+	out := run(t, s)
+	eqs(t, out.stopKinds(), []string{"gate-omitted", "gate-not-run"})
+	eq(t, out.stops()[0].Statement, "gate(s) omitted: ruff check .")
+	eq(t, out.stops()[1].Statement, "gate(s) not run: pytest -q")
+}

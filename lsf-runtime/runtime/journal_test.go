@@ -372,4 +372,12 @@ func TestReplayRevalidates(t *testing.T) {
 	if res.Replayed || stubCount(t, stub) != 1 || res.Value == nil {
 		t.Fatalf("%+v, spawns %d", res, stubCount(t, stub))
 	}
+	if countEvents(telemetry(t, cfg), "cache-hit") != 0 || countEvents(telemetry(t, cfg), "cache-invalid") != 1 {
+		t.Error("an invalid record counted as a hit")
+	}
+	// The re-run's value replaced the record: the next call replays it.
+	again, _ := call(t, cfg, vOpts)
+	if !again.Replayed || stubCount(t, stub) != 1 {
+		t.Fatalf("%+v, spawns %d", again, stubCount(t, stub))
+	}
 }
