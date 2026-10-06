@@ -14,7 +14,7 @@
   - `doc.go`
   - `schema.go`, `jsvalue.go`, `yaml.go`, `graph.go`, `scheduling.go`, `signals.go`
   - `schema_test.go`, `yaml_test.go`, `graph_test.go`, `scheduling_test.go`, `signals_test.go`
-  - `testdata/graph/`: 51 fixtures
+  - `testdata/graph/`: 49 fixtures
 - `lsf-runtime/tools/graphparity/main.go`, `main_test.go`
 - `docs/plans/orchestrator-port-plan-plan.md`, this file
 
