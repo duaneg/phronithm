@@ -1,8 +1,11 @@
 // Package plan is the plan model: the plan graph, its YAML-subset parser,
 // the shared stage schema, and the scheduling and stop rules. Ported from
 // workflows/lsf/schema.js, graph.js and scheduling.js, which stay the
-// behavioural reference until script-retirement; tools/graphparity checks
-// the two agree.
+// behavioural reference until script-retirement. tools/graphparity runs
+// the parser, loader, plan validation, scheduling views and constants
+// through both and compares them; the signal mappers, stop rule, digest
+// and ledger are checked by Go tests whose expectations come from the JS
+// tests and from node.
 //
 // # Divergences from the JavaScript
 //

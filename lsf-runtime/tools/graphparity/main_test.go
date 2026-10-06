@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,9 @@ import (
 // TestParity runs the parity check when node is installed.
 func TestParity(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
+		if os.Getenv("GRAPHPARITY_REQUIRE_NODE") != "" {
+			t.Fatal("node not installed and GRAPHPARITY_REQUIRE_NODE is set")
+		}
 		t.Skip("node not installed")
 	}
 	repo, err := filepath.Abs(filepath.Join("..", "..", ".."))

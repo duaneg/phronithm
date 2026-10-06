@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -48,7 +49,12 @@ const run = (c) => {
     case 'yaml':
       try { return { value: parseYaml(c.text) }; } catch (e) { return { error: e.message }; }
     case 'planGraph': return parsePlanGraph(c.text);
-    case 'planProblems': return parsePlanGraph(c.text).problems;
+    case 'planGraphD4': {
+      const r = parsePlanGraph(c.text);
+      const drop = (o, k) => { if (typeof o[k] !== 'string' || o[k] === '') delete o[k]; };
+      for (const u of r.plan?.units ?? []) { drop(u, 'type'); for (const g of u.gates) drop(g, 'kind'); }
+      return r;
+    }
     case 'decisions': return parseDecisions(c.text);
     case 'load': return loadGraph({ planMarkdown: c.text, decisionsMarkdown: c.decisions });
     case 'schedule': {
@@ -56,7 +62,15 @@ const run = (c) => {
       if (!plan) return { validate: null };
       const validate = S.validatePlan(plan);
       if (validate.length) return { validate };
-      return { validate, ready: S.readySet(plan).map((u) => u.id), blocked: S.blockedUnits(plan), waves: S.wavePlan(plan) };
+      const done = new Set(S.readySet(plan).map((u) => u.id));
+      return {
+        validate, ready: S.readySet(plan).map((u) => u.id), blocked: S.blockedUnits(plan), waves: S.wavePlan(plan),
+        mergeOrder: S.mergeOrder(plan, plan.units.map((u) => u.id).reverse()),
+        afterFirstWave: {
+          done: [...done], ready: S.readySet(plan, done).map((u) => u.id), blocked: S.blockedUnits(plan, done),
+          waves: S.wavePlan(plan, done), pairs: S.overlappingPairs(plan, done), donePreserved: done.size,
+        },
+      };
     }
     case 'constants': return {
       STOP_KINDS: C.STOP_KINDS, RECORD_KINDS: C.RECORD_KINDS, SOURCES: C.SOURCES, GATE_KINDS: C.GATE_KINDS,
@@ -95,9 +109,12 @@ func goRun(c jsCase) any {
 			Plan     *plan.Plan     `json:"plan"`
 			Problems []plan.Problem `json:"problems"`
 		}{p, problems}
-	case "planProblems":
-		_, problems := plan.ParsePlanGraph(c.Text)
-		return problems
+	case "planGraphD4":
+		p, problems := plan.ParsePlanGraph(c.Text)
+		return struct {
+			Plan     *plan.Plan     `json:"plan"`
+			Problems []plan.Problem `json:"problems"`
+		}{p, problems}
 	case "decisions":
 		ds, problems := plan.ParseDecisions(&c.Text)
 		return struct {
@@ -140,10 +157,10 @@ func buildCases(repo string) ([]jsCase, error) {
 		switch {
 		case strings.HasSuffix(name, ".d4.yaml"):
 			// Recorded divergence D4: a non-string or quoted-empty type or kind
-			// is kept by JS and "" in Go, so the graph differs by design. The
-			// problems (text, order, the JSON of the raw value) must match.
+			// is kept by JS and "" (omitted) in Go. The JS side drops those
+			// values before comparing; everything else is compared.
 			yamlFiles++
-			for _, op := range []string{"yaml", "planProblems", "decisions"} {
+			for _, op := range []string{"yaml", "planGraphD4", "decisions"} {
 				cases = append(cases, jsCase{Name: name + " " + op, Op: op, Text: text})
 			}
 		case strings.HasSuffix(name, ".yaml"):
@@ -153,6 +170,10 @@ func buildCases(repo string) ([]jsCase, error) {
 			}
 		case strings.HasSuffix(name, ".decisions.md"):
 			// Paired with its plan document below.
+			stem := strings.TrimSuffix(name, ".decisions.md")
+			if !slices.Contains(names, stem+".plan.md") && !slices.Contains(names, stem+".md") {
+				return nil, fmt.Errorf("%s: decision log with no plan document", name)
+			}
 		case strings.HasSuffix(name, ".md"):
 			c := jsCase{Name: name + " load", Op: "load", Text: text}
 			stem := strings.TrimSuffix(strings.TrimSuffix(name, ".md"), ".plan")
@@ -242,6 +263,17 @@ func firstDiff(a, b string) (int, string, string) {
 	return 0, "", ""
 }
 
+// marshalCase runs c in Go, turning a panic into an error so the other
+// cases still run.
+func marshalCase(c jsCase) (b []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+	return plan.MarshalJS(goRun(c), "  ")
+}
+
 // run compares every case, writing a line per mismatch (and per match
 // when verbose) to w. It returns the number of cases that differ and the
 // number run.
@@ -255,9 +287,9 @@ func run(repo string, verbose bool, w io.Writer) (failed, total int, err error) 
 		return 0, 0, err
 	}
 	for i, c := range cases {
-		b, err := plan.MarshalJS(goRun(c), "  ")
+		b, err := marshalCase(c)
 		if err != nil {
-			fmt.Fprintf(w, "FAIL %s: marshal: %v\n", c.Name, err)
+			fmt.Fprintf(w, "FAIL %s: %v\n", c.Name, err)
 			failed++
 			continue
 		}
@@ -308,19 +340,41 @@ func schedule(c jsCase) any {
 			Validate []plan.Problem `json:"validate"`
 		}{validate}
 	}
-	var ready []string
-	for _, u := range plan.ReadySet(g.Plan, nil) {
-		ready = append(ready, u.ID)
+	ids := func(us []*plan.Unit) []string {
+		out := []string{}
+		for _, u := range us {
+			out = append(out, u.ID)
+		}
+		return out
 	}
-	if ready == nil {
-		ready = []string{}
+	ready := ids(plan.ReadySet(g.Plan, nil))
+	done := plan.Completed{}
+	for _, id := range ready {
+		done[id] = true
 	}
+	var all []string
+	for i := len(g.Plan.Units) - 1; i >= 0; i-- {
+		all = append(all, g.Plan.Units[i].ID)
+	}
+	type after struct {
+		Done          []string       `json:"done"`
+		Ready         []string       `json:"ready"`
+		Blocked       []plan.Blocked `json:"blocked"`
+		Waves         [][]string     `json:"waves"`
+		Pairs         []plan.Pair    `json:"pairs"`
+		DonePreserved int            `json:"donePreserved"`
+	}
+	a := after{Done: ready, Ready: ids(plan.ReadySet(g.Plan, done)), Blocked: plan.BlockedUnits(g.Plan, done),
+		Waves: plan.WavePlan(g.Plan, done), Pairs: plan.OverlappingPairs(g.Plan, done)}
+	a.DonePreserved = len(done)
 	return struct {
-		Validate []plan.Problem `json:"validate"`
-		Ready    []string       `json:"ready"`
-		Blocked  []plan.Blocked `json:"blocked"`
-		Waves    [][]string     `json:"waves"`
-	}{validate, ready, plan.BlockedUnits(g.Plan, nil), plan.WavePlan(g.Plan, nil)}
+		Validate       []plan.Problem `json:"validate"`
+		Ready          []string       `json:"ready"`
+		Blocked        []plan.Blocked `json:"blocked"`
+		Waves          [][]string     `json:"waves"`
+		MergeOrder     []string       `json:"mergeOrder"`
+		AfterFirstWave after          `json:"afterFirstWave"`
+	}{validate, ready, plan.BlockedUnits(g.Plan, nil), plan.WavePlan(g.Plan, nil), plan.MergeOrder(g.Plan, all), a}
 }
 
 func constants(c jsCase) any {
