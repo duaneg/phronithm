@@ -320,7 +320,8 @@ type Distress struct {
 	Deferrals                        int  `json:"deferrals"`
 }
 
-// Config holds the scheduling thresholds.
+// Config holds the scheduling thresholds. Build it with ConfigFrom: the
+// zero Config has both thresholds at 0, which marks every unit distressed.
 type Config struct {
 	DistressDeviationThreshold      int `json:"distressDeviationThreshold"`      // deviations + deferrals
 	DistressDesignDecisionThreshold int `json:"distressDesignDecisionThreshold"` // mid-implementation design decisions
@@ -330,14 +331,18 @@ var DefaultConfig = Config{DistressDeviationThreshold: 4, DistressDesignDecision
 
 // ConfigFrom decodes overrides onto DefaultConfig, as JS
 // {...DEFAULT_CONFIG, ...config} does: a field the overrides omit keeps
-// its default. Empty or null raw is the default.
+// its default. Empty raw is the default. Unlike JS, a null field keeps its
+// default (JS compares against null, i.e. 0) and a non-integer is an
+// error, returned with DefaultConfig.
 func ConfigFrom(raw json.RawMessage) (Config, error) {
 	cfg := DefaultConfig
 	if len(raw) == 0 {
 		return cfg, nil
 	}
-	err := json.Unmarshal(raw, &cfg)
-	return cfg, err
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return DefaultConfig, err
+	}
+	return cfg, nil
 }
 
 // DistressSignals is the execution-distress record from a completion

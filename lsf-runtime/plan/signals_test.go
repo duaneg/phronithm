@@ -428,3 +428,66 @@ func TestCountsJSKeyOrderAndUndefined(t *testing.T) {
 func TestPlanSupersedingStopKinds(t *testing.T) {
 	eqStrings(t, "superseding", PlanSupersedingStopKinds, []string{"architecture-invalidated"})
 }
+
+func TestSignalWaveIsCopied(t *testing.T) {
+	wave := 1
+	sigs := SignalsFromImplement(ImplementResult{Deviations: []string{"a", "b"}}, At{Unit: "B", Wave: &wave})
+	wave++
+	*sigs[0].Wave = 9
+	if *sigs[1].Wave != 1 {
+		t.Errorf("rows share a wave: %d", *sigs[1].Wave)
+	}
+	if got := NullReturnSignal(At{Stage: "s", Wave: &wave}); *got.Wave != 2 {
+		t.Errorf("wave %d", *got.Wave)
+	}
+}
+
+func TestNoCommitSignal(t *testing.T) {
+	s := NoCommitSignal(At{Stage: "ledger", Wave: W(3), Unit: "ignored", Path: "docs/ledger.md"})
+	if got := jsonOf(t, s); got != `{"kind":"agent-null","source":"structural","stage":"ledger","statement":"ledger returned no commit SHA; docs/ledger.md may hold an uncommitted change in the main checkout","referent":"docs/ledger.md","raisedBy":"ledger","wave":3}` {
+		t.Errorf("%s", got)
+	}
+}
+
+func TestSignalStatementsAndReferents(t *testing.T) {
+	f := SignalsFromFindings([]Finding{{Severity: "Significant", Statement: "x", Location: "l", Stage: "review"}}, At{Stage: "g"})
+	if f[0].Statement != "Significant: x" {
+		t.Errorf("round 0: %q", f[0].Statement)
+	}
+	g := SignalsFromGate(GateResult{Invalidations: []Invalidation{{Section: "§1", Premise: " p "}}}, At{})
+	if want := "incomplete invalidation (decision, evidence, amendment missing) — section: §1; decision: —; premise: p; evidence: —; amendment: —"; g[0].Statement != want {
+		t.Errorf("placeholders: %q", g[0].Statement)
+	}
+	m := SignalsFromMerge(MergeResult{Merges: []Merge{
+		{Unit: "C", Status: "resolved", Files: []string{"a", "b"}},
+		{Unit: "D", Status: "unresolvable", Files: []string{"a"}},
+		{Unit: "E", Status: "regressed", Files: []string{"t"}},
+	}}, At{Wave: W(2)})
+	for i, want := range [][2]string{
+		{"merge of C conflicted in a, b; resolved mechanically", "a, b"},
+		{"merge of D conflicts in a", "a"},
+		{"merge of E was clean but the test suite failed in t; merge undone", "t"},
+	} {
+		if m[i].Statement != want[0] || m[i].Referent != want[1] || m[i].Unit != []string{"C", "D", "E"}[i] {
+			t.Errorf("merge %d: %+v", i, m[i])
+		}
+	}
+	rows := strings.Split(RenderLedger([]*Signal{{Wave: W(0), Kind: "verdict"}}, 3), "\n")
+	if rows[0] != "## Wave 0" || !strings.HasPrefix(rows[4], "| 0 | — |") {
+		t.Errorf("wave 0 ledger %q", rows)
+	}
+}
+
+func TestDigestJSON(t *testing.T) {
+	js, err := MarshalJS(Digest(nil), "")
+	want := `{"waves":0,"byKind":{},"bySource":{},"byDisposition":{},"attention":{"architectureNotes":[],"architectureAmendments":[],"unfixedSignificant":{},"minorFindings":{},"distressedUnits":[],"directEdits":[]},"note":"Silence is not evidence: reported-signal recall on premise-level defects is near zero."}`
+	if err != nil || string(js) != want {
+		t.Errorf("%s %v", js, err)
+	}
+}
+
+func TestConfigFromError(t *testing.T) {
+	if cfg, err := ConfigFrom(json.RawMessage(`{"distressDesignDecisionThreshold":1,"distressDeviationThreshold":"5"}`)); err == nil || cfg != DefaultConfig {
+		t.Errorf("%+v %v", cfg, err)
+	}
+}

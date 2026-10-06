@@ -136,7 +136,7 @@ type Signal struct {
 	Disposition string `json:"disposition,omitempty"`
 }
 
-// NewSignal checks s and defaults RaisedBy to Stage. It panics on an empty
+// NewSignal checks s, defaults RaisedBy to Stage and copies Wave. It panics on an empty
 // Kind or an unknown Source, a programmer error (the JS throws).
 func NewSignal(s Signal) *Signal {
 	if s.Kind == "" {
@@ -147,6 +147,10 @@ func NewSignal(s Signal) *Signal {
 	}
 	if s.RaisedBy == "" {
 		s.RaisedBy = s.Stage
+	}
+	if s.Wave != nil {
+		w := *s.Wave // JS copies the number; a caller's counter must not move the row
+		s.Wave = &w
 	}
 	return &s
 }
