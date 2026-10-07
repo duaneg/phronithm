@@ -218,6 +218,48 @@ func TestOrphanGateReaped(t *testing.T) {
 	}
 }
 
+// A real gate is registered for reaping under a marker its live shell's
+// arguments match; a TERM-ignoring command is still ended at its timeout,
+// and a background process a green command left is killed.
+func TestRunGatesRegistersAndCleansUp(t *testing.T) {
+	cfg, _ := testConfig(t)
+	cfg.KillGrace = Duration(200 * time.Millisecond)
+	sha := gateRepo(t, &cfg)
+	dir := t.TempDir()
+	bg, ready := filepath.Join(dir, "bg"), filepath.Join(dir, "ready")
+	var matched bool
+	var runs []GateRun
+	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		go func() {
+			waitFor(t, 5*time.Second, "gate to start", func() bool { _, err := os.Stat(ready); return err == nil })
+			var kids map[string]int
+			json.Unmarshal([]byte(readFile(t, cfg, "children.json")), &kids)
+			procs, _ := processes()
+			for marker, pid := range kids {
+				matched = matched || (strings.HasPrefix(marker, gateMarkerPrefix) && matchesChild(procs[pid], marker))
+			}
+		}()
+		var err error
+		runs, err = rt.RunGates(ctx, "gates:x", sha, "", []GateSpec{
+			{Name: "stubborn", Command: "touch " + ready + "; trap '' TERM; sleep 30", Timeout: 700 * time.Millisecond},
+			{Name: "leaves", Command: "sleep 30 & echo $! > " + bg},
+		})
+		return nil, err
+	})
+	if !matched {
+		t.Error("no live gate shell matched its children.json marker")
+	}
+	if runs[0].Status != GateNotRun || runs[0].Secs > 5 || runs[1].Status != GateGreen {
+		t.Fatalf("%+v", runs)
+	}
+	b, _ := os.ReadFile(bg)
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	waitFor(t, 2*time.Second, "background process to die", func() bool { return !alive(pid) })
+	if strings.Contains(readFile(t, cfg, "children.json"), gateMarkerPrefix) {
+		t.Error("finished gates left in children.json")
+	}
+}
+
 // gateConcurrency 1 serialises concurrent runs.
 func TestRunGatesConcurrency(t *testing.T) {
 	cfg, _ := testConfig(t)

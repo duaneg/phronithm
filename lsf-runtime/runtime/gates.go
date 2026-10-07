@@ -58,7 +58,15 @@ const gateScript = `eval "$LSF_GATE_COMMAND"; exit $?`
 // failed setup makes every gate not-run. The checkout is removed afterwards.
 // A stop or cancellation kills the running group and is returned; no runs
 // are returned with it. A checkout failure is an error. Runs are bounded
-// by gateConcurrency, and are not journaled here.
+// by gateConcurrency, and are not journaled here. The checkout and log
+// names derive from label, which must be unique in the launch.
+//
+// Every process a command leaves behind is killed when it ends, setup's
+// included: a service the gates need is started by the gate command
+// itself. A command that begins with `exec` replaces the marked shell, so a
+// launch killed during it leaves an orphan the next launch cannot find.
+// Commands run with the runtime's environment, credentials included: the
+// declaration is trusted as the plan document is.
 func (rt *Runtime) RunGates(ctx context.Context, label, commit, setup string, gates []GateSpec) ([]GateRun, error) {
 	if err := rt.boundary(ctx); err != nil {
 		return nil, err
@@ -101,7 +109,11 @@ func (rt *Runtime) RunGates(ctx context.Context, label, commit, setup string, ga
 		}
 	}
 	for i, g := range gates {
-		log := fmt.Sprintf("%s-%d-%s.log", logBase, i+1, unsafeChars.ReplaceAllString(g.Name, "_"))
+		slug := unsafeChars.ReplaceAllString(g.Name, "_")
+		if len(slug) > 40 { // the file name stays under NAME_MAX
+			slug = slug[:40]
+		}
+		log := fmt.Sprintf("%s-%d-%s.log", logBase, i+1, slug)
 		if notRun != "" {
 			runs[i] = GateRun{Name: g.Name, Command: g.Command, Status: GateNotRun, ExitCode: -1, Summary: notRun, Log: log}
 			continue
@@ -199,13 +211,16 @@ var errGateTimeout = errors.New("gate timeout")
 // for a timeout; a stop or cancellation is returned as the error. The group
 // is killed as spawn kills a call's: SIGTERM, KillGrace, SIGKILL to the
 // leader, then SIGKILL to the group, which also ends background processes a
-// command that finished left behind. The pid-reuse window spawn accepts is
-// accepted here too.
+// command that finished left behind. The pid-reuse window spawn accepts for
+// a cancelled call is accepted here for every command: a reuse needs the
+// pid space to wrap between Wait and the kill. A file that cannot be
+// created for the log makes the command not-run.
 func (rt *Runtime) gateProcess(ctx context.Context, dir, logPath, command string, timeout time.Duration) (GateRun, error) {
 	r := GateRun{Status: GateNotRun, ExitCode: -1, Log: logPath}
 	out, err := os.Create(logPath)
 	if err != nil {
-		return r, rt.setStop(StopRuntimeError, fmt.Sprintf("gate log %s: %v", logPath, err))
+		r.Summary = "no log: " + err.Error()
+		return r, nil
 	}
 	defer out.Close()
 	pctx, cancel := context.WithCancelCause(ctx)
