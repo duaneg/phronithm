@@ -302,7 +302,7 @@ func TestMergeGatesKillResolved(t *testing.T) {
 			f.kill = nil
 			calls := 0
 			h := map[string]orchtest.Handler{"merge-conflict": func(orchtest.Call, *orchtest.State) any {
-				calls++ // the journaled call's replay: the resolution is staged
+				calls++ // the stub journals no calls: this stands for the replay
 				return R(M{"status": "resolved", "files": []string{"shared.txt"}, "statement": "both"})
 			}}
 			res, err := runMerge(t, f.orch(t, nil, h), f.declared("A", "B"), true)
@@ -313,6 +313,7 @@ func TestMergeGatesKillResolved(t *testing.T) {
 			eq(t, f.gated(), c.gated)
 			eq(t, f.r.git("rev-list", "--merges", "--count", "HEAD"), "2")
 			eq(t, f.r.git("show", res.Merges[1].Sha+":shared.txt"), "from A\nfrom B")
+			eq(t, calls, 1, "one conflict call on resume, the resolution already staged")
 		})
 	}
 }
@@ -368,6 +369,21 @@ func TestMergeUnresolvableThenKilled(t *testing.T) {
 		t.Fatal(err)
 	}
 	eq(t, statuses(res), "A=unresolvable B=clean C=resolved")
+}
+
+// A merge commit whose tree no gate run covers (here, a commit raced the
+// merge and was adopted on relaunch) is gated; a red one is the step's
+// fault, never accepted.
+func TestMergeGatesUngatedCommit(t *testing.T) {
+	f := newGateFixture(t, map[string]map[string]string{"A": {"src/a.go": "a\n"}}, "A")
+	in := f.declared("A")
+	f.r.write("src/bad", "x\n") // the requester's commit, merged under the step's trailers
+	f.r.git("add", "src/bad")
+	f.r.git("commit", "-q", "-m", "requester")
+	f.r.git("merge", "-q", "--no-ff", "-m", mergeMessage(in, "merge:w1", "A", "clean", nil), f.shas["A"])
+	_, err := runMerge(t, f.orch(t, nil, nil), in, true)
+	errMatch(t, err, `merge commit [0-9a-f]+ of A is on the integration branch but its gates do not pass`)
+	eq(t, f.gated(), 1)
 }
 
 // The integration branch moving during the gates: the new merge is gated

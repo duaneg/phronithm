@@ -623,6 +623,9 @@ func (o *orch) mergeOne(ctx context.Context, m mergeGit, in mergeInput, label st
 			return out, err
 		}
 		if sha != "" {
+			if err := o.gatedMerge(ctx, m, in, u, sha); err != nil {
+				return out, err
+			}
 			out.Status, out.Files, out.Sha = status, conflicts, sha
 			o.rt.Log(fmt.Sprintf("%s: %s already merged at %s; adopted", label, u.Unit, sha))
 			return out, nil
@@ -713,6 +716,9 @@ func (o *orch) mergeOne(ctx context.Context, m mergeGit, in mergeInput, label st
 			if err == nil {
 				err = m.leftStaged(ctx, u.Unit, head)
 			}
+			if err == nil {
+				err = o.gatedMerge(ctx, m, in, u, head)
+			}
 			if err != nil {
 				return out, err
 			}
@@ -782,9 +788,9 @@ func (o *orch) mergeOne(ctx context.Context, m mergeGit, in mergeInput, label st
 			}
 			break
 		}
-		gated := ""
 		if in.Declared {
-			if gated, err = m.out(ctx, m.dir, "write-tree"); err != nil {
+			gated, err := m.out(ctx, m.dir, "write-tree")
+			if err != nil {
 				return fail(err)
 			}
 			set, err := o.mergeGates(ctx, m, u, pre, gated, mergeMessage(in, label, u.Unit, "resolved", conflicts))
@@ -814,10 +820,8 @@ func (o *orch) mergeOne(ctx context.Context, m mergeGit, in mergeInput, label st
 		if err == nil {
 			err = m.leftStaged(ctx, u.Unit, head)
 		}
-		if err == nil && gated != "" {
-			if t, terr := m.out(ctx, m.dir, "rev-parse", head+"^{tree}"); terr != nil || t != gated {
-				err = errors.Join(fmt.Errorf("merge commit %s of %s is not the tree its gates ran on (%s; a hook changed it?)", head, u.Unit, gated), terr)
-			}
+		if err == nil {
+			err = o.gatedMerge(ctx, m, in, u, head)
 		}
 		if err != nil {
 			return out, err
@@ -845,10 +849,14 @@ type unitMerge struct {
 // Files are the gates that are not green.
 func regressed(out unitMerge, set gateSet) unitMerge {
 	out.Status, out.Files = "regressed", []string{}
+	red := false
 	for _, r := range set.failed() {
 		out.Files = append(out.Files, "`"+r.Name+"`: "+r.Status+" — "+r.Summary)
-		out.gateNotRun = out.gateNotRun || r.Status == lsfrt.GateNotRun
+		red = red || r.Status == lsfrt.GateRed
 	}
+	// A red gate is the regression; a gate not run stops on its own only
+	// when nothing failed.
+	out.gateNotRun = !red && len(out.Files) > 0
 	return out
 }
 
@@ -858,16 +866,11 @@ func regressed(out unitMerge, set gateSet) unitMerge {
 // dangling candidate commit of tree (parents pre and u.Sha, message msg)
 // is gated. A gate fault is the step's failure; err is that or a stop.
 func (o *orch) mergeGates(ctx context.Context, m mergeGit, u mergeUnitIn, pre, tree, msg string) (gateSet, error) {
-	if u.GatedTree != "" {
-		diff, err := m.nulList(ctx, "diff-tree", "-r", "-z", "--name-only", "--no-renames", u.GatedTree, tree)
-		if err == nil && (len(diff) == 0 || (len(diff) == 1 && diff[0] == u.Report)) {
-			if set, ok := o.gatedEarlier(ctx, u.GatedTree); ok {
-				o.rt.Log(fmt.Sprintf("merge of %s: its gates at %s stand (the merge differs only at %s)", u.Unit, u.GatedTree, u.Report))
-				return set, nil
-			}
-		}
+	if set, ok := o.reusable(ctx, m, u, tree); ok {
+		o.rt.Log(fmt.Sprintf("merge of %s: its gates at %s stand (the merge differs only at %s)", u.Unit, u.GatedTree, u.Report))
+		return set, nil
 	}
-	cand, err := m.out(ctx, m.dir, "commit-tree", tree, "-p", pre, "-p", u.Sha, "-m", msg)
+	cand, err := m.out(ctx, m.dir, "-c", "commit.gpgsign=false", "commit-tree", tree, "-p", pre, "-p", u.Sha, "-m", msg)
 	if err != nil {
 		return gateSet{}, fmt.Errorf("the merge of %s: commit-tree for its gates: %w", u.Unit, err)
 	}
@@ -879,6 +882,49 @@ func (o *orch) mergeGates(ctx context.Context, m mergeGit, u mergeUnitIn, pre, t
 		return gateSet{}, fmt.Errorf("the merge of %s: %s", u.Unit, fault)
 	}
 	return set, nil
+}
+
+// gatedMerge checks, with declared gates, that a merge commit on the
+// integration branch has a gated tree: the merge's own gate run, replayed
+// from the memo or the journal at no cost. A commit whose tree no run
+// covers (a commit raced the merge, a hook changed it, an adopted merge of
+// an earlier launch) is gated now; if its gates fail it is the step's
+// fault, and the commit stays for the requester to revert.
+func (o *orch) gatedMerge(ctx context.Context, m mergeGit, in mergeInput, u mergeUnitIn, commit string) error {
+	if !in.Declared {
+		return nil
+	}
+	tree, err := m.out(ctx, m.dir, "rev-parse", commit+"^{tree}")
+	if err != nil {
+		return err
+	}
+	if set, ok := o.reusable(ctx, m, u, tree); ok && len(set.failed()) == 0 {
+		return nil
+	}
+	set, fault, err := o.gates(ctx, commit)
+	switch {
+	case err != nil:
+		return err
+	case fault != "":
+		return fmt.Errorf("merge commit %s of %s: %s", commit, u.Unit, fault)
+	case len(set.failed()) > 0:
+		return fmt.Errorf("merge commit %s of %s is on the integration branch but its gates do not pass (%s); revert it and relaunch", commit, u.Unit, strings.Join(regressed(unitMerge{}, set).Files, "; "))
+	}
+	return nil
+}
+
+// reusable is the unit's own gate result for tree, when tree differs from
+// the unit's gated tree at most at its completion report and this launch
+// holds that result. A diff that fails is no reuse.
+func (o *orch) reusable(ctx context.Context, m mergeGit, u mergeUnitIn, tree string) (gateSet, bool) {
+	if u.GatedTree == "" {
+		return gateSet{}, false
+	}
+	diff, err := m.nulList(ctx, "diff-tree", "-r", "-z", "--name-only", "--no-renames", u.GatedTree, tree)
+	if err != nil || len(diff) > 1 || (len(diff) == 1 && diff[0] != u.Report) {
+		return gateSet{}, false
+	}
+	return o.gatedEarlier(ctx, u.GatedTree)
 }
 
 // outcomeLabel is the step that records a unit this merge step did not
