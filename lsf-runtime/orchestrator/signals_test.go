@@ -89,20 +89,22 @@ func TestNullCallKeepsDriverEvents(t *testing.T) {
 	eqs(t, out.stopKinds(), []string{"skill-not-loaded", "agent-null"})
 }
 
-// The parallel review batch, a fix stage, the wave gate and cleanup each
-// pass their CallResult to the ledger.
+// The parallel review batch, a fix stage, the wave gate and a reader each
+// pass their CallResult to the ledger. Cleanup, which this drove as an
+// agent, is a code step (D25); the obligations stage is the reader still
+// an agent.
 func TestDriverEventsAtEverySiteKind(t *testing.T) {
 	s := stub(t, twoWaves(), Hs{
 		"lens-review": withCall("lens-review", nil, denied),
 		"review-gate": withCall("review-gate", nil, denied),
-		"cleanup":     withCall("cleanup", nil, dirty),
+		"obligations": withCall("obligations", nil, dirty),
 	}, nil)
 	out := run(t, s)
 	eq(t, out.Status, "complete", out.stopKinds())
 	l := ledgerText(t, s, "ledger:w1")
 	contains(t, l, "| lens-review:r1:A |")
 	contains(t, l, "| review-gate:w1 |")
-	contains(t, l, "| cleanup | structural | residue-at-return |", "cleanup is a reader")
+	contains(t, ledgerText(t, s, "ledger:w2#2"), "| obligations | structural | residue-at-return |", "obligations is a reader")
 
 	fx := stub(t, twoWaves(), Hs{
 		"critique-code": func(c Call, s *State) any {
@@ -269,7 +271,6 @@ func TestUncommittedPerSite(t *testing.T) {
 		{"critique-design", "critique-design:r1:D", false, func() *plan.Plan { return one("D", "design") }, nil, nil},
 		{"fix-code", "fix-code:r1:A", true, twoWaves, Hs{"critique-code": critical}, nil},
 		{"review-gate", "review-gate:w1", false, twoWaves, nil, nil},
-		{"cleanup", "cleanup:w1", false, twoWaves, nil, nil},
 		{"replan", "replan:w1", true, twoWaves, Hs{"implement": implemented(M{"discoveries": []M{{"statement": "d", "affects": "B"}}})}, nil},
 		{"direct-edits", "direct-edits:w1", true, twoWaves, Hs{"implement": implemented(M{"discoveries": []M{{"statement": "d", "affects": "B"}}}), "replan": edits}, nil},
 		{"decision-replan", "decision-replan", true, twoWaves, Hs{"load": loadWith(M{"decisionsBlock": decisionsBlock("2026-09-19", "yes")})}, decisions},

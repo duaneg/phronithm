@@ -175,32 +175,63 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 	}
 
 	// The wave gate: one question, does the wave invalidate the
-	// architecture. Merged worktrees are removed alongside it; the gate
-	// reads the main checkout only. Both are readers. Cleanup's null is
-	// logged, not signalled.
+	// architecture. Merged worktrees are removed alongside it, by code
+	// (D25); the gate reads the main checkout only. Cleanup's failure is
+	// logged, not signalled: it leaves worktrees, which hold nothing
+	// unmerged.
 	if len(merged) > 0 {
-		gt, mt := c.tierFor("gate"), c.tierFor("mechanical")
+		gt := c.tierFor("gate")
 		gl, cl := "review-gate:w"+itoa(wave), "cleanup:w"+itoa(wave)
-		res, err := l.parallelAgents(ctx, []agentReq{
-			{gatePrompt(c, l.ref(), wave, merged, prevArch), lsfrt.Opts{Label: gl, Model: gt.Model, Effort: gt.Effort, Phase: "Gate", Schema: gateSchema}},
-			{cleanupPrompt(c, l.ref(), wave), lsfrt.Opts{Label: cl, Model: mt.Model, Effort: mt.Effort, Phase: "Merge", Schema: cleanupSchema}},
+		cin := cleanupInput{Wave: wave, IntegrationBranch: c.integrationBranch, Units: []cleanupUnitIn{}}
+		for _, m := range merged {
+			// Sorted: parallel stages record their labels in either order, and
+			// the step's input must be the same on a relaunch to replay.
+			cin.Units = append(cin.Units, cleanupUnitIn{Unit: m.unit, Worktrees: slices.Sorted(slices.Values(m.worktrees))})
+		}
+		var gr agentRes
+		var cu *cleanupRet
+		var cfault string
+		raws, err := l.rt.Parallel(ctx, []func(context.Context) (json.RawMessage, error){
+			func(ctx context.Context) (json.RawMessage, error) {
+				cr, label, err := l.agent(ctx, gatePrompt(c, l.ref(), wave, merged, prevArch), lsfrt.Opts{Label: gl, Model: gt.Model, Effort: gt.Effort, Phase: "Gate", Schema: gateSchema})
+				if err == nil { // a failed branch's slot stays empty: no flags without a call
+					gr = agentRes{cr, label}
+				}
+				return cr.Value, err
+			},
+			func(ctx context.Context) (json.RawMessage, error) {
+				r, fault, err := step[cleanupResult](ctx, l.orch, cl, cin, l.cleanupStage(cin))
+				if err != nil {
+					return nil, err
+				}
+				cu, cfault = r, fault
+				return json.RawMessage("true"), nil
+			},
 		})
 		if err != nil {
 			return nil, true, false, err
 		}
-		gv, gs := l.callSigs(site{at: plan.At{Stage: "review-gate", Wave: plan.W(wave)}, writer: false}, res[0].cr, res[0].label)
-		cv, cs := l.callSigs(site{at: plan.At{Stage: "cleanup", Wave: plan.W(wave)}, writer: false}, res[1].cr, res[1].label)
-		waveSignals = append(append(waveSignals, gs...), cs...)
-		g := decode[plan.GateResult](l.rt, res[0].label, gv)
-		cu := decode[cleanupResult](l.rt, res[1].label, cv)
+		gr.cr.Value = raws[0]
+		gv, gs := l.callSigs(site{at: plan.At{Stage: "review-gate", Wave: plan.W(wave)}, writer: false}, gr.cr, gr.label)
+		waveSignals = append(waveSignals, gs...)
+		g := decode[plan.GateResult](l.rt, gr.label, gv)
 		if g == nil {
 			waveSignals = append(waveSignals, plan.NullReturnSignal(plan.At{Stage: "review-gate", Wave: plan.W(wave)}))
 		} else {
 			waveSignals = append(waveSignals, plan.SignalsFromGate(g.Result, plan.At{Wave: plan.W(wave)})...)
 		}
-		if cu != nil {
+		switch {
+		case cfault != "":
+			l.rt.Log(fmt.Sprintf("wave %d: worktree cleanup failed: %s", wave, cfault))
+		case cu != nil:
 			l.rt.Log(fmt.Sprintf("wave %d: removed %d merged worktree(s), kept %d", wave, cu.Result.Removed, len(cu.Result.Kept)))
-		} else {
+			for _, p := range cu.Result.Paths {
+				l.rt.Log(fmt.Sprintf("wave %d: %s: removed %s", wave, p.Label, strings.Join(p.Paths, ", ")))
+			}
+			for _, k := range cu.Result.Kept {
+				l.rt.Log(fmt.Sprintf("wave %d: kept %s", wave, k))
+			}
+		default:
 			l.rt.Log(fmt.Sprintf("wave %d: worktree cleanup returned null", wave))
 		}
 	}

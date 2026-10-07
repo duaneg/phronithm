@@ -338,6 +338,7 @@ func TestOnRuntimeCodeStages(t *testing.T) {
 	const planPath = "docs/plans/f-breakdown.md"
 	p := orchtest.Graph("", orchtest.Unit("A"))
 	doc := func(p *plan.Plan) string { return planDocFor(p) }
+	r.commit(".gitignore", "*.log\n", "ignore logs")
 	r.commit("docs/architecture/f.md", "# Architecture\n", "architecture")
 	planSha := r.commit(planPath, doc(p), "plan")
 	r.git("checkout", "-q", "-b", "work-A")
@@ -351,9 +352,8 @@ func TestOnRuntimeCodeStages(t *testing.T) {
 		{Contains: "Critique the implementation plan at", Return: orchtest.NoFindings()},
 		{Contains: "Run the phronithm:critique skill with type critique-code", Return: orchtest.NoFindings()},
 		{Contains: "Run the phronithm:review skill", Return: orchtest.NoFindings()},
-		{Contains: "Implementation plan: docs/plans/", Shell: "git reset -q --hard work-A", Return: R(orchtest.Implemented("A", M{"branch": "@branch", "sha": "@head"}))},
+		{Contains: "Implementation plan: docs/plans/", Shell: "git reset -q --hard work-A && echo built > build.log", Return: R(orchtest.Implemented("A", M{"branch": "@branch", "sha": "@head"}))},
 		{Contains: "has merged these units into", Return: R(M{"invalidations": []any{}, "notes": []any{}, "amendments": []any{}})},
-		{Contains: "Cleanup stage, wave", Return: R(M{"removed": 0, "kept": []any{}})},
 		{Contains: "Read its Meta-Tasks and Standing Obligations sections", Return: R(M{"planSha": "@head", "appendedUnits": []any{}, "directEdits": []any{}})},
 		{Contains: "For each standing obligation", Return: R(M{"obligations": []any{}})},
 	}
@@ -409,33 +409,36 @@ func TestOnRuntimeCodeStages(t *testing.T) {
 	for _, sha := range strings.Fields(r.git("log", "--format=%H", "integration", "--", "docs/plans/f-signals/"+planSha+".md")) {
 		match(t, trailers(sha), `^ledger:`)
 	}
-	reportBranch := ""
-	for _, ref := range strings.Fields(r.git("for-each-ref", "--format=%(refname:short)", "refs/heads/lsf/")) {
-		if strings.Contains(ref, "completion-report_A") {
-			reportBranch = ref
-		}
-	}
-	if reportBranch == "" {
-		t.Fatal("no completion-report branch")
-	}
-	eq(t, trailers(reportBranch), "completion-report:A")
-	eq(t, r.git("rev-parse", reportBranch+"^"), r.git("rev-parse", "work-A"))
-	match(t, r.git("show", reportBranch+":docs/plans/A-completion.md"), `^# A — completion report\n`)
 	eq(t, r.git("status", "--porcelain"), "", "the main checkout is clean")
 
 	// The merge (D24): a merge commit of the report's commit, then the
 	// bookkeeping commit over the plan and the archive.
-	mergeSha := ""
+	mergeSha, reportSha := "", ""
 	for _, line := range strings.Split(r.git("log", "--first-parent", "--format=%H %P", "integration"), "\n") {
 		if f := strings.Fields(line); len(f) == 3 {
-			mergeSha = f[0]
-			eq(t, f[2], r.git("rev-parse", reportBranch), "the merge's second parent is the report's commit")
+			mergeSha, reportSha = f[0], f[2]
 			break
 		}
 	}
 	if mergeSha == "" {
 		t.Fatal("no merge commit on integration")
 	}
+	eq(t, trailers(reportSha), "completion-report:A", "the merge's second parent is the report's commit")
+	eq(t, r.git("rev-parse", reportSha+"^"), r.git("rev-parse", "work-A"))
+	match(t, r.git("show", reportSha+":docs/plans/A-completion.md"), `^# A — completion report\n`)
+
+	// Cleanup (D25): every worktree of A's stages is gone, the ignored file
+	// the implement stage left with it, listed; the completion-report
+	// branch is gone and the stage branches remain.
+	if ents, _ := os.ReadDir(filepath.Join(cfg.StateDir, "wt")); len(ents) != 0 {
+		t.Errorf("worktrees left: %v", ents)
+	}
+	branches := r.git("for-each-ref", "--format=%(refname:short)", "refs/heads/lsf/")
+	if strings.Contains(branches, "completion-report_A") || !strings.Contains(branches, "implement_A") {
+		t.Errorf("branches after cleanup: %s", branches)
+	}
+	logText, _ := os.ReadFile(filepath.Join(cfg.StateDir, "log.txt"))
+	match(t, string(logText), `wave 1: implement:A: removed .*build\.log`)
 	eq(t, r.git("log", "-1", "--format=%(trailers:key=Lsf-Unit,valueonly)", mergeSha), "A")
 	match(t, trailers(mergeSha), `^merge:w1$`)
 	book := r.git("log", "-1", "--format=%H", "integration", "--", "docs/plans/f-archive.md")

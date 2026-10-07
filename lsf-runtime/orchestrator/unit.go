@@ -285,6 +285,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	sigs := []*plan.Signal{}
 	at := func(stage string) plan.At { return plan.At{Stage: stage, Unit: u.ID, Wave: plan.W(wave)} }
 	res := &unitResult{unit: u.ID, typ: u.Type}
+	mark := o.worktreeMark(u.ID)
 	abort := func(stage string) (*unitResult, error) {
 		res.aborted = stage
 		res.signals = sigs
@@ -488,10 +489,12 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 		}
 		in.BaseSha = sha
 	}
-	report, fault, err := step[completionResult](ctx, o, "completion-report:"+u.ID, in, o.completionReport(in))
+	report, fault, reportLabel, err := stepLabel[completionResult](ctx, o, "completion-report:"+u.ID, in, o.completionReport(in))
 	if err != nil {
 		return nil, err
 	}
+	// Noted here, not in the step's fn, which a replay does not run.
+	o.noteWorktree(reportLabel)
 	if fault != "" {
 		sigs = append(sigs, stageFaultSignal(plan.At{Stage: "completion-report", Unit: u.ID, Wave: plan.W(wave), Path: completionPath(u)}, fault))
 		return abort("completion-report")
@@ -508,6 +511,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	}
 	res.branch = report.Result.Branch
 	res.reportSha = report.Result.Sha
+	res.worktrees = o.worktreesSince(u.ID, mark)
 	res.completionPath = completionPath(u)
 	res.signals = sigs
 	return res, nil

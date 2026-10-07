@@ -46,7 +46,6 @@ func realRun(t *testing.T, over ...answer) (view, string, string, *gitRepo) {
 		{Contains: "Run the phronithm:review skill", Return: orchtest.NoFindings()},
 		{Contains: "Implementation plan: docs/plans/", Return: R(orchtest.Implemented("A", M{"branch": "@branch", "sha": workTip}))},
 		{Contains: "has merged these units into", Return: R(M{"invalidations": []any{}, "notes": []any{}, "amendments": []any{}})},
-		{Contains: "Cleanup stage, wave", Return: R(M{"removed": 0, "kept": []any{}})},
 		{Contains: "Read its Meta-Tasks and Standing Obligations sections", Return: R(M{"planSha": "@head", "appendedUnits": []any{}, "directEdits": []any{}})},
 		{Contains: "For each standing obligation", Return: R(M{"obligations": []any{}})},
 	}
@@ -128,17 +127,19 @@ func TestOnRuntimeDeniedCommit(t *testing.T) {
 	noMatch(t, ledger, `sha-corrected`, "HEAD is the tip: the SHA matches")
 }
 
-// S3(b), postmortem §C: a cleanup whose git branch -d is denied. In the
-// postmortem the branches were left with no signal; here the ledger
-// records the denial and the run completes.
+// S3(b), postmortem §C: a reader whose git branch -d is denied. In the
+// postmortem the cleanup agent's branches were left with no signal; the
+// cleanup is code now (D25) and cannot be denied, so the case runs on the
+// wave gate, a reader still an agent: the ledger records the denial and
+// the run completes.
 func TestOnRuntimeDeniedBranchDelete(t *testing.T) {
 	out, ledger, _, _ := realRun(t, answer{
-		Contains: "Cleanup stage, wave",
-		Return:   R(M{"removed": 0, "kept": []string{"lsf/x/implement_A"}}),
+		Contains: "has merged these units into",
+		Return:   R(M{"invalidations": []any{}, "notes": []any{}, "amendments": []any{}}),
 		Denials:  []string{"git branch -d lsf/x/implement_A"},
 	})
 	eq(t, out.Status, "complete", out.raw)
-	match(t, ledger, `\| cleanup \| structural \| permission-denied \| 1 permission denial\(s\): Bash: \{"command":"git branch -d`)
+	match(t, ledger, `\| review-gate \| structural \| permission-denied \| 1 permission denial\(s\): Bash: \{"command":"git branch -d`)
 }
 
 // S4, run #2: an implement whose first attempt is an API 529 is retried;

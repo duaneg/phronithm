@@ -303,13 +303,16 @@ Every call that spawned and returns a value or a null reports the paths it left 
 ### Not in this unit
 
 - Gates on a clean checkout: `declared-gates`.
-- Cleanup's ignored-file policy: `code-stage-interface`.
+- Cleanup's ignored-file policy: `code-merge-cleanup`.
+- The `Retains:` move: `retained-artefacts-impl`.
 - A stop file, status readers and detaching: `runtime-cli-drive`.
 - The roles' content: `s2-permissions-design`.
 
 ### Known limits
 
-- **Uncommitted attribution.** A requester edit to the main checkout during a repo call is attributed to that call. The review gate and cleanup run in parallel in the main checkout, so a change made during them is attributed to both.
+- **Uncommitted attribution.** A requester edit to the main checkout during a repo call is attributed to that call. The review gate runs beside the cleanup step, which writes only under the state dir and the refs, so a change made then is attributed to the gate.
+- **Earlier attempts' worktrees.** Cleanup removes the worktrees a merged unit's stages used in the launch that merged it. Those of an aborted wave or an earlier launch stay, with their branches: they may hold work a stop left uncommitted.
+- **Stage branches.** Cleanup deletes only completion-report branches. The other `lsf/<plan8>/*` branches stay, because a resume reads the unit branch, so they accumulate per unit.
 - **A repo call's re-run.** A repo call that returned null keeps its uncommitted paths in `<key>.dirt`, and its re-run's before-state leaves them out, so they are reported again. A call that was stopped, killed, or crashed before returning keeps nothing: its re-run takes any dirt it left into its before-state.
 - **A replay that fails its schema** (a changed validator, an edited record) re-runs the call. For a writer, the re-run can repeat a commit the first run made.
 - **Large files.** A dirty file over 64 MiB is compared by size and modification time, not content.

@@ -306,10 +306,16 @@ and never merges a unit twice, and every returned SHA must resolve on the
 integration branch. Merge order is a function of the plan, so a re-plan can
 change the order of later waves; the merge stage never chooses.
 
-A cleanup agent on the mechanical tier runs beside the wave gate and removes
-the worktrees whose branches merged. Its null is logged, not signalled,
-though its call's driver events are (a denial, residue it left); a failure
-leaves residue, not risk.
+Cleanup runs beside the wave gate and removes the merged units'
+worktrees. In the Go runtime it is code: each merged unit's worktrees from
+this launch go with every untracked, ignored and uncommitted file in them,
+and its completion-report branch goes too; its other branches stay, since a
+resume reads the unit branch. The removed paths are listed in the step's
+value and the run log. A file a unit needs past its merge must be committed
+or declared under `Retains:` (`retained-artefacts-impl`); until then nothing
+is kept. A worktree whose branch is not merged, or that is not the
+runtime's, is kept with the reason. A failure is logged, not signalled. In
+the Workflow script cleanup is a mechanical-tier agent.
 
 **The merge archives what it completes.** In the commit that marks a unit
 `complete: true`, the merge stage moves the unit's `### <id>` entry to
@@ -735,11 +741,11 @@ Each stage call carries a role tier (`args.tiers` overrides per role):
 critique (unit plan critique, code critique, lens review) runs opus at low
 effort; gate (the wave gate alone) runs opus at medium effort;
 planning (unit plan, re-plan, termination) runs opus at high effort;
-mechanical (worktree cleanup) runs haiku at low effort; everything else —
+mechanical (the Workflow script's worktree cleanup) runs haiku at low effort; everything else —
 implement, merge (in Go, its conflict call), the direct edits the re-plan
 and termination stages return, the obligation dispositions — runs opus at
 low effort. The load (the plan and decision-log reads), the decision-log
-and ledger appends, the completion-report commit and the merge are code in
-the Go orchestrator, not agent calls, and take no tier apart from the
-merge's conflict call (`lsf-runtime/orchestrator`, D18, D24). The
+and ledger appends, the completion-report commit, the merge and cleanup are
+code in the Go orchestrator, not agent calls, and take no tier apart from
+the merge's conflict call (`lsf-runtime/orchestrator`, D18, D24, D25). The
 JavaScript keeps them as agents until `script-retirement`.

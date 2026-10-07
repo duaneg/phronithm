@@ -145,7 +145,7 @@
 //     its statement; no scenario has both.
 //     declared-gates raises gate-omitted for a declared gate missing.
 //
-// D23 and D24 are unit code-merge-cleanup's.
+// D23 to D25 are unit code-merge-cleanup's.
 //
 //   - D23. A worktree writer (plan, implement, a plan or code fix) that
 //     reports a branch other than the one the runtime gave its call
@@ -203,4 +203,18 @@
 //     history rewrite removed faults until the state dir is cleared. A
 //     seed for the label is ignored (D18). JS's merge agent reports what
 //     it likes.
+//   - D25. Cleanup is a journaled code step (cleanup.go), run beside the
+//     wave gate. Its input is each merged unit's worktree labels from the
+//     run of its stages that merged (noteWorktree: every isolated call,
+//     seeded or not, and the completion-report step, sorted so a
+//     relaunch's input is the same). Each worktree is removed with every
+//     untracked, ignored and uncommitted file in it
+//     (lsfrt.Runtime.RemoveWorktree, which keeps one whose branch is not
+//     merged or that is not the runtime's), and the completion-report
+//     branch is deleted; the stage branches stay, since a resume reads the
+//     unit branch's tip. The value lists the removed paths per worktree and
+//     what was kept and why; the log carries them. A failure is logged, not
+//     signalled. JS's cleanup agent matches worktree-wf_* branches the
+//     runtime never makes, and its denials and residue were ledger rows;
+//     the removed-path list takes their place.
 package orchestrator

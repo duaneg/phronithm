@@ -54,11 +54,14 @@ type orch struct {
 
 	mu   sync.Mutex
 	uses map[string]int // real calls and steps per label this launch
+	// worktrees are the final labels of the worktree calls and steps each
+	// unit's stages ran this launch, in order (D25).
+	worktrees map[string][]string
 }
 
 // newOrch is a launch's orch over rt.
 func newOrch(rt Runtime, c *runCtx, seed map[string]json.RawMessage) *orch {
-	o := &orch{rt: rt, ctx: c, seed: seed, uses: map[string]int{}, today: func() string { return time.Now().Format(time.DateOnly) }}
+	o := &orch{rt: rt, ctx: c, seed: seed, uses: map[string]int{}, worktrees: map[string][]string{}, today: func() string { return time.Now().Format(time.DateOnly) }}
 	if repo := rt.Repo(); repo != "" {
 		o.git, o.repo = execGit{}, repo
 	}
@@ -71,6 +74,9 @@ func newOrch(rt Runtime, c *runCtx, seed map[string]json.RawMessage) *orch {
 // gets a launch-unique label (unique): the nth use of a label is `label#n`.
 // It returns the call's result and the label used.
 func (o *orch) agent(ctx context.Context, prompt string, opts lsfrt.Opts) (lsfrt.CallResult, string, error) {
+	if opts.Isolation == "worktree" {
+		defer func(l *lsfrt.Opts) { o.noteWorktree(l.Label) }(&opts)
+	}
 	if s, ok := o.seed[opts.Label]; ok {
 		o.rt.Log(opts.Label + ": seeded from args.seed; agent not spawned")
 		cr := lsfrt.CallResult{Value: stripSeedPause(s)}
@@ -86,6 +92,30 @@ func (o *orch) agent(ctx context.Context, prompt string, opts lsfrt.Opts) (lsfrt
 	opts.Label = o.unique(opts.Label)
 	cr, err := o.rt.Call(ctx, prompt, opts)
 	return cr, opts.Label, err
+}
+
+// noteWorktree records a worktree label under its unit: the last
+// ':'-separated part, any #n suffix dropped.
+func (o *orch) noteWorktree(label string) {
+	base, _, _ := strings.Cut(label, "#")
+	unit := base[strings.LastIndex(base, ":")+1:]
+	o.mu.Lock()
+	o.worktrees[unit] = append(o.worktrees[unit], label)
+	o.mu.Unlock()
+}
+
+// worktreeMark is how many worktree labels unit has so far; worktreesSince
+// are those recorded after mark.
+func (o *orch) worktreeMark(unit string) int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return len(o.worktrees[unit])
+}
+
+func (o *orch) worktreesSince(unit string, mark int) []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return slices.Clone(o.worktrees[unit][mark:])
 }
 
 // unique is label for its first use in the launch and `label#n` for its
@@ -281,13 +311,19 @@ func callBranch[T any](ctx context.Context, o *orch, s site, prompt string, opts
 // step is runStep plus decode. fault is the stage's failure reason, "" when
 // it ran; err is a stop.
 func step[T any](ctx context.Context, o *orch, label string, input any, fn stageFn) (r *ret[T], fault string, err error) {
+	r, fault, _, err = stepLabel[T](ctx, o, label, input, fn)
+	return r, fault, err
+}
+
+// stepLabel is step, also returning the step's final label.
+func stepLabel[T any](ctx context.Context, o *orch, label string, input any, fn stageFn) (r *ret[T], fault, final string, err error) {
 	raw, final, err := o.runStep(ctx, label, input, fn)
 	var se *stageErr
 	if errors.As(err, &se) {
-		return nil, se.reason, nil
+		return nil, se.reason, final, nil
 	}
 	if err != nil {
-		return nil, "", err
+		return nil, "", final, err
 	}
-	return decode[T](o.rt, final, raw), "", nil
+	return decode[T](o.rt, final, raw), "", final, nil
 }

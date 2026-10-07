@@ -205,9 +205,12 @@ type scribeResult struct {
 	PauseRequested bool   `json:"pauseRequested"`
 }
 
+// cleanupResult is the cleanup step's value (D25): worktrees removed, the
+// ones kept with why, and the paths each removal deleted.
 type cleanupResult struct {
-	Removed jsInt    `json:"removed"`
-	Kept    []string `json:"kept"`
+	Removed jsInt          `json:"removed"`
+	Kept    []string       `json:"kept"`
+	Paths   []removedPaths `json:"paths,omitempty"`
 }
 
 // committed is an append stage that made its commit: an empty SHA is none.

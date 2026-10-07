@@ -120,8 +120,6 @@ var (
 )
 
 var (
-	cleanupSchema = stage(object(obj{{"removed", integer}, {"kept", strs}}))
-
 	unitPlanSchema = stage(object(commitFields.spread(obj{
 		{"path", str},
 		{"bytes", obj{{"type", "integer"}, {"description", "Size of the committed plan file in bytes (wc -c)"}}},

@@ -107,8 +107,9 @@ func renderCompletionReport(c *runCtx, u *plan.Unit, wave int, branch string, im
 // raised a stop signal aborts the unit, and aborted names the stage.
 type unitResult struct {
 	unit, typ      string
-	branch         string // "" until the completion report is committed
-	reportSha      string // the completion report's commit, the merge's input
+	branch         string   // "" until the completion report is committed
+	reportSha      string   // the completion report's commit, the merge's input
+	worktrees      []string // this run's worktree labels, the report's last (D25)
 	completionPath string
 	signals        []*plan.Signal
 	aborted        string

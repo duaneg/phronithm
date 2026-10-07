@@ -13,8 +13,9 @@
 // interleaved and the stub runs them in turn, but each lane's order is
 // fixed in both.
 //
-// Load, the decision log, ledger appends, completion reports and the merge
-// are code steps in Go (orchestrator D18, D24) and agent calls in the JS: the JS calls are
+// Load, the decision log, ledger appends, completion reports, the merge and
+// cleanup are code steps in Go (orchestrator D18, D24, D25) and agent calls
+// in the JS: the JS calls are
 // answered from the Go step's recorded value; each Go step's input must
 // appear verbatim in the JS prompt it replaces (stepParity), and the calls
 // are then left out of the comparison. The coverage checks count the Go
@@ -275,7 +276,7 @@ func codeStep(label string) bool {
 	base, _, _ := strings.Cut(label, "#")
 	return base == "load" || base == "decision-log" ||
 		strings.HasPrefix(base, "load:") || strings.HasPrefix(base, "ledger:") || strings.HasPrefix(base, "completion-report:") ||
-		strings.HasPrefix(base, "merge:")
+		strings.HasPrefix(base, "merge:") || strings.HasPrefix(base, "cleanup:")
 }
 
 // stepParity checks a Go step's input against the JS prompt for the same
@@ -316,6 +317,8 @@ func stepParity(s step, prompt string) []string {
 		want = []string{"<<<LEDGER\n" + in.Block + "LEDGER>>>", "to the end of " + in.Path + ",", subject, "git show-ref --verify --quiet " + in.PauseRef + " "}
 	case strings.HasPrefix(base, "completion-report:"):
 		want = []string{"<<<REPORT\n" + in.Text + "REPORT>>>", "below to " + in.Path + ",", subject, "git reset --hard " + in.Base + " &&"}
+	case strings.HasPrefix(base, "cleanup:"):
+		want = []string{"Cleanup stage, wave " + strconv.Itoa(in.Wave) + ". You are in the main checkout on " + in.IntegrationBranch + "."}
 	case strings.HasPrefix(base, "merge:"):
 		w := strconv.Itoa(in.Wave)
 		lines := []string{}
