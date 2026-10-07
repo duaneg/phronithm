@@ -286,7 +286,7 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 		return nil, false, false, nil
 	}
 	pt := c.tierFor("planning")
-	rp, cs, err := call[replanResult](ctx, l.orch, site{at: plan.At{Stage: "replan", Wave: plan.W(wave)}, writer: true}, replanPrompt(c, l.ref(), wave, merged, conflicts, items, evalA.Stops),
+	rp, cs, err := call[replanResult](ctx, l.orch, site{at: plan.At{Stage: "replan", Wave: plan.W(wave)}, writer: true}, replanPrompt(c, l.ref(), wave, merged, conflicts, items, evalA.Stops, l.decl),
 		lsfrt.Opts{Label: "replan:w" + itoa(wave), Model: pt.Model, Effort: pt.Effort, Schema: replanSchema, Phase: "Re-plan"})
 	if err != nil {
 		return nil, true, false, err

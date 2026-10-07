@@ -104,6 +104,52 @@ entry the decision answered was keyed by.
 Requester decisions are written here and nowhere else. Plan Maintenance is
 written by agents and records amendments; it does not clear gates.
 
+## Gate block
+
+A plan may declare the project's gate commands in a third block, anywhere in
+the plan document. The Go runtime runs them; the Workflow script ignores the
+block.
+
+````markdown
+```yaml lsf-gates
+setup: "npm ci"
+gates:
+  - name: tests
+    command: "npm test"
+    timeout: 45m
+  - name: lint
+    command: "npm run lint"
+```
+````
+
+- `gates` is required and non-empty. Each gate has a unique `name` and a
+  non-empty `command`, which no other gate repeats. `timeout` is optional: a
+  Go duration (`90s`, `45m`, `2h`) greater than zero. Without one, the
+  runtime config's `gateTimeout` (default 2 h) applies.
+- `setup` is optional. It runs once per checkout before the gates, for
+  example to install dependencies. If it fails, no gate runs.
+- Quote a command that contains `: ` or ` #`; see the YAML subset below.
+- A plan has at most one gate block. Without one, stages run and report the
+  gates themselves.
+
+Each command runs through `sh` on a clean detached checkout of the commit
+being gated, so it sees only committed files. The runtime gates:
+
+- a unit's implement commit (not for design units);
+- each code fix's commit;
+- each merge's tree, before the merge is committed. A merge whose gates fail
+  is not committed.
+
+An identical tree is gated once, and the result is reused across relaunches.
+A merge that differs from the unit's last gated tree only at its completion
+report reuses that result, so a gate that reads the completion report is not
+re-run for the merge.
+
+The runtime fixes the block when a run starts. A re-plan that changes it
+stops the run with `declared-gates-changed`, and the relaunch takes the
+changed block. The commands run with the runtime's environment and
+credentials; they are trusted as the plan document is.
+
 ## YAML subset
 
 The parser is dependency-free and accepts a deliberately small subset:

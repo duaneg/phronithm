@@ -38,8 +38,10 @@ Documented behaviour this design relies on:
   termination, direct edits, ledger) stages and commits only its own files by
   pathspec. It never uses `add -A`, `commit -a`, `stash`, `clean` or
   `reset --hard` there: an unscoped commit once swept a requester's
-  `CLAUDE.md` edit into a ledger commit. A regressed merge is undone with
-  `git reset --merge`, which keeps unrelated uncommitted changes.
+  `CLAUDE.md` edit into a ledger commit. In the Workflow script a regressed
+  merge is undone with `git reset --merge`, which keeps unrelated uncommitted
+  changes; the Go runtime with declared gates gates a merge before committing
+  it, so it has nothing to undo.
 - **Resume replays the longest unchanged prefix of `agent()` calls**, keyed on
   prompt text in call order. The first call whose prompt differs re-runs, and so
   does everything after it.
@@ -188,13 +190,31 @@ carries its own unit plan template and stages instead:
    same tool timeout, and a relaunch meets the same gate, so the requester
    changes the environment or the project until the gate completes. A design
    unit is exempt; its review reads no gates.
+
+   **Declared gates (Go runtime).** When the plan declares its gate commands
+   in a `lsf-gates` block ([plan graph](${CLAUDE_PLUGIN_ROOT}/docs/plan-graph.md)),
+   the stage does not run them as a final check. It returns `gates` empty,
+   and the runtime runs the declared gates itself, on a clean detached
+   checkout of the commit the stage returns, with no tool time limit. This
+   closes two gaps: a stage reporting `green` for a gate it never ran, and a
+   gate longer than the Bash tool's limit.
+   - The runtime's results supersede the stage's. A declared gate the stage
+     reports with a different status is a `gate-misreported` record.
+   - A declared gate the stage omits, or reports `not-run`, raises no
+     `gate-omitted` or `gate-not-run`.
+   - A gate the runtime itself could not complete (its timeout, a failed
+     setup) is `gate-not-run`.
+   - An identical tree is gated once. The result is journaled, so a relaunch
+     replays it, except a set with a gate not run, which reruns.
+   - The runtime gates a design unit's merge, but not the unit itself.
 4. **review** stage over the branch diff: one critique-code gate at the
    Critical-only bar and lens review per unit type, in parallel. No separate
    static-analysis stage: the project's own gates (linters, type checks) run
    in the implement stage, whose done conditions require them green, and
    again after each merge. Both reviewers are given the gate runs at the
-   branch's HEAD — the implement stage's, or after a code fix the fix
-   stage's, which re-runs every gate the implement stage ran and returns the
+   branch's HEAD — with declared gates the runtime's, each failing gate with
+   its output tail; otherwise the implement stage's, or after a code fix the
+   fix stage's, which re-runs every gate the implement stage ran and returns the
    runs (a code fix whose gate did not run stops with `gate-not-run`, and
    one that omits one of those gates with `gate-omitted`, as at implement) — and take
    them as the test and lint result: no suite, CI job, or
@@ -207,9 +227,9 @@ carries its own unit plan template and stages instead:
 5. **completion-report** is rendered by the script from the implement and
    review returns — summary, done-condition verdict and evidence, deviations
    and writes outside Scope, deferrals, discoveries, standing obligations,
-   gate re-verification, the gate runs at the unit's final HEAD (the last
-   code fix's, when there was one; the verdict stays the implement
-   stage's), and the counts of findings left unfixed with the
+   gate re-verification, the gate runs at the unit's final HEAD (the
+   runtime's with declared gates; otherwise the last code fix's, when there
+   was one; the verdict stays the implement stage's), and the counts of findings left unfixed with the
    ledger's path — and committed on the unit branch by a copy stage at the
    mechanical tier. No agent authors it; the rows the findings became are in
    the ledger, not the report.
@@ -299,8 +319,20 @@ anything else is aborted, leaving no merge in progress. A conflict between
 units the plan claimed disjoint, resolved mechanically, is a re-plan item.
 A conflict that cannot be resolved mechanically is a STOP signal. A clean
 merge after which the project's gates fail is one too (the stage undoes it
-and reports the unit regressed), in the Workflow script; the Go merge runs
-no gates until `declared-gates`. Every merge commit carries `Lsf-Step`,
+and reports the unit regressed), in the Workflow script. The Go merge runs
+gates only when the plan declares them. It then gates each merge's tree
+before committing it: git's merge of HEAD and the unit for a clean merge,
+the staged resolution for a conflicted one.
+- A red tree is `regressed` and a STOP, and nothing is committed: a resolved
+  merge in progress is aborted. Later units still merge.
+- A tree whose gates the runtime could not run is `gate-not-run`.
+- A merge that differs from the unit's last gated tree only at its
+  completion report reuses that result.
+- A unit the stage does not merge has its outcome journaled, so a resumed
+  run that finds a later unit's merge in progress replays the outcome rather
+  than look for a merge to adopt.
+
+Every merge commit carries `Lsf-Step`,
 `Lsf-Unit` and `Lsf-Merge` trailers, so a resumed run adopts its own merges
 and never merges a unit twice, and every returned SHA must resolve on the
 integration branch. Merge order is a function of the plan, so a re-plan can
@@ -458,7 +490,9 @@ declare are only those whose consequence the script can check.
    than reads from its result. These are permission denials, changes left
    uncommitted at a call's return, a skill that did not load, a guard
    kill after a valid result, a result outside its stage's schema, and a
-   reported SHA that is not its branch's tip (corrected from git).
+   reported SHA that is not its branch's tip (corrected from git). With
+   declared gates, a stage's report of a gate the runtime's run contradicts
+   is a `gate-misreported` record.
 2. **Adjudicated** — one judgement per wave, in a form the script checks: the
    wave gate's complete invalidation, and the re-plan's verdict on each item
    it was handed. Measured recall on premise- and requirements-level defects
@@ -501,7 +535,12 @@ STOP (return an escalation record):
 - critique-gate non-convergence: hard cap, a systemic verdict, or a Critical
   finding the fix stage declined;
 - an unresolvable merge conflict, or a clean merge after which the project's
-  gates fail;
+  gates fail (with declared gates: a merge whose gates fail before its commit,
+  nothing committed);
+- a declared gate the runtime could not run (`gate-not-run`), after a code
+  stage or before a merge;
+- a plan whose `lsf-gates` block changed since the run's first load
+  (`declared-gates-changed`); the relaunch takes the changed block;
 - a plan that fails the load checks: unreadable block, unknown or duplicate
   units, an overlapping-scope pair with no edge, a bad clearance, or the main
   checkout not on the integration branch;
@@ -514,7 +553,8 @@ STOP (return an escalation record):
   during the call counts too: the statement names the paths;
 - a skill that did not load after the runtime's retry;
 - a gate a stage left out of its return (`gate-omitted`): none reported, or
-  one the implement stage ran that a code fix did not report;
+  one the implement stage ran that a code fix did not report. Not raised in a
+  plan with declared gates;
 - a code stage's own failure (`stage-fault`), its reason in the statement;
 - a worktree stage that reports a branch other than the one the runtime gave
   its call, or whose branch does not resolve (`branch-mismatch`), at that
@@ -585,7 +625,7 @@ A stop does not always relaunch the workflow. Per STOP kind:
 | STOP kind | Relaunch | Inputs |
 |-----------|----------|--------|
 | Architecture invalidated; a re-plan item unabsorbed because the answer changes a decision in the architecture document or the request record | `phronithm:large-scale-feature` Phase 2, re-entry sub-procedure (fresh session; the skill's startup prompt carries the inputs) | Per `phronithm:lsf-drive`'s *Return to Phase 2* prompt: plan SHA, architecture document and request record, integration branch, ledger path, the stop with the gate's five fields, the requester's decision, unscribed ledger rows |
-| Everything else: done condition unevaluable as written (the requester's rewrite is a decision the decision re-plan applies); cycle or unrepairable budget excess; gate non-convergence; unresolvable merge conflict or regression; environment drift; gated units; null agent; load failure; undischarged obligation; uncommitted at return; skill not loaded; schema violation; gate omitted; code-stage fault; branch mismatch | Same workflow | Decision log SHA |
+| Everything else: done condition unevaluable as written (the requester's rewrite is a decision the decision re-plan applies); cycle or unrepairable budget excess; gate non-convergence; unresolvable merge conflict or regression; environment drift; gated units; null agent; load failure; undischarged obligation; uncommitted at return; skill not loaded; schema violation; gate omitted; code-stage fault; branch mismatch; declared gates changed (the relaunch takes the changed block) | Same workflow | Decision log SHA |
 
 For an uncommitted-at-return stop, the requester commits or removes the named paths and relaunches. A relaunch without decisions replays the call, which re-checks the paths and passes once they are clean. With decisions, every prompt changes and the stage runs again. An isolated writer's worktree is reused, so dirt still in it is reported again.
 

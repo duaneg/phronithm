@@ -142,8 +142,8 @@
 //     stop for both, listing the not-run gates first; Go raises
 //     gate-omitted, then gate-not-run, so a fix with a gate not run and a
 //     gate dropped is two stops. promptparity maps gate-omitted back, with
-//     its statement; no scenario has both.
-//     declared-gates raises gate-omitted for a declared gate missing.
+//     its statement; no scenario has both. A plan that declares its gates
+//     raises neither from a stage's report (D27).
 //
 // D23 to D25 are unit code-merge-cleanup's.
 //
@@ -189,7 +189,8 @@
 //     in conflict (a refusing pre-merge-commit hook), are faults. A merge git
 //     refuses over local changes is unresolvable, the changes untouched; any
 //     other failure is a stage-fault, with a merge this step started aborted.
-//     No project gate runs, so no merge is regressed (declared-gates). The
+//     Without declared gates no project gate runs and no merge is
+//     regressed; with them, see D26 and D27. The
 //     bookkeeping (bookkeeping.go) is rendered for the units still to merge
 //     before the first merge a run makes, with the plan and archive clean, so
 //     a plan it cannot record merges nothing, and committed once over the plan
@@ -224,4 +225,50 @@
 //     takes their place. A replay after cleanup re-checks no uncommitted
 //     paths: the worktrees, and their dirt, are gone. A failed removal is not
 //     retried.
+//
+// D26 and D27 are unit declared-gates'.
+//
+//   - D26. With declared gates a merge is gated before it is committed, so a
+//     regressed merge committed nothing: the wave rewrites the
+//     merge-regression statement to "merge of X failed its gates (…);
+//     nothing committed", and a merge regressed because the runtime could
+//     not run a gate (mergeResult.GateNotRun) to a gate-not-run stop.
+//     plan.SignalsFromMerge keeps the JS statement ("was clean but the test
+//     suite failed …; merge undone"), which describes JS's merge agent; an
+//     undeclared Go merge never reports regressed. Each unit the merge step
+//     does not merge (regressed, unresolvable, refused) is journaled as a
+//     nested step merge-outcome:<label>:<unit>, so a rerun resuming a later
+//     unit's merge in progress replays it rather than fail for want of a
+//     merge to adopt; the record is read only for a unit before such a
+//     merge, so a unit re-evaluated after a kill between merges is gated
+//     afresh against the moved branch. Every merge commit the step lands or
+//     adopts must have a gated tree (gatedMerge): its own run, replayed, or
+//     the unit's under the reuse rule; a commit no run covers (one that
+//     raced the merge, or a hook's change) is gated then, and a failing one
+//     is a stage-fault, left for the requester to revert. A stop during a
+//     resolved merge's gates aborts the merge, as a stop in its conflict
+//     call does; a kill leaves it in progress for the resume.
+//   - D27. A plan may declare its gate commands in a ```yaml lsf-gates block
+//     (docs/plan-graph.md, plan.ParseDeclaration), which the frozen JS
+//     ignores. The launch's first load fixes the declaration; a later load
+//     whose block differs is a declared-gates-changed stop (the relaunch
+//     takes the new block). With a declaration the runtime runs the gates
+//     itself (lsfrt.Runtime.RunGates) on a clean detached checkout of a
+//     non-design unit's implement commit, of each code fix's commit, and of
+//     each merge's tree before its commit (merge.go), once per tree: a run
+//     is shared within the launch and journaled as gates:<tree[:12]> (a
+//     stable label, not made launch-unique), and a set with a gate not run
+//     is neither kept nor journaled, so it reruns. A red set is kept and
+//     replays. Reviewers and the completion report read the runtime's
+//     results, the reviewers with each failing gate's output tail. Implement
+//     and code-fix prompts name the declared gates and ask for an empty
+//     `gates`: a stage's report of a declared command with another status is
+//     a gate-misreported record, and a declared gate it omits or reports
+//     not-run raises no gate-omitted or gate-not-run. A runtime not-run is
+//     gate-not-run, a failed gate run a stage-fault. A merge that differs
+//     from the unit's last gated tree only at its completion report reuses
+//     that result. Design units run no unit-level gates; their merges are
+//     gated. A decision re-plan runs before the first load, so a gate block
+//     it changes becomes the baseline. JS has none of this; an undeclared
+//     plan's prompts and steps are unchanged (promptparity).
 package orchestrator

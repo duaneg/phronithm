@@ -386,3 +386,14 @@ func TestDeclaredMergeInput(t *testing.T) {
 		t.Error("undeclared input has gatedTree")
 	}
 }
+
+// A declared plan's re-plan is told the gate block is pinned; an
+// undeclared one's prompt is unchanged (promptparity).
+func TestDeclaredReplanPrompt(t *testing.T) {
+	s := declaredStub(t, orchtest.TwoWaves(), discovering())
+	run(t, s)
+	contains(t, s.Prompt("replan:w1"), "Do not edit the plan's ```yaml lsf-gates block; a change to it stops the run.\n")
+	plain := stub(t, orchtest.TwoWaves(), discovering(), nil)
+	run(t, plain)
+	notContains(t, plain.Prompt("replan:w1"), "lsf-gates")
+}

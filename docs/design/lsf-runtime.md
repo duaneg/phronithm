@@ -195,6 +195,7 @@ Unit `runtime-core`, plan `docs/plans/runtime-core-plan.md`. Package `lsfrt` in 
 - **`rt.Repo()`** is the config's `repo`, the main checkout.
 - **`rt.Worktree(ctx, label)`** is a code step's own worktree and its branch: the worktree an agent call with that label and isolation `worktree` gets, created or reused the same way.
 - **`rt.RemoveWorktree(ctx, label, integration, deleteBranch)`** removes a label's worktree when its branch is merged into `integration` (its tip an ancestor), with every untracked, ignored and uncommitted file in it, and lists those paths (a wholly untracked directory as one `dir/` entry). With `deleteBranch` it also deletes the branch. A directory that is not a worktree on the label's branch, a branch not merged, and a directory whose branch is gone are kept, with the reason. The ancestor check is about commits; which labels may lose uncommitted work is the caller's choice.
+- **`rt.RunGates(ctx, label, commit, setup, gates)`** runs a plan's declared gate commands on a clean detached checkout of `commit` at `<stateDir>/gates/<key>`, which is removed afterwards. It runs `setup` first, then each gate in order. Each command runs through `sh` in its own process group, with stdin `/dev/null`, its output logged under `<stateDir>/gates/logs`, and the runtime's environment. Exit 0 is `green` and any other exit `red`. A timeout is `not-run`, and a failed setup makes every gate `not-run`. Any process a command leaves behind is killed when it ends. A stop kills the running group, and the stop is returned. Runs are bounded by `gateConcurrency`; the caller journals them.
 - **`rt.Log`** and **`rt.Args`**: `Args` is the config's `args`, passed through.
 
 `opts` mirrors the JavaScript: `label`, `phase` (telemetry only), `model`, `effort`, `agentType`, `isolation`, `schema`.
@@ -214,6 +215,8 @@ The JSON config is decoded strictly. `testdata/config.example.json` carries the 
   - `sessionLimitMargin`: 30 s past the reset.
   - `sessionLimitFallback`: 15 min when the stream gives no reset.
   - `maxSessionWaits`: 4 per call.
+  - `gateTimeout`: 2 h per declared gate without its own timeout.
+- **`gateConcurrency`**: concurrent `RunGates`, 1 by default. Gate time is wall-clock and counts toward `maxWallClock`.
 - **`dryRun`.** The first call that would spawn logs its argv and stops the launch with `dry-run`. A step that is not replayed stops without running. Orphans are reported, not killed.
 
 ### A call
@@ -292,7 +295,7 @@ Every call that spawned and returns a value or a null reports the paths it left 
 - **Signals.** The first SIGINT or SIGTERM sets the sticky stop `signal-SIGINT` or `signal-SIGTERM`. In-flight attempts finish and their results are journaled. Retries, backoff and gate waits are abandoned, and every later boundary returns the stop. A second signal cancels in-flight attempts and ends the ctx a running code step was given, so its git stops too. A journal replay is still served after a stop, since it costs nothing; the stop returns at the first call that would spawn.
 - **`stop_reason` precedence.** A stop the runtime recorded wins, even if the body swallowed it. Then a `StopError` from the body, then `cancelled` (the parent context), then `crashed` (a body error or panic), then `returned`.
 - **Caps** are checked at spawn. A cap that passes during a step or a backoff stops the run at the next spawn.
-- **Orphans.** At launch, every process whose arguments carry `--session-id <id>` for an id in `children.json` is a call left by a killed launch. Its group gets SIGTERM, then SIGKILL after `killGrace`; a zombie counts as gone. If `ps` fails, or a kill fails, those records are carried into this launch's `children.json` for the next launch to reap. A torn `children.json` is reported and treated as empty.
+- **Orphans.** At launch, every process whose arguments carry `--session-id <id>` for an id in `children.json` is a call left by a killed launch. A gate's shell is recorded under an `lsf-gate:` marker, which it carries as `$0`, and is matched the same way. A gate command that begins with `exec` replaces that shell, so it cannot be found. Its group gets SIGTERM, then SIGKILL after `killGrace`; a zombie counts as gone. If `ps` fails, or a kill fails, those records are carried into this launch's `children.json` for the next launch to reap. A torn `children.json` is reported and treated as empty.
 - **Worktrees.**
   - Creation is serialised. Each git command has a 5-minute timeout and ends on a repeated signal.
   - An existing `wt/<key>` is reused only if it is a worktree on its branch; otherwise the run stops with `runtime-error`.

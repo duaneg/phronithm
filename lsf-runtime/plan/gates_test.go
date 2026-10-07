@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -120,5 +121,21 @@ func TestLoadGraphIgnoresGatesBlock(t *testing.T) {
 	g := LoadGraph(gatesDoc("gates:\n  - name: a\n    command: x\n"), nil)
 	if len(g.Problems) != 0 || g.Plan == nil {
 		t.Fatalf("graph: %+v", g)
+	}
+}
+
+// docs/plan-graph.md's example is a valid declaration.
+func TestDocumentedGatesExample(t *testing.T) {
+	b, err := os.ReadFile("../../docs/plan-graph.md")
+	if err != nil {
+		t.Skip("docs not in this tree:", err)
+	}
+	d, problems := ParseDeclaration(string(b))
+	if d == nil || len(problems) > 0 {
+		t.Fatalf("documented example: %v", problems)
+	}
+	want := `{"setup":"npm ci","gates":[{"name":"tests","command":"npm test","timeout":"45m"},{"name":"lint","command":"npm run lint"}]}`
+	if got := d.Identity(); got != want {
+		t.Errorf("\n got %s\nwant %s", got, want)
 	}
 }

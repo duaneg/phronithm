@@ -27,6 +27,7 @@ Serves human teams planning work and agent teams needing structured task assignm
 - **decomposition-plan**: Document at `docs/plans/<feature-name>-breakdown.md` (or project equivalent). Contains:
   - Work units with classification metadata and done conditions
   - Graph block: the units, dependencies, scope, gates, and execution order as one machine-readable YAML block (format: [plan graph](${CLAUDE_PLUGIN_ROOT}/docs/plan-graph.md)), kept in step with the entries
+  - Gate block, when the project has gates: its gate commands (test suite, linters, type checks) as a ```yaml lsf-gates block (same format document), which the `lsf-implement` runtime runs itself
   - Execution order with rationale
   - Dependency graph (Mermaid format preferred), parallel streams for 2-worker and N-worker scenarios, and critical path analysis — omitted from a plan drafted for `phronithm:large-scale-feature`, whose Phase 3 workflow computes them from the Graph block
   - Meta-tasks (test harness, debug tooling, integration testing)
@@ -229,6 +230,7 @@ Build the execution plan from the analysis.
    - Every `foundation`-type unit appears before its dependants in the execution order.
    - All overlapping-scope parallel streams have a coordination protocol.
    - The `## Graph` block agrees with the entries: every unit, its type, every Depends-on unit, every Scope path, every gate with its kind and pin, and the execution order — one id per unit, flattened from the Execution Order steps in written order. Check mechanically (a short script over the block and the entry fields), not by eye.
+   - The `## Gates` block names the project's own gate commands, each exactly as the project runs it. Take them from the project's instructions (CLAUDE.md or equivalent) and its CI configuration. Where these disagree, or name no command for a check the project evidently has, ask the requester. Omit the section when the project has no gates.
 
 5. **Draft the decomposition plan document**. Structure below. A plan drafted from an architecture document for `phronithm:large-scale-feature` is driven by its Phase 3 workflow (`phronithm:lsf-implement`): omit Dependency Graph, Parallel Streams, and Critical Path from it, since the workflow computes readiness and the wave plan from the `## Graph` block and the re-plan step does not maintain the prose. The analysis in steps 2–3 still runs: the Summary and the commit message keep citing the critical path length, and the overlapping-scope check in step 4 is satisfied by the edges and `file::symbol` Scope entries the block carries rather than by a written coordination protocol. Every other plan keeps the three sections.
 
@@ -258,6 +260,12 @@ Build the execution plan from the analysis.
     scope, publishes, gates with kind and pin) and execution_order — per
     ${CLAUDE_PLUGIN_ROOT}/docs/plan-graph.md. The machine-read form of the
     entries above; amend both together>
+
+   ## Gates
+   <one ```yaml lsf-gates block — the project's gate commands (setup, then
+    each gate's name, command and optional timeout) per
+    ${CLAUDE_PLUGIN_ROOT}/docs/plan-graph.md. Omitted when the project has
+    no gates>
 
    ## Dependency Graph
    <Mermaid diagram preferred. Mark dependency types: solid arrows for logical,
@@ -338,6 +346,7 @@ Under the `lsf-implement` workflow the plan's size is bounded by moving what is 
 
 - **Completed entries are archived at merge.** The merge stage moves a completed unit's `### <id>` entry verbatim to `docs/plans/<name>-archive.md` and leaves the one-line stub `### <id> — complete at <merge SHA>; entry archived to <archive>; report <path>`. The unit's `## Graph` block entry is untouched apart from `complete: true`. A re-plan never restores or rewrites a stub.
 - **Closed risks are archived at re-plan.** A Risk Registry entry retired by this pass's completions or amendments moves to the archive under `## Closed risks`, cited by id and one clause.
+- **The gate block is fixed for the run.** A re-plan does not edit the `## Gates` block: the workflow stops with `declared-gates-changed` when it changes. A gate command that must change is a question for the requester, applied before the relaunch.
 - **Plan Maintenance takes the compact form** in the template above: heading, one line per amendment, nothing restated.
 
 ## Commit discipline
