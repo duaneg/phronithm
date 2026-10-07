@@ -241,7 +241,7 @@ loop:
   if ready is empty and units remain: return escalation(blocked units)
   if ready is empty: break
   results = parallel(ready.map(unit => runUnit(unit, plan.sha)))   // barrier
-  merged  = merge(results, in plan execution order)               // agent, sequential
+  merged  = merge(results, in plan execution order)               // code, sequential; conflicts to a model call
   gate    = invalidations, notes, amendments from the wave gate    // agent, one question; units' own architecture diffs vs the pre-wave pin
   signals = structural(results, merged) ∪ gate
   if any signal is STOP and (nothing merged or the stop supersedes the plan): return escalation(signals, plan.sha)
@@ -290,14 +290,21 @@ would amend the plan under units still in flight. The barrier also bounds the
 cost of an escalation to one wave: in-flight units finish, nothing new starts.
 
 **Merge is an explicit stage**, sequenced after the wave and before re-plan.
-It merges each unit's branch into the integration branch in plan execution
-order and reports, per unit, clean or conflicting with the files involved. A
-conflict between units the plan claimed disjoint, resolved mechanically, is
-a re-plan item. A conflict the merge agent cannot resolve mechanically is a
-STOP signal, as is a clean merge after which the project's gates fail (the
-stage undoes it and reports the unit regressed). Merge order is a function of
-the plan, so a re-plan can change the order of later waves; the merge stage
-never chooses.
+It merges each unit's completion-report commit into the integration branch
+in plan execution order and reports, per unit, clean or conflicting with the
+files involved. In the Go runtime it is code: a conflict goes to a model
+call that may only edit and stage a mechanical resolution, which the stage
+checks (no marker, nothing staged beyond the merge's own paths) and commits;
+anything else is aborted, leaving no merge in progress. A conflict between
+units the plan claimed disjoint, resolved mechanically, is a re-plan item.
+A conflict that cannot be resolved mechanically is a STOP signal. A clean
+merge after which the project's gates fail is one too (the stage undoes it
+and reports the unit regressed), in the Workflow script; the Go merge runs
+no gates until `declared-gates`. Every merge commit carries `Lsf-Step`,
+`Lsf-Unit` and `Lsf-Merge` trailers, so a resumed run adopts its own merges
+and never merges a unit twice, and every returned SHA must resolve on the
+integration branch. Merge order is a function of the plan, so a re-plan can
+change the order of later waves; the merge stage never chooses.
 
 A cleanup agent on the mechanical tier runs beside the wave gate and removes
 the worktrees whose branches merged. Its null is logged, not signalled,
@@ -311,7 +318,10 @@ SHA, the archive, and the completion report; its Plan Maintenance entry is
 the fixed two-line form (heading; report path and SHA, ledger file and
 wave), never restated report content. The plan block is untouched apart from
 the flag ([plan graph](${CLAUDE_PLUGIN_ROOT}/docs/plan-graph.md), Archive).
-The plan therefore stops growing with completions; on cartomancer-v2 it had
+In the Go runtime the commit is rendered and checked by code: a plan it
+cannot record (a missing entry or section, a block that will not round-trip)
+stops the stage before any unit merges, and both paths are verified byte
+for byte after the commit. The plan therefore stops growing with completions; on cartomancer-v2 it had
 reached 531 KB, 240 KB of it Plan Maintenance prose and 173 KB completed
 entries, before this rule (measured 2026-09-19).
 
@@ -726,9 +736,10 @@ critique (unit plan critique, code critique, lens review) runs opus at low
 effort; gate (the wave gate alone) runs opus at medium effort;
 planning (unit plan, re-plan, termination) runs opus at high effort;
 mechanical (worktree cleanup) runs haiku at low effort; everything else —
-implement, merge, the direct edits the re-plan and termination stages
-return, the obligation dispositions — runs opus at low effort. The load
-(the plan and decision-log reads), the decision-log and ledger appends and
-the completion-report commit are code in the Go orchestrator, not agent
-calls, and take no tier (`lsf-runtime/orchestrator`, D18). The JavaScript
-keeps them as mechanical-tier agents until `script-retirement`.
+implement, merge (in Go, its conflict call), the direct edits the re-plan
+and termination stages return, the obligation dispositions — runs opus at
+low effort. The load (the plan and decision-log reads), the decision-log
+and ledger appends, the completion-report commit and the merge are code in
+the Go orchestrator, not agent calls, and take no tier apart from the
+merge's conflict call (`lsf-runtime/orchestrator`, D18, D24). The
+JavaScript keeps them as agents until `script-retirement`.

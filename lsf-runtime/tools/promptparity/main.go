@@ -13,8 +13,8 @@
 // interleaved and the stub runs them in turn, but each lane's order is
 // fixed in both.
 //
-// Load, the decision log, ledger appends and completion reports are code
-// steps in Go (orchestrator D18) and agent calls in the JS: the JS calls are
+// Load, the decision log, ledger appends, completion reports and the merge
+// are code steps in Go (orchestrator D18, D24) and agent calls in the JS: the JS calls are
 // answered from the Go step's recorded value; each Go step's input must
 // appear verbatim in the JS prompt it replaces (stepParity), and the calls
 // are then left out of the comparison. The coverage checks count the Go
@@ -42,6 +42,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -273,7 +274,8 @@ func normOpts(raw json.RawMessage) (string, error) {
 func codeStep(label string) bool {
 	base, _, _ := strings.Cut(label, "#")
 	return base == "load" || base == "decision-log" ||
-		strings.HasPrefix(base, "load:") || strings.HasPrefix(base, "ledger:") || strings.HasPrefix(base, "completion-report:")
+		strings.HasPrefix(base, "load:") || strings.HasPrefix(base, "ledger:") || strings.HasPrefix(base, "completion-report:") ||
+		strings.HasPrefix(base, "merge:")
 }
 
 // stepParity checks a Go step's input against the JS prompt for the same
@@ -285,6 +287,10 @@ func stepParity(s step, prompt string) []string {
 		Sha, PlanPath, DecisionLogSha, DecisionLogPath, PauseRef string
 		Path, Subject, Block, Text, Base                         string
 		Decisions                                                json.RawMessage
+		Wave                                                     int
+		Name, IntegrationBranch, ArchivePath, LedgerPath         string
+		ArchitectureDoc                                          string
+		Units                                                    []struct{ Unit, Branch, Report string }
 	}
 	if err := json.Unmarshal(s.Input, &in); err != nil {
 		return []string{"input: " + err.Error()}
@@ -310,6 +316,21 @@ func stepParity(s step, prompt string) []string {
 		want = []string{"<<<LEDGER\n" + in.Block + "LEDGER>>>", "to the end of " + in.Path + ",", subject, "git show-ref --verify --quiet " + in.PauseRef + " "}
 	case strings.HasPrefix(base, "completion-report:"):
 		want = []string{"<<<REPORT\n" + in.Text + "REPORT>>>", "below to " + in.Path + ",", subject, "git reset --hard " + in.Base + " &&"}
+	case strings.HasPrefix(base, "merge:"):
+		w := strconv.Itoa(in.Wave)
+		lines := []string{}
+		for _, u := range in.Units {
+			lines = append(lines, "- "+u.Unit+": branch "+u.Branch+" (completion report "+u.Report+")")
+		}
+		want = []string{
+			"You are in the main checkout on " + in.IntegrationBranch + ". Merge each unit branch below into " + in.IntegrationBranch + ",",
+			"`git merge --no-ff -m \"merge(" + in.Name + "): <unit id>\"`",
+			"entry under `## Work Units` in " + in.PlanPath + " to " + in.ArchivePath + ",",
+			"Ledger: " + in.LedgerPath + " wave " + w + ".`",
+			"(`git rev-list -1 " + in.IntegrationBranch + " -- " + in.ArchitectureDoc + "`)",
+			"git show-ref --verify --quiet " + in.PauseRef + " ",
+			"Wave " + w + " merge order:\n" + strings.Join(lines, "\n") + "\n",
+		}
 	}
 	missing := []string{}
 	for _, w := range want {

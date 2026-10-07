@@ -115,18 +115,33 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 	merged := []mergedUnit{}
 	conflicts := []plan.Merge{}
 	if len(order) > 0 {
-		t := c.tierFor("default")
+		in := mergeInput{Wave: wave, Name: c.name, IntegrationBranch: c.integrationBranch, PlanPath: l.plan.Path, ArchivePath: c.archivePath,
+			LedgerPath: c.ledgerPath, ArchitectureDoc: c.architectureDoc, PauseRef: c.pauseRef, Units: []mergeUnitIn{}}
+		for _, r := range order {
+			in.Units = append(in.Units, mergeUnitIn{Unit: r.unit, Branch: r.branch, Sha: r.reportSha, Report: r.completionPath})
+		}
 		label := "merge:w" + itoa(wave)
-		m, cs, err := call[mergeResult](ctx, l.orch, site{at: plan.At{Stage: "merge", Wave: plan.W(wave)}, writer: true}, mergePrompt(c, l.ref(), wave, order), lsfrt.Opts{Label: label, Model: t.Model, Effort: t.Effort, Phase: "Merge", Schema: mergeSchema})
+		m, fault, err := step[mergeResult](ctx, l.orch, label, in, l.mergeStage(in))
 		if err != nil {
 			return nil, true, false, err
 		}
+		if fault == "" && m != nil {
+			if fault, err = l.checkMergeShas(ctx, &m.Result); err != nil {
+				return nil, true, false, err
+			}
+		}
 		// A merge stop keeps what it merged: those commits exist, and the
 		// wave goes on to the re-plan as any stopping wave with units merged.
-		waveSignals = append(waveSignals, cs...)
-		if m == nil {
+		switch {
+		case fault != "":
+			waveSignals = append(waveSignals, stageFaultSignal(plan.At{Stage: "merge", Wave: plan.W(wave)}, fault))
+		case m == nil:
 			waveSignals = append(waveSignals, plan.NullReturnSignal(plan.At{Stage: "merge", Wave: plan.W(wave)}))
-		} else {
+		default:
+			waveSignals = append(waveSignals, m.Result.Signals...)
+			if err := l.liveReads(ctx, nil, &m.Result.PauseRequested); err != nil {
+				waveSignals = append(waveSignals, stageFaultSignal(plan.At{Stage: "merge", Wave: plan.W(wave)}, "live read: "+err.Error()))
+			}
 			l.notePause(m.Result.PauseRequested, label)
 			waveSignals = append(waveSignals, plan.SignalsFromMerge(m.Result.MergeResult, plan.At{Wave: plan.W(wave)})...)
 			for _, x := range m.Result.Merges {
@@ -294,6 +309,63 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 	l.markComplete()
 	l.rt.Log(fmt.Sprintf("wave %d: re-plan %d amendment(s) → plan @ %s; %s", wave, len(rp.Result.Amendments), l.plan.Sha, rp.Result.Summary))
 	return nil, false, false, nil
+}
+
+// checkMergeShas checks a merge value's SHAs, live or replayed, with a
+// repository (D24): a clean or resolved merge without its SHA, or a SHA
+// (merges[].sha, planSha, architectureSha) that is not hex, does not
+// resolve to a commit, or is not on the integration branch, is rejected,
+// and the whole value with it. There is no tip to correct a merge SHA
+// against, so it is not corrected as checkSha corrects. The fault is the
+// reason; err is a stop.
+func (l *launch) checkMergeShas(ctx context.Context, r *mergeResult) (string, error) {
+	if l.git == nil {
+		return "", nil
+	}
+	g := gitOps{l.git}
+	check := func(field, sha string) (string, error) {
+		s := strings.ToLower(jsTrim(sha))
+		if !shaHex.MatchString(s) {
+			return fmt.Sprintf("returned %s %q is not a commit SHA", field, sha), nil
+		}
+		full, err := g.out(ctx, l.repo, "rev-parse", "--verify", "--quiet", s+"^{commit}")
+		switch {
+		case err != nil && ctx.Err() != nil:
+			return "", &lsfrt.StopError{Reason: lsfrt.StopCancelled}
+		case err != nil && exitCode(err) == 1:
+			return fmt.Sprintf("returned %s %s does not resolve to a commit", field, sha), nil
+		case err != nil:
+			return fmt.Sprintf("returned %s %s: %v", field, sha, err), nil
+		}
+		on, err := g.status(ctx, l.repo, "merge-base", "--is-ancestor", full, "refs/heads/"+l.ctx.integrationBranch)
+		switch {
+		case err != nil && ctx.Err() != nil:
+			return "", &lsfrt.StopError{Reason: lsfrt.StopCancelled}
+		case err != nil:
+			return fmt.Sprintf("returned %s %s: %v", field, sha, err), nil
+		case !on:
+			return fmt.Sprintf("returned %s %s is not on %s", field, sha, l.ctx.integrationBranch), nil
+		}
+		return "", nil
+	}
+	for _, x := range r.Merges {
+		if x.Status != "clean" && x.Status != "resolved" {
+			continue
+		}
+		if jsTrim(x.Sha) == "" {
+			return fmt.Sprintf("returned a %s merge of %s without its SHA", x.Status, x.Unit), nil
+		}
+		if f, err := check("merge SHA of "+x.Unit, x.Sha); f != "" || err != nil {
+			return f, err
+		}
+	}
+	if f, err := check("planSha", r.PlanSha); f != "" || err != nil {
+		return f, err
+	}
+	if jsTrim(r.ArchitectureSha) != "" {
+		return check("architectureSha", r.ArchitectureSha)
+	}
+	return "", nil
 }
 
 // terminate is the termination stage: meta-tasks become units; small ones

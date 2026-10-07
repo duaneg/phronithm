@@ -108,6 +108,7 @@ func renderCompletionReport(c *runCtx, u *plan.Unit, wave int, branch string, im
 type unitResult struct {
 	unit, typ      string
 	branch         string // "" until the completion report is committed
+	reportSha      string // the completion report's commit, the merge's input
 	completionPath string
 	signals        []*plan.Signal
 	aborted        string

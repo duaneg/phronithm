@@ -161,8 +161,6 @@ var (
 		{"summary", desc(str, "One paragraph: what the unit delivered. Rendered verbatim into the completion report")},
 	})))
 
-	mergeSchema = stage(mergeResultSchema())
-
 	gateSchema = stage(object(obj{
 		{"invalidations", arr(plan.InvalidationSchema)},
 		{"notes", arr(object(obj{{"statement", str}, {"referent", desc(str, "A document section, unit, symbol, or file")}}))},
@@ -207,25 +205,3 @@ var (
 
 	scribeSchema = stage(object(obj{{"path", str}, {"sha", shaField}}))
 )
-
-// mergeResultSchema is MERGE_SCHEMA's result: MERGE_RESULT_SCHEMA's
-// properties, the pause field, the plan SHA and the architecture SHA.
-func mergeResultSchema() obj {
-	var base struct {
-		Properties struct {
-			IntegrationBranch json.RawMessage `json:"integrationBranch"`
-			Merges            json.RawMessage `json:"merges"`
-		} `json:"properties"`
-		Required []string `json:"required"`
-	}
-	if err := json.Unmarshal(plan.MergeResultSchema, &base); err != nil {
-		panic(err)
-	}
-	props := obj{{"integrationBranch", base.Properties.IntegrationBranch}, {"merges", base.Properties.Merges}}.
-		spread(pauseField).
-		spread(obj{
-			{"planSha", desc(str, "Plan SHA after completion entries were recorded")},
-			{"architectureSha", desc(str, "Commit SHA of the architecture document on the integration branch after this stage's last commit")},
-		})
-	return object(props, append(base.Required, "planSha", "pauseRequested", "architectureSha")...)
-}

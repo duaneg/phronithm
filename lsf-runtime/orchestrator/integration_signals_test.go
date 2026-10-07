@@ -32,16 +32,11 @@ func realRun(t *testing.T, over ...answer) (view, string, string, *gitRepo) {
 	r := newGitRepo(t)
 	const planPath = "docs/plans/f-breakdown.md"
 	p := orchtest.Graph("", orchtest.Unit("A"))
-	doc := func(p *plan.Plan) string { return "# Plan: f\n\n" + orchtest.ToBlock(p) + "\n" }
+	doc := func(p *plan.Plan) string { return planDocFor(p) }
 	r.commit("docs/architecture/f.md", "# Architecture\n", "architecture")
 	planSha := r.commit(planPath, doc(p), "plan")
 	r.git("checkout", "-q", "-b", "work-A")
 	workTip := r.commit("src/A/a.go", "package a\n", "unit A")
-	r.git("checkout", "-q", "-b", "side", "integration")
-	done := *p
-	done.Units = []*plan.Unit{orchtest.Unit("A")}
-	done.Units[0].Complete = true
-	completeSha := r.commit(planPath, doc(&done), "A complete")
 	r.git("checkout", "-q", "integration")
 
 	answers := []answer{
@@ -50,11 +45,9 @@ func realRun(t *testing.T, over ...answer) (view, string, string, *gitRepo) {
 		{Contains: "Run the phronithm:critique skill with type critique-code", Return: orchtest.NoFindings()},
 		{Contains: "Run the phronithm:review skill", Return: orchtest.NoFindings()},
 		{Contains: "Implementation plan: docs/plans/", Return: R(orchtest.Implemented("A", M{"branch": "@branch", "sha": workTip}))},
-		{Contains: "Merge each unit branch below into", Return: R(M{"integrationBranch": "integration", "merges": []plan.Merge{{Unit: "A", Status: "clean", Files: []string{}, Sha: "m"}},
-			"planSha": completeSha, "pauseRequested": false, "architectureSha": ""})},
 		{Contains: "has merged these units into", Return: R(M{"invalidations": []any{}, "notes": []any{}, "amendments": []any{}})},
 		{Contains: "Cleanup stage, wave", Return: R(M{"removed": 0, "kept": []any{}})},
-		{Contains: "Read its Meta-Tasks and Standing Obligations sections", Return: R(M{"planSha": completeSha, "appendedUnits": []any{}, "directEdits": []any{}})},
+		{Contains: "Read its Meta-Tasks and Standing Obligations sections", Return: R(M{"planSha": "@head", "appendedUnits": []any{}, "directEdits": []any{}})},
 		{Contains: "For each standing obligation", Return: R(M{"obligations": []any{}})},
 	}
 	for _, o := range over {
@@ -256,19 +249,30 @@ func TestCheckReturn(t *testing.T) {
 	}
 }
 
-// S6 on the live path: a merge status outside the enum, on every attempt,
-// is a schema-violation stop beside agent-null, never a claimed-disjoint
-// conflict.
+// S6 on the live path: an enum value outside the schema, on every
+// attempt, is a schema-violation stop beside agent-null. The merge, which
+// this drove as an agent, is a code step (D24); the obligations stage is
+// still an agent.
 func TestOnRuntimeLiveSchemaViolation(t *testing.T) {
-	out, ledger, _, _ := realRun(t, answer{
-		Contains: "Merge each unit branch below into",
-		Return: R(M{"integrationBranch": "integration", "merges": []plan.Merge{{Unit: "A", Status: "weird", Files: []string{}, Sha: "m"}},
-			"planSha": "x", "pauseRequested": false, "architectureSha": ""}),
+	out, _, _, _ := realRun(t, answer{
+		Contains: "For each standing obligation",
+		Return:   R(M{"obligations": []M{{"statement": "s", "disposition": "weird", "carrier": "", "evidence": "e"}}}),
 	})
 	eq(t, out.Status, "stopped", out.raw)
 	eqs(t, out.stopKinds(), []string{"schema-violation", "agent-null"})
-	match(t, out.stops()[0].Statement, `status: "weird" not in enum`)
-	noMatch(t, ledger, `claimed-disjoint-conflict`)
+	match(t, out.stops()[0].Statement, `disposition: "weird" not in enum`)
+}
+
+// planDocFor is a plan document for p: an entry per unit, the block, and
+// a Plan Maintenance section, as the merge's bookkeeping needs.
+func planDocFor(p *plan.Plan) string {
+	var b strings.Builder
+	b.WriteString("# Plan: f\n\n## Work Units\n\n")
+	for _, u := range p.Units {
+		b.WriteString("### " + u.ID + "\n- **Type**: " + u.Type + "\n\n")
+	}
+	b.WriteString("## Graph\n\n" + orchtest.ToBlock(p) + "\n\n## Plan Maintenance\n")
+	return b.String()
 }
 
 // S8: an implement reporting a SHA that is not its branch's tip is

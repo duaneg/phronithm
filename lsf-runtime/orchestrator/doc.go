@@ -145,7 +145,7 @@
 //     its statement; no scenario has both.
 //     declared-gates raises gate-omitted for a declared gate missing.
 //
-// D23 is unit code-merge-cleanup's.
+// D23 and D24 are unit code-merge-cleanup's.
 //
 //   - D23. A worktree writer (plan, implement, a plan or code fix) that
 //     reports a branch other than the one the runtime gave its call
@@ -163,4 +163,35 @@
 //     report no branch, and the main-checkout stages have none. The
 //     completion report's tip read faults with "does not resolve" on exit
 //     1 and with the git error otherwise. JS trusts the reported branch.
+//   - D24. The merge is a journaled code step (merge.go), not an agent:
+//     it merges each unit's completion-report commit (the report step's
+//     journaled SHA, so a replay needs no branch) into the integration
+//     branch in the main checkout, with a merge commit carrying Lsf-Step,
+//     Lsf-Unit and Lsf-Merge trailers (Lsf-Conflict per resolved path). A
+//     conflict goes to a model call (merge-conflict:w<n>:<unit>, default
+//     tier) that may only edit and stage; the step accepts the resolution
+//     only with no unmerged path, no conflict marker, nothing staged
+//     outside the paths git's own merge touches and no new untracked
+//     file, commits it, and otherwise aborts the merge (unresolvable). The
+//     call's driver events travel in the value (mergeResult.Signals). A
+//     clean merge's tree must be git's merge-tree of the two; a path a
+//     hook leaves staged is a fault. A merge git refuses over local changes
+//     is unresolvable, the changes untouched; any other failure is a
+//     stage-fault, with a merge this step started aborted. No project gate
+//     runs, so no merge is regressed (declared-gates). The bookkeeping
+//     (bookkeeping.go) is rendered before the first merge, so a plan it
+//     cannot record merges nothing, and committed once over the plan and
+//     the archive (commitFiles, one Lsf-Content trailer per path). An
+//     interrupted rerun resumes only a merge in progress whose MERGE_MSG is
+//     this step's, adopts its own merge commits (verified again) and
+//     bookkeeping commit, and refuses a unit merged under another commit or
+//     outside the stage. A merge SHA, planSha or architectureSha that is
+//     not hex, does not resolve or is not on the integration branch is
+//     rejected (checkMergeShas, live or replayed, with a repository), and
+//     a clean merge without its SHA too: the value is a stage-fault and
+//     nothing in it is merged. There is no tip to correct a merge SHA
+//     against, so unlike checkSha it is not corrected; a journaled SHA a
+//     history rewrite removed faults until the state dir is cleared. A
+//     seed for the label is ignored (D18). JS's merge agent reports what
+//     it likes.
 package orchestrator

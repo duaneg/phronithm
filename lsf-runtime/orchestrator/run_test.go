@@ -270,14 +270,16 @@ func TestEntrySemanticsAndReturnFields(t *testing.T) {
 }
 
 // js: the merge archives each completed entry behind a stub and writes the compact completion entry; the re-plan writes the compact maintenance entry and archives closed risks
+// Go: the merge is a code step (D24), given the paths the bookkeeping writes;
+// TestRenderBookkeeping holds the forms.
 func TestMergeAndReplanBookkeeping(t *testing.T) {
 	s := stub(t, twoWaves(), discovering(), M{"archivePath": "docs/plans/f-old.md"})
 	run(t, s)
-	m := s.Prompt("merge:w1")
-	match(t, m, "Move its `### <unit id>` entry under `## Work Units` in docs/plans/f-breakdown\\.md to docs/plans/f-old\\.md")
-	match(t, m, "stub `### <unit id> — complete at <merge SHA>; entry archived to docs/plans/f-old\\.md; report <completion report path>`")
-	match(t, m, "### <date, date -I> — <unit id> complete` with the single line `Report: <completion report path> @ <merge SHA>\\. Ledger: docs/plans/f-signals/plan0\\.md wave 1\\.`")
-	match(t, m, `no restated report content`)
+	m := input(t, s, "merge:w1")
+	eq(t, m["planPath"], any("docs/plans/f-breakdown.md"))
+	eq(t, m["archivePath"], any("docs/plans/f-old.md"))
+	eq(t, m["ledgerPath"], any("docs/plans/f-signals/plan0.md"))
+	eq(t, m["wave"], any(float64(1)))
 	rp := s.Prompt("replan:w1")
 	match(t, rp, `### <date, date -I> — re-plan wave 1 \(<item ids>\)`)
 	match(t, rp, `<kind> <unit> — <one clause>`)
@@ -286,7 +288,7 @@ func TestMergeAndReplanBookkeeping(t *testing.T) {
 	noMatch(t, rp, `record every amendment in Plan Maintenance`)
 	d := stub(t, twoWaves(), nil, nil)
 	out := run(t, d)
-	match(t, d.Prompt("merge:w1"), `entry archived to docs/plans/f-archive\.md`, "default archive path")
+	eq(t, input(t, d, "merge:w1")["archivePath"], any("docs/plans/f-archive.md"), "default archive path")
 	eq(t, out.LedgerPath, "docs/plans/f-signals/plan0.md")
 }
 
@@ -1169,7 +1171,7 @@ func TestOwnFilesOnly(t *testing.T) {
 		},
 	}), M{"decisions": []M{{"id": "d1", "question": "q", "decision": "yes"}}})
 	run(t, s)
-	committing := []string{"decision-replan", "merge", "replan", "termination", "direct-edits"}
+	committing := []string{"decision-replan", "replan", "termination", "direct-edits"} // merge is code (D24)
 	seen := map[string]bool{}
 	for _, c := range agentCalls(s) {
 		if !has(committing, c.Prefix) {
@@ -1190,10 +1192,6 @@ func TestOwnFilesOnly(t *testing.T) {
 		return ""
 	}
 	match(t, at("replan"), "Commit only the files this stage wrote \\(docs/plans/f-breakdown\\.md, and docs/architecture/f\\.md if you made a `document-text` correction\\)")
-	m := at("merge")
-	match(t, m, `Commit only the files this stage wrote \(docs/plans/f-breakdown\.md and docs/plans/f-archive\.md\)`)
-	match(t, m, "undo that merge with `git reset --merge <pre-merge tip of integration>`")
-	match(t, m, `would overwrite an uncommitted change that is not yours is also unresolvable`)
 }
 
 // js: decisions are committed first, applied by a re-plan, and both SHAs reach every later prompt
@@ -1334,7 +1332,7 @@ func TestRoleTiers(t *testing.T) {
 		}
 		eq(t, got, want, c.Label)
 	}
-	for _, r := range []string{"critique-code", "plan", "implement", "merge", "review-gate", "replan", "obligations"} {
+	for _, r := range []string{"critique-code", "plan", "implement", "review-gate", "replan", "obligations"} {
 		if !seen[r] {
 			t.Error(r)
 		}
@@ -1507,7 +1505,7 @@ func TestPauseAtMerge(t *testing.T) {
 	if !hasPrefix(s.Logs, "pause requested (refs/lsf/f/pause seen by merge:w1)") {
 		t.Error(s.Logs)
 	}
-	match(t, s.Prompt("merge:w1"), `git show-ref --verify --quiet refs/lsf/f/pause`)
+	eq(t, input(t, s, "merge:w1")["pauseRef"], any("refs/lsf/f/pause"))
 	eq(t, input(t, s, "ledger:w1")["pauseRef"], any("refs/lsf/f/pause"))
 }
 
@@ -1778,14 +1776,11 @@ func TestMergeWithoutSha(t *testing.T) {
 }
 
 // js: the merge stage reports the architecture SHA after its last commit, and the gate returns amendments
+// Go: the merge step is given the document and reads its SHA from git (D24).
 func TestMergeReportsArchitectureSha(t *testing.T) {
 	s := stub(t, twoWaves(), nil, nil)
 	run(t, s)
-	m := s.CallOf("merge:w1")
-	contains(t, m.Prompt, "`git rev-list -1 integration -- "+doc+"`) as `architectureSha`")
-	if !has(schemaOf(t, m).Properties.Result.Required, "architectureSha") {
-		t.Error("merge schema")
-	}
+	eq(t, input(t, s, "merge:w1")["architectureDoc"], any(doc))
 	gate := s.CallOf("review-gate:w1")
 	if !has(schemaOf(t, gate).Properties.Result.Required, "amendments") {
 		t.Error("gate schema")
@@ -1888,8 +1883,10 @@ func TestPanickingUnitIsUnitNull(t *testing.T) {
 	if st := out.stops(); len(st) != 1 || st[0].Kind != "agent-null" || st[0].Stage != "unit" || st[0].Unit != "A" {
 		t.Errorf("%+v", st)
 	}
-	match(t, s.Prompt("merge:w1"), `(?m)^- B: branch`)
-	noMatch(t, s.Prompt("merge:w1"), `(?m)^- A: branch`)
+	units := input(t, s, "merge:w1")["units"].([]any)
+	if len(units) != 1 || units[0].(map[string]any)["unit"] != "B" {
+		t.Errorf("merge units %v", units)
+	}
 }
 
 // A runtime stop from any call, in a unit thunk or the main lane, ends Run

@@ -152,11 +152,11 @@ func TestSchemasAreJSKeyOrdered(t *testing.T) {
 			} `json:"result"`
 		} `json:"properties"`
 	}
-	if err := json.Unmarshal(mergeSchema, &m); err != nil {
+	if err := json.Unmarshal(replanSchema, &m); err != nil {
 		t.Fatal(err)
 	}
-	if got := m.Properties.Result.Required; !slices.Equal(got, []string{"integrationBranch", "merges", "planSha", "pauseRequested", "architectureSha"}) {
-		t.Errorf("merge required %v", got)
+	if got := m.Properties.Result.Required; !slices.Equal(got, []string{"planSha", "amendments", "overBudget", "verdicts", "directEdits", "summary"}) {
+		t.Errorf("replan required %v", got)
 	}
 	if !strings.Contains(string(fixCodeSchema), `"notApplied":{"type":"array","items":{"type":"object","properties":{"finding":{"type":"string"},"reason":{"type":"string"}},"required":["finding","reason"]}},"gates":{"type":"array","items":`) {
 		t.Errorf("fix-code schema %s", fixCodeSchema)
@@ -173,16 +173,6 @@ func TestJSSlice(t *testing.T) {
 		if got := jsSlice(xs, c.n); !slices.Equal(got, c.want) {
 			t.Errorf("%v: %v", c.n, got)
 		}
-	}
-}
-
-func TestMergeResultSchemaHasTwoProperties(t *testing.T) {
-	// mergeResultSchema copies these by name; a new property must be added.
-	var m struct {
-		Properties map[string]json.RawMessage `json:"properties"`
-	}
-	if err := json.Unmarshal(plan.MergeResultSchema, &m); err != nil || len(m.Properties) != 2 {
-		t.Errorf("%v %v", m.Properties, err)
 	}
 }
 

@@ -142,6 +142,9 @@ type mergeResult struct {
 	PauseRequested  bool   `json:"pauseRequested"`
 	PlanSha         string `json:"planSha"`
 	ArchitectureSha string `json:"architectureSha"`
+	// Signals are the conflict calls' driver events (D24), in the value so
+	// a replay keeps them. Go only.
+	Signals []*plan.Signal `json:"signals,omitempty"`
 }
 
 type amendment struct {

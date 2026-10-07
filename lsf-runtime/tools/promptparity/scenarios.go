@@ -278,13 +278,16 @@ var scenarios = []scenario{
 	{"wrong branch at load; ledger without commit at wave 0", func() (*plan.Plan, Hs, M) {
 		return orchtest.TwoWaves(), Hs{"load": loadWith(M{"headBranch": "main"}), "ledger": func(C, *S) any { return R(M{"path": "x", "sha": ""}) }}, nil
 	}},
-	{"carried rows; seeded plan and pausing merge", func() (*plan.Plan, Hs, M) {
-		st := &S{Plan: orchtest.TwoWaves(), Completed: map[string]bool{}, MergeOrder: []string{"A"}}
-		seeded := orchtest.Defaults()["merge"](C{}, st).(M)
-		seeded["result"].(M)["pauseRequested"] = true
+	// The merge is a code step in Go (D24), which ignores a seed, so the
+	// seed that stood in for the merge agent is gone; the pause a seed
+	// reports is stripped on both sides (the obligations seed's).
+	{"carried rows; seeded plan and pausing obligations", func() (*plan.Plan, Hs, M) {
 		return orchtest.TwoWaves(), Hs{"ledger": null}, M{
 			"unscribed": []M{{"kind": "deviation", "source": "reported", "stage": "implement", "unit": "Z", "wave": 3, "statement": "dev-Z", "referent": "src/Z", "raisedBy": "implement", "disposition": "recorded"}},
-			"seed":      M{"plan:A": R(M{"branch": "salvaged-A", "sha": "s", "path": "docs/plans/A-plan.md", "bytes": 0, "readings": []any{}}), "merge:w1": seeded},
+			"seed": M{
+				"plan:A":      R(M{"branch": "salvaged-A", "sha": "s", "path": "docs/plans/A-plan.md", "bytes": 0, "readings": []any{}}),
+				"obligations": R(M{"obligations": []any{}, "pauseRequested": true}),
+			},
 		}
 	}},
 	{"pause at merge with a null scribe", func() (*plan.Plan, Hs, M) {

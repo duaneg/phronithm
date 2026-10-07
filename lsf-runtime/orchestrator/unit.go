@@ -507,6 +507,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 		return abort("completion-report")
 	}
 	res.branch = report.Result.Branch
+	res.reportSha = report.Result.Sha
 	res.completionPath = completionPath(u)
 	res.signals = sigs
 	return res, nil

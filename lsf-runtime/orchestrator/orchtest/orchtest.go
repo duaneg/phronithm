@@ -192,6 +192,12 @@ func (s *Stub) Call(ctx context.Context, prompt string, o lsfrt.Opts) (lsfrt.Cal
 	if err != nil {
 		return cr, err
 	}
+	s.noteMerged(c, cr)
+	return cr, nil
+}
+
+// noteMerged marks the units a merge return merged as completed.
+func (s *Stub) noteMerged(c Call, cr lsfrt.CallResult) {
 	if c.Prefix == "merge" && cr.Value != nil {
 		var r struct {
 			Result *struct {
@@ -209,7 +215,6 @@ func (s *Stub) Call(ctx context.Context, prompt string, o lsfrt.Opts) (lsfrt.Cal
 			}
 		}
 	}
-	return cr, nil
 }
 
 // Step answers a code step from the handler for the label's prefix; fn is
@@ -219,8 +224,26 @@ func (s *Stub) Step(ctx context.Context, label string, input []byte, fn func(con
 	c.Step, c.Input = true, append(json.RawMessage{}, input...)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if c.Prefix == "merge" {
+		// The merge step's input lists the units in merge order.
+		var in struct {
+			Units []struct {
+				Unit string `json:"unit"`
+			} `json:"units"`
+		}
+		s.State.MergeOrder = nil
+		if json.Unmarshal(input, &in) == nil {
+			for _, u := range in.Units {
+				s.State.MergeOrder = append(s.State.MergeOrder, u.Unit)
+			}
+		}
+	}
 	cr, err := s.answer(c)
-	return cr.Value, err
+	if err != nil {
+		return nil, err
+	}
+	s.noteMerged(c, cr)
+	return cr.Value, nil
 }
 
 // Repo is "": the stub has no repository.

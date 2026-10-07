@@ -121,15 +121,27 @@ func TestDriverEventsAtEverySiteKind(t *testing.T) {
 }
 
 // A merge stop keeps what the merge did: the wave still re-plans over the
-// merged unit before it stops. A merge denial is a record.
+// merged unit before it stops. The merge is a code step (D24): its
+// conflict calls' driver events travel in its value, a stop and a denial
+// record alike. The writer-call cases it drove as an agent are the
+// re-plan's (TestReplanCallStop).
 func TestMergeCallStop(t *testing.T) {
+	withSignals := func(sigs ...*plan.Signal) H {
+		return func(c Call, s *State) any {
+			r := orchtest.Defaults()["merge"](c, s).(M)
+			r["result"].(M)["signals"] = sigs
+			return r
+		}
+	}
+	at := plan.At{Stage: "merge", Unit: "A", Wave: plan.W(1)}
+	stop := plan.NewSignal(plan.Signal{Kind: "skill-not-loaded", Source: "structural", Stage: "merge", Unit: "A", Wave: plan.W(1), Statement: "s", Referent: "merge-conflict:w1:A"})
 	s := stub(t, twoWaves(), Hs{
 		"implement": implemented(M{"discoveries": []M{{"statement": "d", "affects": "B"}}}),
-		"merge":     withCall("merge", nil, dirty),
+		"merge":     withSignals(stop),
 	}, nil)
 	out := run(t, s)
 	eq(t, out.Status, "stopped")
-	eqs(t, out.stopKinds(), []string{"uncommitted-at-return"})
+	eqs(t, out.stopKinds(), []string{"skill-not-loaded"})
 	if !has(s.Labels(), "replan:w1") || !has(s.Labels(), "review-gate:w1") {
 		t.Errorf("the merged wave did not re-plan: %v", s.Labels())
 	}
@@ -137,7 +149,8 @@ func TestMergeCallStop(t *testing.T) {
 		t.Error("no pre_replan_sha: the stop did not come from the re-plan pass")
 	}
 
-	d := stub(t, twoWaves(), Hs{"merge": withCall("merge", nil, denied)}, nil)
+	sigs, _ := plan.SignalsFromCall(plan.CallEvents{Label: "merge-conflict:w1:A", Denials: denied.Denials}, at)
+	d := stub(t, twoWaves(), Hs{"merge": withSignals(sigs...)}, nil)
 	eq(t, run(t, d).Status, "complete")
 	contains(t, ledgerText(t, d, "ledger:w1"), "| merge | structural | permission-denied |")
 }
@@ -187,24 +200,36 @@ func TestTerminationStagesCallSignals(t *testing.T) {
 	contains(t, ledgerText(t, o, "ledger:w2"), "| obligations | structural | permission-denied |")
 }
 
-// S6: an out-of-schema merge status, seeded (the runtime never validated
-// it) or reported by the runtime as violations, is a schema-violation stop
-// beside agent-null, never a claimed-disjoint-conflict; an out-of-schema
-// finding severity is a stop naming it, not dropped.
+// S6: an out-of-schema merge status is a schema-violation stop, never a
+// claimed-disjoint-conflict (D20; the merge is a code step, so no
+// agent-null); a seeded return outside its schema (the runtime never
+// validated it) or one the runtime reports as violations is a
+// schema-violation stop beside agent-null; an out-of-schema finding
+// severity is a stop naming it, not dropped.
 func TestSchemaViolations(t *testing.T) {
-	st := &State{Plan: twoWaves(), Completed: map[string]bool{}, MergeOrder: []string{"A"}}
-	bad := orchtest.Defaults()["merge"](Call{}, st).(M)
-	bad["result"].(M)["merges"] = []M{{"unit": "A", "status": "weird", "files": []string{"a.go"}, "sha": "m"}}
-	s := stub(t, twoWaves(), nil, M{"seed": M{"merge:w1": bad}})
+	s := stub(t, twoWaves(), Hs{"merge": func(c Call, st *State) any {
+		r := orchtest.Defaults()["merge"](c, st).(M)
+		r["result"].(M)["merges"] = []M{{"unit": "A", "status": "weird", "files": []string{"a.go"}, "sha": "m"}}
+		return r
+	}}, nil)
 	out := run(t, s)
-	eqs(t, out.stopKinds(), []string{"schema-violation", "agent-null"})
-	match(t, out.stops()[0].Statement, `status: "weird" not in enum`)
+	eqs(t, out.stopKinds(), []string{"schema-violation"})
+	match(t, out.stops()[0].Statement, `merge of A: status "weird" is outside the schema`)
 	noMatch(t, ledgerText(t, s, "ledger:w1"), `claimed-disjoint-conflict`)
 
-	v := stub(t, twoWaves(), Hs{"merge": func(Call, *State) any {
-		return lsfrt.CallResult{Violations: []string{`$.result.merges[0].status: "weird" not in enum`}}
-	}}, nil)
-	eqs(t, run(t, v).stopKinds(), []string{"schema-violation", "agent-null"})
+	discovery := Hs{"implement": implemented(M{"discoveries": []M{{"statement": "d", "affects": "B"}}})}
+	st := &State{Plan: twoWaves(), Completed: map[string]bool{}}
+	bad := orchtest.Defaults()["replan"](Call{Prompt: ""}, st).(M)
+	bad["result"].(M)["verdicts"] = []M{{"id": "rp-1", "verdict": "weird", "statement": "s"}}
+	sd := stub(t, twoWaves(), discovery, M{"seed": M{"replan:w1": bad}})
+	sout := run(t, sd)
+	eqs(t, sout.stopKinds()[:2], []string{"schema-violation", "agent-null"})
+	match(t, sout.stops()[0].Statement, `"weird" not in enum`)
+
+	v := stub(t, twoWaves(), merged(discovery, Hs{"replan": func(Call, *State) any {
+		return lsfrt.CallResult{Violations: []string{`$.result.verdicts[0].verdict: "weird" not in enum`}}
+	}}), nil)
+	eqs(t, run(t, v).stopKinds()[:2], []string{"schema-violation", "agent-null"})
 
 	sev := R(M{"findings": []M{{"severity": "Major", "statement": "s", "location": "a.go:1"}}, "systemic": false, "summary": "s"})
 	f := stub(t, twoWaves(), nil, M{"seed": M{"critique-code:r1:A": sev}})
@@ -243,7 +268,6 @@ func TestUncommittedPerSite(t *testing.T) {
 		{"lens-review", "lens-review:r1:A", false, twoWaves, nil, nil},
 		{"critique-design", "critique-design:r1:D", false, func() *plan.Plan { return one("D", "design") }, nil, nil},
 		{"fix-code", "fix-code:r1:A", true, twoWaves, Hs{"critique-code": critical}, nil},
-		{"merge", "merge:w1", true, twoWaves, nil, nil},
 		{"review-gate", "review-gate:w1", false, twoWaves, nil, nil},
 		{"cleanup", "cleanup:w1", false, twoWaves, nil, nil},
 		{"replan", "replan:w1", true, twoWaves, Hs{"implement": implemented(M{"discoveries": []M{{"statement": "d", "affects": "B"}}})}, nil},

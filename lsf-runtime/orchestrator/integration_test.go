@@ -337,16 +337,11 @@ func TestOnRuntimeCodeStages(t *testing.T) {
 	r := newGitRepo(t)
 	const planPath = "docs/plans/f-breakdown.md"
 	p := orchtest.Graph("", orchtest.Unit("A"))
-	doc := func(p *plan.Plan) string { return "# Plan: f\n\n" + orchtest.ToBlock(p) + "\n" }
+	doc := func(p *plan.Plan) string { return planDocFor(p) }
 	r.commit("docs/architecture/f.md", "# Architecture\n", "architecture")
 	planSha := r.commit(planPath, doc(p), "plan")
 	r.git("checkout", "-q", "-b", "work-A")
 	r.commit("src/A/a.go", "package a\n", "unit A")
-	r.git("checkout", "-q", "-b", "side", "integration")
-	done := *p
-	done.Units = []*plan.Unit{orchtest.Unit("A")}
-	done.Units[0].Complete = true
-	completeSha := r.commit(planPath, doc(&done), "A complete")
 	r.git("checkout", "-q", "integration")
 
 	answers := []answer{
@@ -357,11 +352,9 @@ func TestOnRuntimeCodeStages(t *testing.T) {
 		{Contains: "Run the phronithm:critique skill with type critique-code", Return: orchtest.NoFindings()},
 		{Contains: "Run the phronithm:review skill", Return: orchtest.NoFindings()},
 		{Contains: "Implementation plan: docs/plans/", Shell: "git reset -q --hard work-A", Return: R(orchtest.Implemented("A", M{"branch": "@branch", "sha": "@head"}))},
-		{Contains: "Merge each unit branch below into", Return: R(M{"integrationBranch": "integration", "merges": []plan.Merge{{Unit: "A", Status: "clean", Files: []string{}, Sha: "m"}},
-			"planSha": completeSha, "pauseRequested": false, "architectureSha": ""})},
 		{Contains: "has merged these units into", Return: R(M{"invalidations": []any{}, "notes": []any{}, "amendments": []any{}})},
 		{Contains: "Cleanup stage, wave", Return: R(M{"removed": 0, "kept": []any{}})},
-		{Contains: "Read its Meta-Tasks and Standing Obligations sections", Return: R(M{"planSha": completeSha, "appendedUnits": []any{}, "directEdits": []any{}})},
+		{Contains: "Read its Meta-Tasks and Standing Obligations sections", Return: R(M{"planSha": "@head", "appendedUnits": []any{}, "directEdits": []any{}})},
 		{Contains: "For each standing obligation", Return: R(M{"obligations": []any{}})},
 	}
 	dir := t.TempDir()
@@ -430,6 +423,28 @@ func TestOnRuntimeCodeStages(t *testing.T) {
 	match(t, r.git("show", reportBranch+":docs/plans/A-completion.md"), `^# A — completion report\n`)
 	eq(t, r.git("status", "--porcelain"), "", "the main checkout is clean")
 
+	// The merge (D24): a merge commit of the report's commit, then the
+	// bookkeeping commit over the plan and the archive.
+	mergeSha := ""
+	for _, line := range strings.Split(r.git("log", "--first-parent", "--format=%H %P", "integration"), "\n") {
+		if f := strings.Fields(line); len(f) == 3 {
+			mergeSha = f[0]
+			eq(t, f[2], r.git("rev-parse", reportBranch), "the merge's second parent is the report's commit")
+			break
+		}
+	}
+	if mergeSha == "" {
+		t.Fatal("no merge commit on integration")
+	}
+	eq(t, r.git("log", "-1", "--format=%(trailers:key=Lsf-Unit,valueonly)", mergeSha), "A")
+	match(t, trailers(mergeSha), `^merge:w1$`)
+	book := r.git("log", "-1", "--format=%H", "integration", "--", "docs/plans/f-archive.md")
+	match(t, trailers(book), `^merge:w1$`)
+	eq(t, r.git("show", "--name-only", "--format=", book), "docs/plans/f-archive.md\ndocs/plans/f-breakdown.md")
+	contains(t, r.git("show", book+":docs/plans/f-breakdown.md"), "### A — complete at "+mergeSha+"; entry archived to docs/plans/f-archive.md; report docs/plans/A-completion.md")
+	contains(t, r.git("show", book+":docs/plans/f-breakdown.md"), "    complete: true")
+	match(t, r.git("show", book+":docs/plans/f-archive.md"), `^# Archive: f\n\n## Work Units\n\n### A\n`)
+
 	// No agent call for the four stages; each ran as a step.
 	tel, err := os.ReadFile(filepath.Join(cfg.StateDir, "telemetry.jsonl"))
 	if err != nil {
@@ -444,14 +459,14 @@ func TestOnRuntimeCodeStages(t *testing.T) {
 		switch e.Kind {
 		case "call":
 			spawns++
-			if slices.Contains([]string{"load", "decision-log", "ledger", "completion-report"}, prefix) {
+			if slices.Contains([]string{"load", "decision-log", "ledger", "completion-report", "merge"}, prefix) {
 				t.Errorf("agent call %s", e.Label)
 			}
 		case "step":
 			stepsRun[prefix] = true
 		}
 	}
-	for _, p := range []string{"load", "decision-log", "ledger", "completion-report"} {
+	for _, p := range []string{"load", "decision-log", "ledger", "completion-report", "merge"} {
 		if !stepsRun[p] {
 			t.Errorf("no %s step", p)
 		}
