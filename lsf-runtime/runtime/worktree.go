@@ -55,10 +55,7 @@ func (rt *Runtime) cwdFor(ctx context.Context, o Opts, key string) (path, branch
 	if fi, err := os.Stat(path); err == nil && fi.IsDir() {
 		// Reuse only a worktree of this branch: a directory left by a crash
 		// mid-add, or one whose metadata was pruned, is not one.
-		top, err1 := gitStdout(gctx, path, "rev-parse", "--show-toplevel")
-		head, err2 := gitStdout(gctx, path, "symbolic-ref", "--short", "HEAD")
-		resolved, _ := filepath.EvalSymlinks(path)
-		if err1 != nil || err2 != nil || strings.TrimSpace(string(top)) != resolved || strings.TrimSpace(string(head)) != branch {
+		if !isWorktreeOn(gctx, path, branch) {
 			return "", "", rt.setStop(StopRuntimeError, fmt.Sprintf("%s: %s exists but is not a worktree on %s; remove it and relaunch", o.Label, path, branch))
 		}
 		return path, branch, nil
@@ -81,6 +78,16 @@ func (rt *Runtime) cwdFor(ctx context.Context, o Opts, key string) (path, branch
 	return path, branch, nil
 }
 
+// isWorktreeOn reports whether path is the top of a worktree whose HEAD is
+// on branch: the check that keeps worktree reuse and removal off a
+// directory that is not the label's own.
+func isWorktreeOn(ctx context.Context, path, branch string) bool {
+	top, err1 := gitStdout(ctx, path, "rev-parse", "--show-toplevel")
+	head, err2 := gitStdout(ctx, path, "symbolic-ref", "--short", "HEAD")
+	resolved, _ := filepath.EvalSymlinks(path)
+	return err1 == nil && err2 == nil && strings.TrimSpace(string(top)) == resolved && strings.TrimSpace(string(head)) == branch
+}
+
 // branchName is the branch of the worktree for journal key key.
 func branchName(args worktreeArgs, key string) string {
 	return "lsf/" + args.PlanSha[:8] + "/" + refSafe(key)
@@ -100,16 +107,20 @@ type WorktreeRemoval struct {
 }
 
 // RemoveWorktree removes label's worktree when its branch is merged into
-// integration (its tip an ancestor of the branch), with every untracked,
-// ignored and uncommitted file in it, and, with deleteBranch, the branch.
-// A directory that is not a worktree on the label's branch, or a branch
-// not merged, is kept. The ancestor check is about commits: it does not
-// protect uncommitted work, which the caller's choice of labels must. A
-// git failure is an error, not a stop.
-func (rt *Runtime) RemoveWorktree(ctx context.Context, label, integration string, deleteBranch bool) (WorktreeRemoval, error) {
+// integration, the branch the caller merged into (its tip an ancestor of
+// that branch), with every untracked, ignored and uncommitted file in it,
+// and, with deleteBranch, the branch. A directory that is not a worktree on
+// the label's branch, a branch not merged, and a directory whose branch is
+// gone are kept. The ancestor check is about commits: it does not protect
+// uncommitted work, so the caller must name only labels with no live call
+// and whose uncommitted work may go. A stop or cancellation before the
+// removal starts is returned; once it starts, one 5-minute bound covers
+// the sequence. A git failure is an error, not a stop; after a partial
+// removal the result still says what went, and the event is emitted.
+func (rt *Runtime) RemoveWorktree(ctx context.Context, label, integration string, deleteBranch bool) (out WorktreeRemoval, err error) {
 	o := Opts{Label: label, Isolation: "worktree"}
 	key := journalKey(label)
-	out := WorktreeRemoval{Label: label}
+	out = WorktreeRemoval{Label: label}
 	args, err := rt.isolationArgs(o)
 	if err != nil {
 		return out, err
@@ -125,6 +136,9 @@ func (rt *Runtime) RemoveWorktree(ctx context.Context, label, integration string
 		return out, &StopError{Reason: StopCancelled}
 	}
 	defer func() { <-rt.wtSem }()
+	if err := rt.boundary(ctx); err != nil {
+		return out, err
+	}
 	gctx, cancel := rt.gitContext(ctx)
 	defer cancel()
 	out.Path = filepath.Join(rt.cfg.StateDir, "wt", key)
@@ -144,6 +158,9 @@ func (rt *Runtime) RemoveWorktree(ctx context.Context, label, integration string
 	case dirExists && tip == "":
 		out.Kept = "branch missing"
 		return out, nil
+	case !dirExists && !deleteBranch:
+		out.Kept = "branch retained"
+		return out, nil
 	}
 	merged := gitRun(gctx, rt.cfg.Repo, "merge-base", "--is-ancestor", tip, "refs/heads/"+integration)
 	if merged != nil {
@@ -153,11 +170,17 @@ func (rt *Runtime) RemoveWorktree(ctx context.Context, label, integration string
 		out.Kept = "not merged into " + integration
 		return out, nil
 	}
+	defer func() {
+		if out.Removed {
+			ev := map[string]any{"label": label, "path": out.Path, "branch": out.Branch, "paths": len(out.Paths)}
+			if err != nil {
+				ev["error"] = err.Error()
+			}
+			rt.event("worktree-removed", ev)
+		}
+	}()
 	if dirExists {
-		top, err1 := gitStdout(gctx, out.Path, "rev-parse", "--show-toplevel")
-		head, err2 := gitStdout(gctx, out.Path, "symbolic-ref", "--short", "HEAD")
-		resolved, _ := filepath.EvalSymlinks(out.Path)
-		if err1 != nil || err2 != nil || strings.TrimSpace(string(top)) != resolved || strings.TrimSpace(string(head)) != out.Branch {
+		if !isWorktreeOn(gctx, out.Path, out.Branch) {
 			out.Kept = "not a worktree on " + out.Branch
 			return out, nil
 		}
@@ -185,10 +208,6 @@ func (rt *Runtime) RemoveWorktree(ctx context.Context, label, integration string
 		}
 		out.Removed = true
 	}
-	if !out.Removed {
-		out.Kept = "absent"
-	}
-	rt.event("worktree-removed", map[string]any{"label": label, "path": out.Path, "branch": out.Branch, "removed": out.Removed, "paths": len(out.Paths)})
 	return out, nil
 }
 

@@ -155,3 +155,67 @@ func TestCallResultBranch(t *testing.T) {
 		t.Fatalf("no isolation: %+v %v", plain, err)
 	}
 }
+
+// The edges: a worktree switched to another branch is kept; a missing
+// integration branch is an error, not "not merged"; a merged branch whose
+// directory is gone is deleted with no paths, or retained without
+// deleteBranch; staged and deleted tracked files are listed; a cancelled
+// context stops before anything is removed.
+func TestRemoveWorktreeEdges(t *testing.T) {
+	var switched, retained, branchOnly, staged WorktreeRemoval
+	var noIntegration, cancelled error
+	var wtS, wtC string
+	worktreeLaunch(t, func(ctx context.Context, rt *Runtime) {
+		wtS, _ = mustWorktree(t, ctx, rt, "critique-code:r1:S")
+		git(t, wtS, "checkout", "-q", "-b", "elsewhere")
+		switched = remove(t, ctx, rt, "critique-code:r1:S", true)
+
+		_, b := mustWorktree(t, ctx, rt, "plan:R")
+		git(t, rt.cfg.Repo, "worktree", "remove", filepath.Join(rt.cfg.StateDir, "wt", journalKey("plan:R")))
+		retained = remove(t, ctx, rt, "plan:R", false)
+		branchOnly = remove(t, ctx, rt, "plan:R", true)
+		if git(t, rt.cfg.Repo, "branch", "--list", b) != "" {
+			t.Errorf("branch %s not deleted", b)
+		}
+
+		wt, _ := mustWorktree(t, ctx, rt, "implement:T")
+		os.WriteFile(filepath.Join(wt, "staged.txt"), []byte("x\n"), 0o644)
+		git(t, wt, "add", "staged.txt")
+		git(t, wt, "rm", "-q", "tracked.txt")
+		staged = remove(t, ctx, rt, "implement:T", true)
+
+		mustWorktree(t, ctx, rt, "implement:N")
+		_, noIntegration = rt.RemoveWorktree(ctx, "implement:N", "no-such-branch", true)
+
+		wtC, _ = mustWorktree(t, ctx, rt, "implement:C")
+		cctx, cancel := context.WithCancel(ctx)
+		cancel()
+		_, cancelled = rt.RemoveWorktree(cctx, "implement:C", "main", true)
+	})
+	if switched.Removed || switched.Kept == "" {
+		t.Errorf("switched: %+v", switched)
+	}
+	if _, err := os.Stat(wtS); err != nil {
+		t.Errorf("switched worktree gone: %v", err)
+	}
+	if retained.Removed || retained.Kept != "branch retained" {
+		t.Errorf("retained: %+v", retained)
+	}
+	if !branchOnly.Removed || len(branchOnly.Paths) != 0 {
+		t.Errorf("branch only: %+v", branchOnly)
+	}
+	got := slices.Clone(staged.Paths)
+	slices.Sort(got)
+	if !staged.Removed || !slices.Equal(got, []string{"staged.txt", "tracked.txt"}) {
+		t.Errorf("staged: %+v", staged)
+	}
+	if noIntegration == nil {
+		t.Error("a missing integration branch was not an error")
+	}
+	if r, ok := IsStop(cancelled); !ok || r != StopCancelled {
+		t.Errorf("cancelled: %v", cancelled)
+	}
+	if _, err := os.Stat(wtC); err != nil {
+		t.Errorf("removed after cancellation: %v", err)
+	}
+}
