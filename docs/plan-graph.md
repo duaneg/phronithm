@@ -1,11 +1,12 @@
 # Plan graph and decision log blocks
 
 A decomposition plan carries its graph in one fenced YAML block, and a decision
-log carries requester decisions in another. The `lsf-implement` workflow reads only
-these blocks; the prose entries are for people and for the agents that plan
-and implement units. The blocks are parsed by `workflows/lsf/graph.js`, which
-validates them and reports every defect as a structural signal. No agent
-interprets the plan's prose on the workflow's behalf.
+log carries requester decisions in another; a plan may also declare its gate
+commands in a third. The `lsf-implement` workflow reads only these blocks; the
+prose entries are for people and for the agents that plan and implement units.
+The graph and decision blocks are parsed by `workflows/lsf/graph.js` and its Go
+port, which validate them and report every defect as a structural signal. No
+agent interprets the plan's prose on the workflow's behalf.
 
 ## Plan block
 
@@ -106,9 +107,9 @@ written by agents and records amendments; it does not clear gates.
 
 ## Gate block
 
-A plan may declare the project's gate commands in a third block, anywhere in
-the plan document. The Go runtime runs them; the Workflow script ignores the
-block.
+A plan may declare the project's gate commands in a third block, in its
+`## Gate commands` section. The Go runtime (`lsf-runtime`) runs them; the
+Workflow script ignores the block.
 
 ````markdown
 ```yaml lsf-gates
@@ -140,15 +141,26 @@ being gated, so it sees only committed files. The runtime gates:
 - each merge's tree, before the merge is committed. A merge whose gates fail
   is not committed.
 
-An identical tree is gated once, and the result is reused across relaunches.
-A merge that differs from the unit's last gated tree only at its completion
-report reuses that result, so a gate that reads the completion report is not
+An identical tree is gated once. A result whose gates all completed, red ones
+included, is journaled and replays on relaunch; a gate not run (its timeout, a
+failed setup) reruns. To rerun a red result after fixing the environment,
+remove its record, `journal/gates_<tree prefix>-*.json`, from the state
+directory. A merge that differs from the unit's last gated tree only at its
+completion report reuses that result within the launch (in practice, the
+first merge of a wave), so a gate that reads the completion report is not
 re-run for the merge.
 
-The runtime fixes the block when a run starts. A re-plan that changes it
-stops the run with `declared-gates-changed`, and the relaunch takes the
-changed block. The commands run with the runtime's environment and
-credentials; they are trusted as the plan document is.
+If the integration branch moves while a merge's gates run, the new merge is
+gated once more, and a second move faults. A merge commit whose tree no run
+covers (one that raced the merge, or a hook's change) is gated when the stage
+meets it, and is a fault if its gates fail.
+
+The runtime fixes the block at a launch's first load. Values compare as
+written, so `1h` and `60m` differ. A wave re-plan that changes the block stops
+the run with `declared-gates-changed`, and the relaunch takes the changed
+block. A requester's change goes through a decision, which the decision
+re-plan applies before the first load. The commands run with the runtime's
+environment, credentials included, and are trusted as the plan document is.
 
 ## YAML subset
 

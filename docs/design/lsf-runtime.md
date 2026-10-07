@@ -195,7 +195,7 @@ Unit `runtime-core`, plan `docs/plans/runtime-core-plan.md`. Package `lsfrt` in 
 - **`rt.Repo()`** is the config's `repo`, the main checkout.
 - **`rt.Worktree(ctx, label)`** is a code step's own worktree and its branch: the worktree an agent call with that label and isolation `worktree` gets, created or reused the same way.
 - **`rt.RemoveWorktree(ctx, label, integration, deleteBranch)`** removes a label's worktree when its branch is merged into `integration` (its tip an ancestor), with every untracked, ignored and uncommitted file in it, and lists those paths (a wholly untracked directory as one `dir/` entry). With `deleteBranch` it also deletes the branch. A directory that is not a worktree on the label's branch, a branch not merged, and a directory whose branch is gone are kept, with the reason. The ancestor check is about commits; which labels may lose uncommitted work is the caller's choice.
-- **`rt.RunGates(ctx, label, commit, setup, gates)`** runs a plan's declared gate commands on a clean detached checkout of `commit` at `<stateDir>/gates/<key>`, which is removed afterwards. It runs `setup` first, then each gate in order. Each command runs through `sh` in its own process group, with stdin `/dev/null`, its output logged under `<stateDir>/gates/logs`, and the runtime's environment. Exit 0 is `green` and any other exit `red`. A timeout is `not-run`, and a failed setup makes every gate `not-run`. Any process a command leaves behind is killed when it ends. A stop kills the running group, and the stop is returned. Runs are bounded by `gateConcurrency`; the caller journals them.
+- **`rt.RunGates(ctx, label, commit, setup, gates)`** runs a plan's declared gate commands on a clean detached checkout of `commit` at `<stateDir>/gates/<key>`, which is removed afterwards. It runs `setup` first, then each gate in order. Each command runs through `sh` in its own process group, with stdin `/dev/null`, its output logged under `<stateDir>/gates/logs`, and the runtime's environment less the variables that point git elsewhere (`GIT_DIR` and the like). Setup runs under `gateTimeout`. Exit 0 is `green` and any other exit `red`. A timeout is `not-run`, and a failed setup makes every gate `not-run`. Any process a command leaves behind is killed when it ends. A stop kills the running group, and the stop is returned. Runs are bounded by `gateConcurrency`; the caller journals them.
 - **`rt.Log`** and **`rt.Args`**: `Args` is the config's `args`, passed through.
 
 `opts` mirrors the JavaScript: `label`, `phase` (telemetry only), `model`, `effort`, `agentType`, `isolation`, `schema`.
@@ -305,7 +305,6 @@ Every call that spawned and returns a value or a null reports the paths it left 
 
 ### Not in this unit
 
-- Gates on a clean checkout: `declared-gates`.
 - Cleanup's ignored-file policy: `code-merge-cleanup`.
 - The `Retains:` move: `retained-artefacts-impl`.
 - A stop file, status readers and detaching: `runtime-cli-drive`.

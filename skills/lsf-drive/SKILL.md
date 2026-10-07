@@ -139,6 +139,7 @@ Some decisions are not the plan's to carry out. Before relaunching, classify eac
 | `wave-cap` return (no escalation) | `phronithm:lsf-implement` again, `planSha` from the return's top-level `planSha`, no decisions |
 | `paused` return (no escalation) | Nothing until the requester resumes; then delete the ref (see *Pause*) and relaunch as for `wave-cap` |
 | Everything else: `cycle`, `unit-over-budget`, `gate-non-convergence`, `merge-conflict-unresolvable`, `merge-regression`, `environment-gate-drift`, `gate-not-run`, `no-ready-unit`, `standing-obligation-undischarged`, `agent-null`, `precondition`, `invalid-plan`, `unserialised-overlap`, `done-condition-unevaluable` (the decision is the rewritten condition), and `plan-defect-unabsorbed` otherwise | `phronithm:lsf-implement` again, with the decisions |
+| `declared-gates-changed` (Go runtime) | Again, with no decision when the changed block is intended (the relaunch takes it); otherwise with a decision restoring it |
 
 A mixed agenda takes the first matching row: the run returns to Phase 2, and every other decision travels in the startup prompt — one `Decision:` line per item — for the Phase 2 session to carry into the plan through `phronithm:breakdown`.
 
@@ -158,7 +159,7 @@ The relaunch starts a new ledger file, named by its `planSha`; the previous laun
 
 An `environment-gate-drift` stop is not answered by a decision: either the environment is restored to the pin the plan records, and the relaunch carries no decision, or the requester re-pins the gate, and the decision says so for the re-plan to amend the plan's gate entry (amendment kind `gate-repin`).
 
-A `gate-not-run` stop is not answered by a decision either: a relaunch re-runs the unit and meets the same gate. The requester changes the environment or the project so the gate completes within a stage, and the relaunch carries no decision. The unit is not finished by hand (*What the session never does*).
+A `gate-not-run` stop is not answered by a decision either: a relaunch re-runs the unit and meets the same gate. The requester changes the environment or the project so the gate completes (within a stage; with declared gates, within the gate's timeout), and the relaunch carries no decision. The unit is not finished by hand (*What the session never does*).
 
 A `precondition` or `invalid-plan` stop names a defect the session can usually see from the shell (wrong branch, a block without its fence, a scope pair with no edge). Fix the repo state through the tool that owns it — `phronithm:breakdown` re-plan mode for the plan, a decision for the decision log, a checkout for the branch — commit, and relaunch with the new SHA and no decision.
 

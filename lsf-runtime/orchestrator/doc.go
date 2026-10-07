@@ -265,10 +265,12 @@
 //     `gates`: a stage's report of a declared command with another status is
 //     a gate-misreported record, and a declared gate it omits or reports
 //     not-run raises no gate-omitted or gate-not-run. A runtime not-run is
-//     gate-not-run, a failed gate run a stage-fault. A merge that differs
+//     gate-not-run; a gate run that cannot start (an unresolvable tree, a
+//     failed checkout) is a stage-fault. A merge that differs
 //     from the unit's last gated tree only at its completion report reuses
 //     that result. Design units run no unit-level gates; their merges are
 //     gated. A decision re-plan runs before the first load, so a gate block
-//     it changes becomes the baseline. JS has none of this; an undeclared
+//     it changes becomes the baseline: a requester's change to the block is
+//     made by decision, and only the wave re-plan's prompt forbids editing it. JS has none of this; an undeclared
 //     plan's prompts and steps are unchanged (promptparity).
 package orchestrator

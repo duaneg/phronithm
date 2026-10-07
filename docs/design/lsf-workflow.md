@@ -38,10 +38,8 @@ Documented behaviour this design relies on:
   termination, direct edits, ledger) stages and commits only its own files by
   pathspec. It never uses `add -A`, `commit -a`, `stash`, `clean` or
   `reset --hard` there: an unscoped commit once swept a requester's
-  `CLAUDE.md` edit into a ledger commit. In the Workflow script a regressed
-  merge is undone with `git reset --merge`, which keeps unrelated uncommitted
-  changes; the Go runtime with declared gates gates a merge before committing
-  it, so it has nothing to undo.
+  `CLAUDE.md` edit into a ledger commit. A regressed merge is undone with
+  `git reset --merge`, which keeps unrelated uncommitted changes.
 - **Resume replays the longest unchanged prefix of `agent()` calls**, keyed on
   prompt text in call order. The first call whose prompt differs re-runs, and so
   does everything after it.
@@ -195,9 +193,7 @@ carries its own unit plan template and stages instead:
    in a `lsf-gates` block ([plan graph](${CLAUDE_PLUGIN_ROOT}/docs/plan-graph.md)),
    the stage does not run them as a final check. It returns `gates` empty,
    and the runtime runs the declared gates itself, on a clean detached
-   checkout of the commit the stage returns, with no tool time limit. This
-   closes two gaps: a stage reporting `green` for a gate it never ran, and a
-   gate longer than the Bash tool's limit.
+   checkout of the commit the stage returns, with no tool time limit.
    - The runtime's results supersede the stage's. A declared gate the stage
      reports with a different status is a `gate-misreported` record.
    - A declared gate the stage omits, or reports `not-run`, raises no
@@ -205,13 +201,14 @@ carries its own unit plan template and stages instead:
    - A gate the runtime itself could not complete (its timeout, a failed
      setup) is `gate-not-run`.
    - An identical tree is gated once. The result is journaled, so a relaunch
-     replays it, except a set with a gate not run, which reruns.
+     replays it, red included, except a set with a gate not run, which
+     reruns.
    - The runtime gates a design unit's merge, but not the unit itself.
 4. **review** stage over the branch diff: one critique-code gate at the
    Critical-only bar and lens review per unit type, in parallel. No separate
    static-analysis stage: the project's own gates (linters, type checks) run
-   in the implement stage, whose done conditions require them green, and
-   again after each merge. Both reviewers are given the gate runs at the
+   in the implement stage, or with declared gates in the runtime, and again
+   at each merge. Both reviewers are given the gate runs at the
    branch's HEAD — with declared gates the runtime's, each failing gate with
    its output tail; otherwise the implement stage's, or after a code fix the
    fix stage's, which re-runs every gate the implement stage ran and returns the
@@ -325,7 +322,11 @@ before committing it: git's merge of HEAD and the unit for a clean merge,
 the staged resolution for a conflicted one.
 - A red tree is `regressed` and a STOP, and nothing is committed: a resolved
   merge in progress is aborted. Later units still merge.
-- A tree whose gates the runtime could not run is `gate-not-run`.
+- A tree whose gates the runtime could not run, with none red, is
+  `gate-not-run`.
+- The branch moving during the gates re-gates the new merge once; a second
+  move faults. A merge commit whose tree no run covers, raced or adopted, is
+  gated when met, and faults if red.
 - A merge that differs from the unit's last gated tree only at its
   completion report reuses that result.
 - A unit the stage does not merge has its outcome journaled, so a resumed
