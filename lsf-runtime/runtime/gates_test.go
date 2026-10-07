@@ -229,8 +229,10 @@ func TestRunGatesRegistersAndCleansUp(t *testing.T) {
 	bg, ready := filepath.Join(dir, "bg"), filepath.Join(dir, "ready")
 	var matched bool
 	var runs []GateRun
+	checked := make(chan struct{})
 	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
 		go func() {
+			defer close(checked)
 			waitFor(t, 5*time.Second, "gate to start", func() bool { _, err := os.Stat(ready); return err == nil })
 			var kids map[string]int
 			json.Unmarshal([]byte(readFile(t, cfg, "children.json")), &kids)
@@ -246,6 +248,7 @@ func TestRunGatesRegistersAndCleansUp(t *testing.T) {
 		})
 		return nil, err
 	})
+	<-checked
 	if !matched {
 		t.Error("no live gate shell matched its children.json marker")
 	}
