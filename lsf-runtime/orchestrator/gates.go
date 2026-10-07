@@ -267,6 +267,36 @@ func (o *orch) declaredGates(ctx context.Context, at plan.At, sha string, report
 	return declaredRun{gr: gatesRun{by: "The runtime, on a clean checkout,", gates: gates}, tree: set.Tree}, sigs, false, nil
 }
 
+// mergeStep runs the merge step. A result with a regressed unit (declared
+// gates only) is returned but not journaled, so a relaunch reruns the step:
+// it adopts the merges committed, and the regressed unit's gates replay
+// from their own record, or rerun once that record is gone or was never
+// kept (a gate not run).
+func (l *launch) mergeStep(ctx context.Context, label string, in mergeInput) (*ret[mergeResult], string, error) {
+	var unjournaled json.RawMessage
+	stage := l.mergeStage(in)
+	m, fault, err := step[mergeResult](ctx, l.orch, label, in, func(ctx context.Context, label string, interrupted bool) (json.RawMessage, error) {
+		v, err := stage(ctx, label, interrupted)
+		if err != nil {
+			return nil, err
+		}
+		var r struct {
+			Result mergeResult `json:"result"`
+		}
+		if json.Unmarshal(v, &r) == nil && slices.ContainsFunc(r.Result.Merges, func(x plan.Merge) bool { return x.Status == "regressed" }) {
+			unjournaled = v
+			return nil, errMergeNotJournaled
+		}
+		return v, nil
+	})
+	if err == nil && unjournaled != nil {
+		return decode[mergeResult](l.rt, label, unjournaled), "", nil
+	}
+	return m, fault, err
+}
+
+var errMergeNotJournaled = errors.New("a unit regressed; the merge is not journaled")
+
 // declaredMergeSignals rewrites the merge signals of a declared-gates merge
 // (D26): a regressed merge failed its gates before anything was committed,
 // and one whose gates the runtime could not run stops as gate-not-run.

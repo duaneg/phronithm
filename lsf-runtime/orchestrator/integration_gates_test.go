@@ -122,3 +122,80 @@ func TestOnRuntimeDeclaredGates(t *testing.T) {
 	eq(t, gateRuns(), 2, "every gate run replayed")
 	eq(t, r.git("for-each-ref", "--format=%(refname) %(objectname)")+"\nHEAD "+r.head(), tips, "no new commit")
 }
+
+// A merge that regresses is not journaled: once the requester fixes the
+// environment and removes the red gate record (docs/plan-graph.md), the
+// relaunch gates the merge again and merges, rather than replay the stop.
+func TestOnRuntimeRegressedMergeRelaunch(t *testing.T) {
+	r := newGitRepo(t)
+	const planPath = "docs/plans/f-breakdown.md"
+	allow := filepath.Join(t.TempDir(), "allow")
+	// Red only on a tree holding the decision log, which the unit's branch
+	// predates: the unit gates green, its merge red.
+	gates := "gates:\n  - name: env\n    command: \"test -e " + allow + " || ! test -e docs/plans/f-decisions.md\"\n"
+	p := orchtest.Graph("", orchtest.Unit("A"))
+	r.commit("docs/architecture/f.md", "# Architecture\n", "architecture")
+	planSha := r.commit(planPath, planDocFor(p)+orchtest.GatesBlock(gates), "plan")
+	r.git("checkout", "-q", "-b", "work-A")
+	r.commit("src/A/a.go", "package a\n", "unit A")
+	r.git("checkout", "-q", "integration")
+
+	answers := []answer{
+		{Contains: "The requester has answered the questions", Return: R(M{"planSha": planSha, "amendments": []any{}, "overBudget": []any{},
+			"verdicts": []M{{"id": "d1", "verdict": "no-change", "statement": "noted"}}, "directEdits": []any{}, "summary": "applied"})},
+		{Contains: "Write the implementation plan for this unit", Shell: "git reset -q --hard work-A", Return: R(M{"branch": "@branch", "sha": "@head", "path": "docs/plans/A-plan.md", "bytes": 0, "readings": []any{}})},
+		{Contains: "Critique the implementation plan at", Return: orchtest.NoFindings()},
+		{Contains: "Run the phronithm:critique skill with type critique-code", Return: orchtest.NoFindings()},
+		{Contains: "Run the phronithm:review skill", Return: orchtest.NoFindings()},
+		{Contains: "Implementation plan: docs/plans/", Shell: "git reset -q --hard work-A", Return: R(orchtest.Implemented("A", M{"branch": "@branch", "sha": "@head", "gates": []any{}}))},
+		{Contains: "has merged these units into", Return: R(M{"invalidations": []any{}, "notes": []any{}, "amendments": []any{}})},
+		{Contains: "Read its Meta-Tasks and Standing Obligations sections", Return: R(M{"planSha": "@head", "appendedUnits": []any{}, "directEdits": []any{}})},
+		{Contains: "For each standing obligation", Return: R(M{"obligations": []any{}})},
+	}
+	dir := t.TempDir()
+	tablePath := filepath.Join(dir, "table.json")
+	b, _ := plan.MarshalJS(answers, "")
+	os.WriteFile(tablePath, b, 0o644)
+	callDir := filepath.Join(dir, "calls")
+	os.Mkdir(callDir, 0o755)
+	t.Setenv("LSF_FAKE_CLAUDE_TABLE", tablePath)
+	t.Setenv("LSF_FAKE_CLAUDE_STATE", callDir)
+	t.Setenv("LSF_CLAUDE_BIN", "")
+	args, _ := plan.MarshalJS(M{"name": "f", "planSha": planSha, "architectureDoc": "docs/architecture/f.md", "integrationBranch": "integration",
+		"decisions": []M{{"id": "d1", "question": "q", "decision": "yes"}}}, "")
+	cfg := lsfrt.Config{
+		StateDir: filepath.Join(dir, "state"), Repo: r.dir, ClaudeBin: os.Args[0], Args: args,
+		Roles: map[string]lsfrt.Role{"worker": {Tools: "default", PermissionMode: "dontAsk"}}, DefaultRole: "worker",
+	}
+	launch := func() view {
+		t.Helper()
+		sum, err := lsfrt.Run(context.Background(), cfg, Body)
+		if err != nil || sum.StopReason != lsfrt.StopReturned {
+			t.Fatalf("launch: %v %+v", err, sum)
+		}
+		var v view
+		if err := json.Unmarshal(sum.Outcome, &v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+
+	first := launch()
+	eq(t, strings.Join(first.stopKinds(), ","), "merge-regression", first.raw)
+	contains(t, first.stops()[0].Statement, "failed its gates")
+	eq(t, r.git("log", "--merges", "--oneline", "integration"), "", "nothing merged")
+
+	os.WriteFile(allow, nil, 0o644)
+	records, _ := filepath.Glob(filepath.Join(cfg.StateDir, "journal", "gates_*.json"))
+	removed := 0
+	for _, rec := range records {
+		if b, _ := os.ReadFile(rec); strings.Contains(string(b), `"status":"red"`) {
+			os.Remove(rec)
+			removed++
+		}
+	}
+	eq(t, removed, 1, "the merge's red gate record")
+	again := launch()
+	eq(t, again.Status, "complete", again.raw)
+	eq(t, r.git("log", "--merges", "--format=%(trailers:key=Lsf-Unit,valueonly)", "integration"), "A")
+}

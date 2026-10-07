@@ -235,7 +235,10 @@
 //     not run a gate (mergeResult.GateNotRun) to a gate-not-run stop.
 //     plan.SignalsFromMerge keeps the JS statement ("was clean but the test
 //     suite failed …; merge undone"), which describes JS's merge agent; an
-//     undeclared Go merge never reports regressed. Each unit the merge step
+//     undeclared Go merge never reports regressed. A merge step result with a
+//     regressed unit is not journaled: a relaunch reruns the step, adopting
+//     what it committed and re-gating the regressed unit (its gate record
+//     replays unless removed). In either mode, each unit the merge step
 //     does not merge (regressed, unresolvable, refused) is journaled as a
 //     nested step merge-outcome:<label>:<unit>, so a rerun resuming a later
 //     unit's merge in progress replays it rather than fail for want of a

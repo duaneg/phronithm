@@ -92,7 +92,7 @@ func (rt *Runtime) RunGates(ctx context.Context, label, commit, setup string, ga
 	defer rt.gateRemove(ctx, label, dir)
 	rt.event("gates-start", map[string]any{"label": label, "commit": commit, "gates": len(gates)})
 	t0 := time.Now()
-	logBase := filepath.Join(rt.cfg.StateDir, "gates", "logs", key+"-"+rt.launchID)
+	logBase := filepath.Join(rt.cfg.StateDir, "gates", "logs", fmt.Sprintf("%s-%s-%d", key, rt.launchID, rt.gateSeq.Add(1)))
 
 	runs := make([]GateRun, len(gates))
 	notRun := ""

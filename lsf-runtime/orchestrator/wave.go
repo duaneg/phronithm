@@ -121,7 +121,7 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 			in.Units = append(in.Units, mergeUnitIn{Unit: r.unit, Branch: r.branch, Sha: r.reportSha, Report: r.completionPath, GatedTree: r.gatedTree})
 		}
 		label := "merge:w" + itoa(wave)
-		m, fault, err := step[mergeResult](ctx, l.orch, label, in, l.mergeStage(in))
+		m, fault, err := l.mergeStep(ctx, label, in)
 		if err != nil {
 			return nil, true, false, err
 		}

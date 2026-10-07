@@ -302,6 +302,10 @@ type MergeResult struct {
 // SignalsFromMerge maps the merge stage's result: unresolvable and
 // regressed merges stop; a conflict resolved mechanically is a record; any
 // other status is outside the schema and stops (D20).
+//
+// The orchestrator rewrites a declared-gates regression's kind and
+// statement on the returned signals (orchestrator D26), so nothing on a
+// Signal may be derived from them here.
 func SignalsFromMerge(r MergeResult, at At) []*Signal {
 	out := []*Signal{}
 	for _, m := range r.Merges {
