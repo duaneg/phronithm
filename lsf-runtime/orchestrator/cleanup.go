@@ -50,20 +50,26 @@ func (o *orch) cleanupStage(in cleanupInput) stageFn {
 		for _, u := range in.Units {
 			for _, wl := range u.Worktrees {
 				r, err := o.rt.RemoveWorktree(ctx, wl, in.IntegrationBranch, strings.HasPrefix(wl, "completion-report:"))
+				// Logged as it happens: a later failure fails the step, and
+				// its value with the list would be lost.
+				if len(r.Paths) > 0 {
+					o.rt.Log(fmt.Sprintf("%s: %s: removed %s", label, wl, strings.Join(r.Paths, ", ")))
+				}
 				if _, stop := lsfrt.IsStop(err); stop {
 					return nil, err
 				}
 				switch {
 				case err != nil:
 					errs = append(errs, err)
-					res.Kept = append(res.Kept, wl+": "+err.Error())
+					o.rt.Log(fmt.Sprintf("%s: %s: %v", label, wl, err))
 				case r.Removed:
 					res.Removed++
 					if len(r.Paths) > 0 {
 						res.Paths = append(res.Paths, removedPaths{Label: wl, Paths: r.Paths})
 					}
-				case r.Kept != "absent":
+				case r.Kept != "absent" && r.Kept != "branch retained":
 					res.Kept = append(res.Kept, wl+": "+r.Kept)
+					o.rt.Log(fmt.Sprintf("%s: kept %s: %s", label, wl, r.Kept))
 				}
 			}
 		}

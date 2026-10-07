@@ -205,16 +205,17 @@
 //     it likes.
 //   - D25. Cleanup is a journaled code step (cleanup.go), run beside the
 //     wave gate. Its input is each merged unit's worktree labels from the
-//     run of its stages that merged (noteWorktree: every isolated call,
-//     seeded or not, and the completion-report step, sorted so a
-//     relaunch's input is the same). Each worktree is removed with every
+//     run of its stages that merged (noteWorktree: every isolated call
+//     made or replayed, not a seeded one, whose worktree is an earlier
+//     launch's, and the completion-report step, sorted so a relaunch's
+//     input is the same). Each worktree is removed with every
 //     untracked, ignored and uncommitted file in it
 //     (lsfrt.Runtime.RemoveWorktree, which keeps one whose branch is not
 //     merged or that is not the runtime's), and the completion-report
 //     branch is deleted; the stage branches stay, since a resume reads the
-//     unit branch's tip. The value lists the removed paths per worktree and
-//     what was kept and why; the log carries them. A failure is logged, not
-//     signalled. JS's cleanup agent matches worktree-wf_* branches the
+//     unit branch's tip. The step logs each removal's paths and each kept
+//     worktree as it runs, a failed removal's included, and its value
+//     lists them for a replay. A failure is logged, not signalled. JS's cleanup agent matches worktree-wf_* branches the
 //     runtime never makes, and its denials and residue were ledger rows;
 //     the removed-path list takes their place.
 package orchestrator

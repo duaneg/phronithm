@@ -74,10 +74,9 @@ func newOrch(rt Runtime, c *runCtx, seed map[string]json.RawMessage) *orch {
 // gets a launch-unique label (unique): the nth use of a label is `label#n`.
 // It returns the call's result and the label used.
 func (o *orch) agent(ctx context.Context, prompt string, opts lsfrt.Opts) (lsfrt.CallResult, string, error) {
-	if opts.Isolation == "worktree" {
-		defer func(l *lsfrt.Opts) { o.noteWorktree(l.Label) }(&opts)
-	}
 	if s, ok := o.seed[opts.Label]; ok {
+		// A seed stands in for a call: the label's worktree, if any, is an
+		// earlier launch's, not this one's to clean up (D25).
 		o.rt.Log(opts.Label + ": seeded from args.seed; agent not spawned")
 		cr := lsfrt.CallResult{Value: stripSeedPause(s)}
 		// The runtime validates every return it makes; a seed it never saw.
@@ -90,6 +89,9 @@ func (o *orch) agent(ctx context.Context, prompt string, opts lsfrt.Opts) (lsfrt
 		return cr, opts.Label, nil
 	}
 	opts.Label = o.unique(opts.Label)
+	if opts.Isolation == "worktree" {
+		o.noteWorktree(opts.Label)
+	}
 	cr, err := o.rt.Call(ctx, prompt, opts)
 	return cr, opts.Label, err
 }

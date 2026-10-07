@@ -438,7 +438,7 @@ func TestOnRuntimeCodeStages(t *testing.T) {
 		t.Errorf("branches after cleanup: %s", branches)
 	}
 	logText, _ := os.ReadFile(filepath.Join(cfg.StateDir, "log.txt"))
-	match(t, string(logText), `wave 1: implement:A: removed .*build\.log`)
+	match(t, string(logText), `cleanup:w1: implement:A: removed .*build\.log`)
 	eq(t, r.git("log", "-1", "--format=%(trailers:key=Lsf-Unit,valueonly)", mergeSha), "A")
 	match(t, trailers(mergeSha), `^merge:w1$`)
 	book := r.git("log", "-1", "--format=%H", "integration", "--", "docs/plans/f-archive.md")

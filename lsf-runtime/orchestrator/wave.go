@@ -184,6 +184,9 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 		gl, cl := "review-gate:w"+itoa(wave), "cleanup:w"+itoa(wave)
 		cin := cleanupInput{Wave: wave, IntegrationBranch: c.integrationBranch, Units: []cleanupUnitIn{}}
 		for _, m := range merged {
+			if len(m.worktrees) == 0 {
+				continue
+			}
 			// Sorted: parallel stages record their labels in either order, and
 			// the step's input must be the same on a relaunch to replay.
 			cin.Units = append(cin.Units, cleanupUnitIn{Unit: m.unit, Worktrees: slices.Sorted(slices.Values(m.worktrees))})
@@ -224,13 +227,9 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 		case cfault != "":
 			l.rt.Log(fmt.Sprintf("wave %d: worktree cleanup failed: %s", wave, cfault))
 		case cu != nil:
+			// The step logged each removal's paths and each kept worktree as
+			// it ran; its value keeps them for a replay.
 			l.rt.Log(fmt.Sprintf("wave %d: removed %d merged worktree(s), kept %d", wave, cu.Result.Removed, len(cu.Result.Kept)))
-			for _, p := range cu.Result.Paths {
-				l.rt.Log(fmt.Sprintf("wave %d: %s: removed %s", wave, p.Label, strings.Join(p.Paths, ", ")))
-			}
-			for _, k := range cu.Result.Kept {
-				l.rt.Log(fmt.Sprintf("wave %d: kept %s", wave, k))
-			}
 		default:
 			l.rt.Log(fmt.Sprintf("wave %d: worktree cleanup returned null", wave))
 		}

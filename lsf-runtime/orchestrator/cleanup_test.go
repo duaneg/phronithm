@@ -34,15 +34,18 @@ func TestCleanupInputIsMergedUnitsWorktrees(t *testing.T) {
 // records its calls.
 type removals struct {
 	gitRT
-	answer map[string]lsfrt.WorktreeRemoval
-	errs   map[string]error
-	calls  []string
+	answer  map[string]lsfrt.WorktreeRemoval
+	errs    map[string]error
+	partial lsfrt.WorktreeRemoval // returned with an error
+	calls   []string
 }
 
 func (r *removals) RemoveWorktree(ctx context.Context, label, integration string, deleteBranch bool) (lsfrt.WorktreeRemoval, error) {
 	r.calls = append(r.calls, label+map[bool]string{true: " +branch", false: ""}[deleteBranch]+" @"+integration)
 	if err := r.errs[label]; err != nil {
-		return lsfrt.WorktreeRemoval{Label: label}, err
+		p := r.partial
+		p.Label = label
+		return p, err
 	}
 	return r.answer[label], nil
 }
@@ -88,4 +91,60 @@ func TestCleanupStage(t *testing.T) {
 	if _, ok := lsfrt.IsStop(err); !ok {
 		t.Errorf("a stop is not the step's failure: %v", err)
 	}
+}
+
+// A seeded stage's worktree is an earlier launch's: it is not cleaned up.
+func TestCleanupSkipsSeededStages(t *testing.T) {
+	seed := R(M{"branch": "salvaged-A", "sha": "s", "path": "docs/plans/A-plan.md", "bytes": 0, "readings": []any{}})
+	s := stub(t, twoWaves(), nil, M{"seed": M{"plan:A": seed}})
+	run(t, s)
+	got := []string{}
+	for _, w := range input(t, s, "cleanup:w1")["units"].([]any)[0].(map[string]any)["worktrees"].([]any) {
+		got = append(got, w.(string))
+	}
+	eqs(t, got, []string{"completion-report:A", "critique-code:r1:A", "implement:A", "lens-review:r1:A"})
+}
+
+// A removal that fails after deleting files still has them logged; a
+// prune failure fails the step; the wave logs a cleanup fault and goes on,
+// with no signal.
+func TestCleanupFailures(t *testing.T) {
+	r := newGitRepo(t)
+	rt := &removals{gitRT: gitRT{orchtest.New(t, orchtest.TwoWaves(), nil, nil), r.dir, nil, t.TempDir()},
+		answer: map[string]lsfrt.WorktreeRemoval{}}
+	o := newOrch(rt, runCtxFor(t, nil), nil)
+	in := cleanupInput{Wave: 1, IntegrationBranch: "integration", Units: []cleanupUnitIn{{Unit: "A", Worktrees: []string{"completion-report:A"}}}}
+	rt.errs = map[string]error{"completion-report:A": errors.New("update-ref: locked")}
+	rt.partial = lsfrt.WorktreeRemoval{Removed: true, Paths: []string{"run.log"}}
+	_, err := o.cleanupStage(in)(context.Background(), "cleanup:w1", false)
+	errMatch(t, err, `locked`)
+	if !hasPrefix(rt.Stub.Logs, "cleanup:w1: completion-report:A: removed run.log") {
+		t.Errorf("the deleted path was not logged: %q", rt.Stub.Logs)
+	}
+
+	rt.errs, rt.partial = nil, lsfrt.WorktreeRemoval{}
+	broken := mergeGitRunner{inner: execGit{}, fail: func(a []string) bool { return len(a) > 1 && a[0] == "worktree" && a[1] == "prune" }}
+	o.git = broken
+	_, err = o.cleanupStage(in)(context.Background(), "cleanup:w1", false)
+	errMatch(t, err, `prune`)
+
+	s := stub(t, twoWaves(), Hs{"cleanup": func(Call, *State) any { return errors.New("worktree remove: busy") }}, nil)
+	out := run(t, s)
+	eq(t, out.Status, "complete", "a cleanup fault does not stop the run")
+	if !hasPrefix(s.Logs, "wave 1: worktree cleanup failed: worktree remove: busy") {
+		t.Errorf("logs %q", s.Logs)
+	}
+}
+
+// mergeGitRunner fails the commands fail accepts.
+type mergeGitRunner struct {
+	inner gitRunner
+	fail  func(args []string) bool
+}
+
+func (g mergeGitRunner) run(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	if g.fail(args) {
+		return nil, &gitError{args: args, err: errors.New("failed")}
+	}
+	return g.inner.run(ctx, dir, args...)
 }
