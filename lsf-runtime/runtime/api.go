@@ -71,6 +71,7 @@ type CallResult struct {
 	Denials     []string // the last attempt's permission_denials, "tool: input" truncated
 	Uncommitted []string // paths the call left uncommitted (see uncommitted.go); re-checked on a replay
 	Violations  []string // a null after invalid returns: the last attempt's schema violations
+	Branch      string   // an isolated call's worktree branch, journaled; "" without isolation
 	Attempts    int      // spawns for this call this launch; 0 when replayed
 	CostUSD     float64
 	Replayed    bool

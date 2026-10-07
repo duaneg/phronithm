@@ -22,13 +22,15 @@ import (
 // Parallel recovers a branch's panic or non-stop error to a nil slot and
 // returns the first stop after every branch finishes. Step journals a code
 // step (lsfrt.Runtime.Step). Repo is the main checkout ("" when there is
-// none); Worktree is a code step's own worktree and its branch.
+// none); Worktree is a code step's own worktree and its branch;
+// RemoveWorktree removes a label's merged worktree (lsfrt.Runtime).
 type Runtime interface {
 	Call(ctx context.Context, prompt string, o lsfrt.Opts) (lsfrt.CallResult, error)
 	Parallel(ctx context.Context, thunks []func(context.Context) (json.RawMessage, error)) ([]json.RawMessage, error)
 	Step(ctx context.Context, label string, input []byte, fn func(ctx context.Context, interrupted bool) (json.RawMessage, error)) (json.RawMessage, error)
 	Repo() string
 	Worktree(ctx context.Context, label string) (path, branch string, err error)
+	RemoveWorktree(ctx context.Context, label, integration string, deleteBranch bool) (lsfrt.WorktreeRemoval, error)
 	Log(msg string)
 	Args() json.RawMessage
 }

@@ -231,6 +231,11 @@ func (s *Stub) Worktree(ctx context.Context, label string) (string, string, erro
 	return "", "", fmt.Errorf("orchtest: no worktree for %s", label)
 }
 
+// RemoveWorktree finds nothing: the stub has no repository.
+func (s *Stub) RemoveWorktree(ctx context.Context, label, integration string, deleteBranch bool) (lsfrt.WorktreeRemoval, error) {
+	return lsfrt.WorktreeRemoval{Label: label, Kept: "absent"}, nil
+}
+
 // Parallel runs the thunks in order, or on goroutines when Concurrent. A
 // branch's panic or non-stop error leaves its slot nil; a panic is a
 // harness failure unless ExpectPanic. The first stop is returned after all

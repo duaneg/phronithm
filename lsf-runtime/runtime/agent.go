@@ -28,12 +28,14 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 	if !json.Valid(o.Schema) || len(o.Schema) == 0 || o.Schema[0] != '{' {
 		return CallResult{}, rt.setStop(StopRuntimeError, o.Label+": opts.schema is not a JSON object")
 	}
+	c := &callState{o: o, key: key, skill: skill, sent: withSkill(skill, prompt)}
 	if o.Isolation != "" {
-		if _, err := rt.isolationArgs(o); err != nil {
+		args, err := rt.isolationArgs(o)
+		if err != nil {
 			return CallResult{}, err
 		}
+		c.res.Branch = branchName(args, key)
 	}
-	c := &callState{o: o, key: key, skill: skill, sent: withSkill(skill, prompt)}
 	c.roleName, c.role = rt.cfg.roleFor(o)
 	if rt.cfg.DryRun {
 		argv := buildArgv(o, c.role, "<session-id>")

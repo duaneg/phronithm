@@ -185,14 +185,16 @@ Unit `runtime-core`, plan `docs/plans/runtime-core-plan.md`. Package `lsfrt` in 
   - permission denials;
   - uncommitted paths (see *Uncommitted at return*);
   - for a null after invalid returns, the schema violations;
+  - for an isolated call, its worktree branch;
   - attempts, cost, and whether it was replayed.
 
-  A replay returns the flags, denials and uncommitted paths journaled with the call, and re-checks the paths. The orchestrator calls agents through `rt.Call` and maps these driver events to signals.
+  A replay returns the flags, denials, uncommitted paths and branch journaled with the call, and re-checks the paths. The orchestrator calls agents through `rt.Call` and maps these driver events to signals.
 - **`ValidateOutput(schema, raw)`** is the validator, exported for the returns the runtime did not see: the orchestrator's seeds. An empty schema is no check.
 - **`rt.Parallel(ctx, thunks)`** runs every thunk. A branch's error or panic becomes a nil slot. A stop in any branch is returned once all branches finish.
 - **`rt.Step(ctx, label, input, fn)`** journals a code step (see Journal).
 - **`rt.Repo()`** is the config's `repo`, the main checkout.
 - **`rt.Worktree(ctx, label)`** is a code step's own worktree and its branch: the worktree an agent call with that label and isolation `worktree` gets, created or reused the same way.
+- **`rt.RemoveWorktree(ctx, label, integration, deleteBranch)`** removes a label's worktree when its branch is merged into `integration` (its tip an ancestor), with every untracked, ignored and uncommitted file in it, and lists those paths (a wholly untracked directory as one `dir/` entry). With `deleteBranch` it also deletes the branch. A directory that is not a worktree on the label's branch, a branch not merged, and a directory whose branch is gone are kept, with the reason. The ancestor check is about commits; which labels may lose uncommitted work is the caller's choice.
 - **`rt.Log`** and **`rt.Args`**: `Args` is the config's `args`, passed through.
 
 `opts` mirrors the JavaScript: `label`, `phase` (telemetry only), `model`, `effort`, `agentType`, `isolation`, `schema`.
@@ -295,6 +297,7 @@ Every call that spawned and returns a value or a null reports the paths it left 
   - Creation is serialised. Each git command has a 5-minute timeout and ends on a repeated signal.
   - An existing `wt/<key>` is reused only if it is a worktree on its branch; otherwise the run stops with `runtime-error`.
   - A branch whose directory is gone is re-attached, not reset.
+  - Removal takes the same serialisation and timeouts.
   - Missing `planSha` or `integrationBranch` in `args` stops the run with `runtime-error`.
 
 ### Not in this unit

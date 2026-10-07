@@ -3,6 +3,7 @@ package lsfrt
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -50,7 +51,7 @@ func (rt *Runtime) cwdFor(ctx context.Context, o Opts, key string) (path, branch
 	gctx, cancel := rt.gitContext(ctx)
 	defer cancel()
 	path = filepath.Join(rt.cfg.StateDir, "wt", key)
-	branch = "lsf/" + args.PlanSha[:8] + "/" + refSafe(key)
+	branch = branchName(args, key)
 	if fi, err := os.Stat(path); err == nil && fi.IsDir() {
 		// Reuse only a worktree of this branch: a directory left by a crash
 		// mid-add, or one whose metadata was pruned, is not one.
@@ -78,6 +79,126 @@ func (rt *Runtime) cwdFor(ctx context.Context, o Opts, key string) (path, branch
 	}
 	rt.event("worktree", map[string]any{"label": o.Label, "path": path, "branch": branch})
 	return path, branch, nil
+}
+
+// branchName is the branch of the worktree for journal key key.
+func branchName(args worktreeArgs, key string) string {
+	return "lsf/" + args.PlanSha[:8] + "/" + refSafe(key)
+}
+
+// WorktreeRemoval is what RemoveWorktree did with one label's worktree.
+// Paths are what the removal deleted, relative to the worktree: untracked
+// and ignored files (a wholly untracked directory as one "dir/" entry) and
+// tracked files with uncommitted changes. Kept says why nothing was removed.
+type WorktreeRemoval struct {
+	Label   string   `json:"label"`
+	Path    string   `json:"path"`
+	Branch  string   `json:"branch"`
+	Removed bool     `json:"removed"`
+	Paths   []string `json:"paths,omitempty"`
+	Kept    string   `json:"kept,omitempty"`
+}
+
+// RemoveWorktree removes label's worktree when its branch is merged into
+// integration (its tip an ancestor of the branch), with every untracked,
+// ignored and uncommitted file in it, and, with deleteBranch, the branch.
+// A directory that is not a worktree on the label's branch, or a branch
+// not merged, is kept. The ancestor check is about commits: it does not
+// protect uncommitted work, which the caller's choice of labels must. A
+// git failure is an error, not a stop.
+func (rt *Runtime) RemoveWorktree(ctx context.Context, label, integration string, deleteBranch bool) (WorktreeRemoval, error) {
+	o := Opts{Label: label, Isolation: "worktree"}
+	key := journalKey(label)
+	out := WorktreeRemoval{Label: label}
+	args, err := rt.isolationArgs(o)
+	if err != nil {
+		return out, err
+	}
+	if strings.HasPrefix(integration, "-") || integration == "" {
+		return out, fmt.Errorf("%s: integration branch %q is not a branch name", label, integration)
+	}
+	select {
+	case rt.wtSem <- struct{}{}:
+	case <-rt.stopCh:
+		return out, rt.stopErr()
+	case <-ctx.Done():
+		return out, &StopError{Reason: StopCancelled}
+	}
+	defer func() { <-rt.wtSem }()
+	gctx, cancel := rt.gitContext(ctx)
+	defer cancel()
+	out.Path = filepath.Join(rt.cfg.StateDir, "wt", key)
+	out.Branch = branchName(args, key)
+	ref := "refs/heads/" + out.Branch
+	tipB, err := gitStdout(gctx, rt.cfg.Repo, "rev-parse", "--verify", "--quiet", ref)
+	tip := strings.TrimSpace(string(tipB))
+	if err != nil && exitStatus(err) != 1 {
+		return out, fmt.Errorf("%s: rev-parse %s: %w", label, ref, err)
+	}
+	fi, statErr := os.Stat(out.Path)
+	dirExists := statErr == nil && fi.IsDir()
+	switch {
+	case !dirExists && tip == "":
+		out.Kept = "absent"
+		return out, nil
+	case dirExists && tip == "":
+		out.Kept = "branch missing"
+		return out, nil
+	}
+	merged := gitRun(gctx, rt.cfg.Repo, "merge-base", "--is-ancestor", tip, "refs/heads/"+integration)
+	if merged != nil {
+		if exitStatus(merged) != 1 {
+			return out, fmt.Errorf("%s: merge-base: %w", label, merged)
+		}
+		out.Kept = "not merged into " + integration
+		return out, nil
+	}
+	if dirExists {
+		top, err1 := gitStdout(gctx, out.Path, "rev-parse", "--show-toplevel")
+		head, err2 := gitStdout(gctx, out.Path, "symbolic-ref", "--short", "HEAD")
+		resolved, _ := filepath.EvalSymlinks(out.Path)
+		if err1 != nil || err2 != nil || strings.TrimSpace(string(top)) != resolved || strings.TrimSpace(string(head)) != out.Branch {
+			out.Kept = "not a worktree on " + out.Branch
+			return out, nil
+		}
+		others, err := gitStdout(gctx, out.Path, "ls-files", "-z", "--others", "--directory")
+		if err != nil {
+			return out, fmt.Errorf("%s: ls-files: %w", label, err)
+		}
+		dirty, err := gitStdout(gctx, out.Path, "diff", "-z", "--name-only", "HEAD")
+		if err != nil {
+			return out, fmt.Errorf("%s: diff: %w", label, err)
+		}
+		for _, p := range strings.Split(string(others)+string(dirty), "\x00") {
+			if p != "" {
+				out.Paths = append(out.Paths, p)
+			}
+		}
+		if b, err := gitOut(gctx, rt.cfg.Repo, "worktree", "remove", "--force", out.Path); err != nil {
+			return out, fmt.Errorf("%s: worktree remove: %w: %s", label, err, strings.TrimSpace(string(b)))
+		}
+		out.Removed = true
+	}
+	if deleteBranch {
+		if b, err := gitOut(gctx, rt.cfg.Repo, "update-ref", "-d", ref, tip); err != nil {
+			return out, fmt.Errorf("%s: delete %s: %w: %s", label, out.Branch, err, strings.TrimSpace(string(b)))
+		}
+		out.Removed = true
+	}
+	if !out.Removed {
+		out.Kept = "absent"
+	}
+	rt.event("worktree-removed", map[string]any{"label": label, "path": out.Path, "branch": out.Branch, "removed": out.Removed, "paths": len(out.Paths)})
+	return out, nil
+}
+
+// exitStatus is a command's exit status, -1 when it did not exit.
+func exitStatus(err error) int {
+	var x *exec.ExitError
+	if errors.As(err, &x) {
+		return x.ExitCode()
+	}
+	return -1
 }
 
 // gitTimeout bounds one worktree git command; a hung git (a stale lock, a
