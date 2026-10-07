@@ -172,7 +172,7 @@ func TestMergeConflictResolved(t *testing.T) {
 // in an aborted merge: no merge in progress, only the requester's own
 // untracked file left; the next unit still merges.
 func TestMergeConflictNotAccepted(t *testing.T) {
-	conflicting := map[string]map[string]string{"A": {"shared.txt": "from A\n"}, "B": {"shared.txt": "from B\n"}, "C": {"src/c.go": "package c\n"}}
+	conflicting := map[string]map[string]string{"A": {"shared.txt": "from A\n"}, "B": {"shared.txt": "from B\n", "src/b2.go": "package b\n"}, "C": {"src/c.go": "package c\n"}}
 	for name, h := range map[string]orchtest.Handler{
 		"unresolvable": func(orchtest.Call, *orchtest.State) any {
 			return R(M{"status": "unresolvable", "files": []string{"shared.txt"}, "statement": "needs judgement"})
@@ -180,9 +180,8 @@ func TestMergeConflictNotAccepted(t *testing.T) {
 		"markers left": func(orchtest.Call, *orchtest.State) any {
 			return R(M{"status": "resolved", "files": []string{"shared.txt"}, "statement": "s"})
 		},
-		"markers staged":       nil, // set below
-		"another path staged":  nil,
-		"a new untracked file": nil,
+		"markers staged":         nil, // set below
+		"a clean path rewritten": nil,
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newMergeFixture(t, conflicting, "A", "B", "C")
@@ -200,10 +199,9 @@ func TestMergeConflictNotAccepted(t *testing.T) {
 					f.r.git("add", "shared.txt")
 					return R(M{"status": "resolved", "files": []string{"shared.txt"}, "statement": "s"})
 				}
-			case "another path staged":
-				h = resolve(func() { f.r.write("README.md", "changed\n"); f.r.git("add", "README.md") })
-			case "a new untracked file":
-				h = resolve(func() { f.r.write("scratch.txt", "x\n") })
+			case "a clean path rewritten":
+				// src/b2.go merged clean; the call stages other content.
+				h = resolve(func() { f.r.write("src/b2.go", "tampered\n"); f.r.git("add", "src/b2.go") })
 			}
 			f.r.write("notes.txt", "requester's\n")
 			res, err := runMerge(t, mergeOrch(t, f, nil, map[string]orchtest.Handler{"merge-conflict": h}), f.in("A", "B", "C"), false)
@@ -215,14 +213,7 @@ func TestMergeConflictNotAccepted(t *testing.T) {
 			if f.r.mergeInProgress() {
 				t.Error("merge in progress")
 			}
-			want := "?? notes.txt"
-			if name == "a new untracked file" {
-				want = "?? notes.txt\n?? scratch.txt"
-			}
-			if name == "another path staged" {
-				f.r.git("checkout", "--", "README.md")
-			}
-			eq(t, f.r.git("status", "--porcelain"), want)
+			eq(t, f.r.git("status", "--porcelain"), "?? notes.txt")
 			notContains(t, f.r.read(mPlan), "### B — complete")
 		})
 	}
@@ -533,4 +524,148 @@ func (r *gitRepo) commitOn(branch, path string) string {
 	sha := r.commit(path, "x\n", "side")
 	r.git("checkout", "-q", "integration")
 	return sha
+}
+
+// A conflict call that touches the checkout beyond the merge (stages or
+// writes another path, deletes or reverts the requester's work) is a
+// fault naming the paths, with the merge aborted: not a resolution to
+// decline quietly.
+func TestMergeConflictCallOutside(t *testing.T) {
+	both := map[string]map[string]string{"A": {"shared.txt": "from A\n"}, "B": {"shared.txt": "from B\n"}}
+	for name, tc := range map[string]struct {
+		act  func(r *gitRepo)
+		want string
+	}{
+		"another path staged":    {func(r *gitRepo) { r.write("README.md", "changed\n"); r.git("add", "README.md") }, `\["README\.md"\]`},
+		"a new untracked file":   {func(r *gitRepo) { r.write("scratch.txt", "x\n") }, `\["scratch\.txt"\]`},
+		"the requester's file":   {func(r *gitRepo) { os.Remove(filepath.Join(r.dir, "notes.txt")) }, `\["notes\.txt"\]`},
+		"the requester's change": {func(r *gitRepo) { r.git("checkout", "--", "README.md") }, `\["README\.md"\]`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newMergeFixture(t, both, "A", "B")
+			f.r.write("notes.txt", "requester's\n")
+			if name == "the requester's change" {
+				f.r.write("README.md", "requester's edit\n")
+			}
+			o := mergeOrch(t, f, nil, map[string]orchtest.Handler{"merge-conflict": func(orchtest.Call, *orchtest.State) any {
+				f.r.write("shared.txt", "from A\nfrom B\n")
+				f.r.git("add", "shared.txt")
+				tc.act(f.r)
+				return R(M{"status": "resolved", "files": []string{"shared.txt"}, "statement": "s"})
+			}})
+			_, err := runMerge(t, o, f.in("A", "B"), false)
+			errMatch(t, err, `the conflict call changed `+tc.want+`, outside the merge of B`)
+			if f.r.mergeInProgress() {
+				t.Error("merge in progress")
+			}
+		})
+	}
+}
+
+// A merge git stops without conflict (a pre-merge-commit hook refusing it)
+// is a fault with git's reason, not the conflict call's.
+func TestMergeHookRefused(t *testing.T) {
+	f := newMergeFixture(t, distinct, "A")
+	f.r.hook("pre-merge-commit", "echo refused >&2; exit 1")
+	calls := 0
+	_, err := runMerge(t, mergeOrch(t, f, nil, map[string]orchtest.Handler{"merge-conflict": func(orchtest.Call, *orchtest.State) any {
+		calls++
+		return nil
+	}}), f.in("A"), false)
+	errMatch(t, err, `the merge of A stopped with no conflict`)
+	eq(t, calls, 0)
+	if f.r.mergeInProgress() {
+		t.Error("merge in progress")
+	}
+}
+
+// Interrupted reruns: a foreign merge in progress is still not this
+// step's (no trailer), and is left; a merge commit that failed
+// verification is still a fault, not adopted; a unit recorded by an
+// earlier run that failed later is not recorded again, nor does the dry
+// run trip on its moved entry.
+func TestMergeInterruptedEdges(t *testing.T) {
+	f := newMergeFixture(t, distinct, "A")
+	f.r.git("checkout", "-q", "-b", "other", "integration~1")
+	f.r.commit(mPlan, "other\n", "other")
+	f.r.git("checkout", "-q", "integration")
+	cmd := exec.Command("git", "merge", "other")
+	cmd.Dir = f.r.dir
+	cmd.Run()
+	_, err := runMerge(t, mergeOrch(t, f, nil, nil), f.in("A"), true)
+	errMatch(t, err, `a merge is in progress in the main checkout that this stage did not start`)
+	if !f.r.mergeInProgress() {
+		t.Error("the foreign merge was aborted")
+	}
+
+	g := newMergeFixture(t, distinct, "A")
+	pre := g.r.head()
+	g.r.git("merge", "-q", "--no-ff", "--no-commit", g.shas["A"])
+	g.r.write("README.md", "altered\n")
+	g.r.git("add", "README.md")
+	g.r.git("commit", "-q", "-m", mergeMessage(g.in("A"), "merge:w1", "A", "clean", nil))
+	_, err = runMerge(t, mergeOrch(t, g, nil, nil), g.in("A"), true)
+	errMatch(t, err, `fails verification: its tree is not git's merge`)
+	eq(t, g.r.git("rev-list", "--first-parent", "--count", pre+"..HEAD"), "1", "not adopted, nothing more committed")
+
+	h := newMergeFixture(t, distinct, "A", "B")
+	h.r.write("src/b.go", "requester's\n") // B is refused this time
+	o := mergeOrch(t, h, nil, nil)
+	first, err := runMerge(t, o, h.in("A", "B"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, statuses(first), "A=clean B=unresolvable")
+	os.Remove(filepath.Join(h.r.dir, "src/b.go"))
+	second, err := runMerge(t, o, h.in("A", "B"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, statuses(second), "A=clean B=clean")
+	eq(t, strings.Count(h.r.read(mPlan), "### A — complete at"), 1, "A recorded once")
+	contains(t, h.r.read(mPlan), "### B — complete at "+second.Merges[1].Sha)
+}
+
+// Paths that are not plain ASCII come through merge-tree -z unquoted.
+func TestMergeConflictNonASCIIPath(t *testing.T) {
+	both := map[string]map[string]string{"A": {"ü s.txt": "from A\n"}, "B": {"ü s.txt": "from B\n"}}
+	f := newMergeFixture(t, both, "A", "B")
+	o := mergeOrch(t, f, nil, map[string]orchtest.Handler{"merge-conflict": func(orchtest.Call, *orchtest.State) any {
+		f.r.write("ü s.txt", "from A\nfrom B\n")
+		f.r.git("add", "ü s.txt")
+		return R(M{"status": "resolved", "files": []string{"ü s.txt"}, "statement": "s"})
+	}})
+	res, err := runMerge(t, o, f.in("A", "B"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, statuses(res), "A=clean B=resolved")
+	eqs(t, res.Merges[1].Files, []string{"ü s.txt"})
+}
+
+// A resumed conflict whose staged state holds a path beyond the merge
+// (staged before the kill) is caught by the sets derived from the two
+// commits, which a resume derives the same: unresolvable, aborted.
+func TestMergeResumeExtraPath(t *testing.T) {
+	both := map[string]map[string]string{"A": {"shared.txt": "from A\n"}, "B": {"shared.txt": "from B\n"}}
+	f := newMergeFixture(t, both, "A", "B")
+	in := f.in("A", "B")
+	f.r.git("merge", "-q", "--no-ff", "-m", mergeMessage(in, "merge:w1", "A", "clean", nil), f.shas["A"])
+	cmd := exec.Command("git", "merge", "--no-ff", "-m", mergeMessage(in, "merge:w1", "B", "clean", nil), f.shas["B"])
+	cmd.Dir = f.r.dir
+	cmd.Run()
+	f.r.write("shared.txt", "from A\nfrom B\n")
+	f.r.write("README.md", "slipped in\n")
+	f.r.git("add", "shared.txt", "README.md")
+	h := map[string]orchtest.Handler{"merge-conflict": func(orchtest.Call, *orchtest.State) any {
+		return R(M{"status": "resolved", "files": []string{"shared.txt"}, "statement": "s"})
+	}}
+	res, err := runMerge(t, mergeOrch(t, f, nil, h), in, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, statuses(res), "A=clean B=unresolvable")
+	if f.r.mergeInProgress() {
+		t.Error("merge in progress")
+	}
 }

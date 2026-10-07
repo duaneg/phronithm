@@ -171,17 +171,26 @@
 //     conflict goes to a model call (merge-conflict:w<n>:<unit>, default
 //     tier) that may only edit and stage; the step accepts the resolution
 //     only with no unmerged path, no conflict marker, nothing staged
-//     outside the paths git's own merge touches and no new untracked
-//     file, commits it, and otherwise aborts the merge (unresolvable). The
-//     call's driver events travel in the value (mergeResult.Signals). A
-//     clean merge's tree must be git's merge-tree of the two; a path a
-//     hook leaves staged is a fault. A merge git refuses over local changes
-//     is unresolvable, the changes untouched; any other failure is a
-//     stage-fault, with a merge this step started aborted. No project gate
+//     outside the paths git's own merge touches, and every non-conflicted
+//     one as git's merge-tree has it, commits it, and otherwise aborts the
+//     merge (unresolvable). A conflicted file's content is the call's
+//     judgement: only its markers are checked. A call that changes the
+//     checkout outside the merge's paths (a new, deleted or reverted file,
+//     the requester's included) is a stage-fault naming them, the merge
+//     aborted; what it did there cannot be undone by the stage. The call's
+//     driver events travel in the value (mergeResult.Signals). A clean
+//     merge's tree must be git's merge-tree of the two; a path a hook
+//     leaves staged, and a merge git stops with nothing in conflict (a
+//     refusing pre-merge-commit hook), are faults. A merge git refuses over
+//     local changes is unresolvable, the changes untouched; any other
+//     failure is a stage-fault, with a merge this step started aborted. No project gate
 //     runs, so no merge is regressed (declared-gates). The bookkeeping
-//     (bookkeeping.go) is rendered before the first merge, so a plan it
-//     cannot record merges nothing, and committed once over the plan and
-//     the archive (commitFiles, one Lsf-Content trailer per path). An
+//     (bookkeeping.go) is rendered for the units still to merge before the
+//     first merge a run makes, with the plan and archive clean, so a plan
+//     it cannot record merges nothing, and committed once over the plan
+//     and the archive (commitFiles, one Lsf-Content trailer per path); a
+//     unit whose stub at its merge commit is already in the plan (an
+//     earlier run of the step that failed later) is not recorded again. An
 //     interrupted rerun resumes only a merge in progress whose MERGE_MSG is
 //     this step's, adopts its own merge commits (verified again) and
 //     bookkeeping commit, and refuses a unit merged under another commit or

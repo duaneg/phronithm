@@ -123,15 +123,17 @@ func (m mergeGit) nulList(ctx context.Context, args ...string) ([]string, error)
 // mergeTree is git's merge of pre and sha computed without touching the
 // checkout: its tree, and the paths that conflict.
 func (m mergeGit) mergeTree(ctx context.Context, pre, sha string) (tree string, conflicts []string, err error) {
-	b, err := m.r.run(ctx, m.dir, "merge-tree", "--write-tree", "--name-only", "--no-messages", pre, sha)
+	b, err := m.r.run(ctx, m.dir, "merge-tree", "-z", "--write-tree", "--name-only", "--no-messages", pre, sha)
 	if err != nil && exitCode(err) != 1 { // 1: conflicts
 		return "", nil, err
 	}
-	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
-	if len(lines) == 0 || lines[0] == "" {
+	// -z: the tree, then each conflicted path, NUL-terminated.
+	fields := strings.Split(strings.TrimSpace(string(b)), "\x00")
+	if len(fields) == 0 || fields[0] == "" {
 		return "", nil, fmt.Errorf("git merge-tree %s %s printed no tree", pre, sha)
 	}
-	for _, l := range lines[1:] {
+	conflicts = []string{}
+	for _, l := range fields[1:] {
 		if l == "" {
 			break
 		}
@@ -139,7 +141,7 @@ func (m mergeGit) mergeTree(ctx context.Context, pre, sha string) (tree string, 
 			conflicts = append(conflicts, l)
 		}
 	}
-	return lines[0], conflicts, nil
+	return strings.TrimSpace(fields[0]), conflicts, nil
 }
 
 // expectedStaged is what a merge of sha onto pre may stage: the paths its
@@ -332,24 +334,89 @@ func (m mergeGit) leftStaged(ctx context.Context, unit, c string) error {
 	return fmt.Errorf("after the merge of %s at %s, %q is staged (a hook?); it is not in the merge commit: commit or unstage it and relaunch", unit, c, staged)
 }
 
+// outside is the checkout's state outside the merge's paths: each path
+// git status lists (untracked included) with its status and a digest of
+// its bytes. The conflict call must leave it as it was.
+func (m mergeGit) outside(ctx context.Context, staged []string) (map[string]string, error) {
+	b, err := m.r.run(ctx, m.dir, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	fields := strings.Split(string(b), "\x00")
+	for i := 0; i < len(fields); i++ {
+		f := fields[i]
+		if len(f) < 4 {
+			continue
+		}
+		xy, p := f[:2], f[3:]
+		if xy[0] == 'R' || xy[0] == 'C' {
+			i++ // the source path follows
+		}
+		if slices.Contains(staged, p) {
+			continue
+		}
+		digest := "absent"
+		if b, err := os.ReadFile(filepath.Join(m.dir, p)); err == nil {
+			digest = contentDigest(b)
+		}
+		out[p] = xy + " " + digest
+	}
+	return out, nil
+}
+
+// changedOutside names the paths whose state differs between two outside
+// snapshots.
+func changedOutside(before, after map[string]string) []string {
+	out := []string{}
+	for p, v := range after {
+		if before[p] != v {
+			out = append(out, p)
+		}
+	}
+	for p := range before {
+		if _, ok := after[p]; !ok {
+			out = append(out, p)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
 // stagedOK reports why a staged resolution is not acceptable, "" when it
 // is: no unmerged path, no conflict marker in a conflicted file, nothing
-// staged outside the expected set, no unstaged change to it, no new
-// untracked file.
-func (m mergeGit) stagedOK(ctx context.Context, staged, conflicts, untracked []string) (string, error) {
+// staged outside the expected set, every non-conflicted path as git's own
+// merge has it (tree), no unstaged change to the set. A conflicted file's
+// content is the call's judgement; only its markers are checked.
+func (m mergeGit) stagedOK(ctx context.Context, staged, conflicts []string, tree string) (string, error) {
 	if u, err := m.nulList(ctx, "diff", "--name-only", "-z", "--diff-filter=U"); err != nil || len(u) > 0 {
 		return fmt.Sprintf("paths still unmerged: %q", u), err
 	}
 	for _, p := range conflicts {
+		inIndex, err := m.nulList(ctx, "ls-files", "-z", "--", p)
+		if err != nil {
+			return "", err
+		}
+		if len(inIndex) == 0 {
+			continue // resolved by deletion
+		}
 		b, err := m.r.run(ctx, m.dir, "show", ":"+p)
 		if err != nil {
-			if exitCode(err) == 128 { // resolved by deletion
-				continue
-			}
 			return "", err
 		}
 		if conflictMarker.Match(b) {
 			return p + " still holds conflict markers", nil
+		}
+	}
+	clean := slices.DeleteFunc(slices.Clone(staged), func(p string) bool { return slices.Contains(conflicts, p) })
+	if len(clean) > 0 {
+		same, err := m.status(ctx, m.dir, append([]string{"diff", "--cached", "--quiet", tree, "--"}, clean...)...)
+		if err != nil {
+			return "", err
+		}
+		if !same {
+			diff, _ := m.nulList(ctx, append([]string{"diff", "--cached", "--name-only", "-z", tree, "--"}, clean...)...)
+			return fmt.Sprintf("%q differ from git's own merge, though they did not conflict", diff), nil
 		}
 	}
 	got, err := m.nulList(ctx, "diff", "--cached", "--name-only", "-z", "--no-renames", "HEAD")
@@ -368,15 +435,6 @@ func (m mergeGit) stagedOK(ctx context.Context, staged, conflicts, untracked []s
 	for _, p := range dirty {
 		if slices.Contains(staged, p) {
 			return p + " has unstaged changes", nil
-		}
-	}
-	now, err := m.nulList(ctx, "ls-files", "-z", "--others", "--exclude-standard")
-	if err != nil {
-		return "", err
-	}
-	for _, p := range now {
-		if !slices.Contains(untracked, p) {
-			return p + " is a new untracked file", nil
 		}
 	}
 	return "", nil
@@ -434,12 +492,25 @@ func (o *orch) mergeStage(in mergeInput) stageFn {
 			}
 		}
 
+		// Before the first merge this run makes: the bookkeeping must be
+		// recordable for the units still to merge, and its paths clean (dirt
+		// on them here is not this step's: its bookkeeping follows every
+		// merge).
 		dryRan := false
-		dryRun := func() error {
+		dryRun := func(pending []mergeUnitIn) error {
 			if dryRan {
 				return nil
 			}
 			dryRan = true
+			for _, p := range bookPaths {
+				clean, err := m.pathClean(ctx, m.dir, p)
+				if err != nil {
+					return err
+				}
+				if !clean {
+					return fmt.Errorf("%s has uncommitted changes this stage did not make; commit or discard them and relaunch", p)
+				}
+			}
 			head, err := m.head(ctx, m.dir)
 			if err != nil {
 				return err
@@ -449,7 +520,7 @@ func (o *orch) mergeStage(in mergeInput) stageFn {
 				return err
 			}
 			units := []bookUnit{}
-			for _, u := range in.Units {
+			for _, u := range pending {
 				units = append(units, bookUnit{Unit: u.Unit, Sha: strings.Repeat("0", 40), Report: u.Report})
 			}
 			if _, _, err := renderBookkeeping(planText, archive, archiveOK, bk, units, date); err != nil {
@@ -460,7 +531,7 @@ func (o *orch) mergeStage(in mergeInput) stageFn {
 
 		merged := []bookUnit{}
 		for i, u := range in.Units {
-			r, err := o.mergeOne(ctx, m, in, label, u, i == resume, i < resume, dryRun, &res)
+			r, err := o.mergeOne(ctx, m, in, label, u, i == resume, i < resume, func() error { return dryRun(in.Units[i:]) }, &res)
 			if err != nil {
 				return nil, err
 			}
@@ -518,8 +589,12 @@ func (o *orch) mergeOne(ctx context.Context, m mergeGit, in mergeInput, label st
 		if mustAdopt {
 			return out, fmt.Errorf("unit %s comes before the merge in progress but has no merge of its own to adopt", u.Unit)
 		}
-		if in, err := m.status(ctx, m.dir, "merge-base", "--is-ancestor", u.Sha, "HEAD"); err != nil || in {
-			return out, errors.Join(fmt.Errorf("%s (unit %s) is already in %s, merged outside this stage", u.Sha, u.Unit, "HEAD"), err)
+		in, err := m.status(ctx, m.dir, "merge-base", "--is-ancestor", u.Sha, "HEAD")
+		if err != nil {
+			return out, fmt.Errorf("unit %s: %w", u.Unit, err)
+		}
+		if in {
+			return out, fmt.Errorf("%s (unit %s) is already in HEAD, merged outside this stage", u.Sha, u.Unit)
 		}
 	}
 	if err := dryRun(); err != nil {
@@ -534,13 +609,7 @@ func (o *orch) mergeOne(ctx context.Context, m mergeGit, in mergeInput, label st
 	if err != nil {
 		return out, err
 	}
-	if resume {
-		pre, err = m.out(ctx, m.dir, "rev-parse", "HEAD")
-		if err != nil {
-			return out, err
-		}
-	}
-	staged, conflicts, _, err := m.expectedStaged(ctx, pre, u.Sha)
+	staged, conflicts, tree, err := m.expectedStaged(ctx, pre, u.Sha)
 	if err != nil {
 		return out, err
 	}
@@ -584,9 +653,13 @@ func (o *orch) mergeOne(ctx context.Context, m mergeGit, in mergeInput, label st
 			return fail(mergeErr)
 		case inProgress == "":
 			return fail(fmt.Errorf("git merge of %s neither committed nor left a merge in progress", u.Unit))
+		case len(conflicts) == 0:
+			// Stopped with nothing in conflict (a pre-merge-commit hook
+			// refused it): not the conflict call's to settle.
+			return fail(errors.Join(fmt.Errorf("the merge of %s stopped with no conflict", u.Unit), mergeErr))
 		}
 	}
-	untracked, err := m.nulList(ctx, "ls-files", "-z", "--others", "--exclude-standard")
+	before, err := m.outside(ctx, staged)
 	if err != nil {
 		return fail(err)
 	}
@@ -609,10 +682,19 @@ func (o *orch) mergeOne(ctx context.Context, m mergeGit, in mergeInput, label st
 		if head != pre {
 			return fail(fmt.Errorf("the conflict call committed %s; the stage commits a resolution itself", head))
 		}
+		after, err := m.outside(ctx, staged)
+		if err != nil {
+			return fail(err)
+		}
+		if ch := changedOutside(before, after); len(ch) > 0 {
+			// Not a resolution to decline: the call touched the checkout
+			// beyond the merge, which the requester must see.
+			return fail(fmt.Errorf("the conflict call changed %q, outside the merge of %s; check them", ch, u.Unit))
+		}
 		if r == nil || r.Result.Status != "resolved" {
 			break
 		}
-		why, err := m.stagedOK(ctx, staged, conflicts, untracked)
+		why, err := m.stagedOK(ctx, staged, conflicts, tree)
 		if err != nil {
 			return fail(err)
 		}
@@ -711,6 +793,21 @@ func (o *orch) bookkeep(ctx context.Context, m mergeGit, in mergeInput, bk bookI
 	if err != nil {
 		return err
 	}
+	// A unit whose stub at its merge commit is already in the plan was
+	// recorded by an earlier run of this step (one that went on to fail):
+	// it is not recorded again.
+	pending := []bookUnit{}
+	for _, u := range merged {
+		if strings.Contains(string(planText), stubLine(bk, u)+"\n") || strings.Contains(string(planText), stubLine(bk, u)+"\r\n") {
+			o.rt.Log(fmt.Sprintf("%s: %s already recorded in %s; not recorded again", label, u.Unit, in.PlanPath))
+			continue
+		}
+		pending = append(pending, u)
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	merged = pending
 	// Dirt on the paths is this step's own write only after a kill inside
 	// its commit: it must be the rendering, dated as it was.
 	for _, p := range paths {
