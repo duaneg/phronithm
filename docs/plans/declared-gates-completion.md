@@ -67,7 +67,9 @@ Taken during implementation:
   journaled in either mode, which is the wedge fix in item 5. Prompts and
   steps are otherwise unchanged (promptparity).
 - **Merge results.** A merge result with a regressed unit is not journaled,
-  so the documented recovery reaches it (Phase 5).
+  so the documented recovery reaches it (Phase 5). An unchanged merge tree
+  replays its red record; a moved integration branch gives a new tree,
+  which is gated afresh.
 - **Re-plan prompt.** Only the wave re-plan prompt forbids editing the
   block. A decision re-plan runs before the first load and is the sanctioned
   path for a requester's change.
@@ -144,7 +146,8 @@ None. Nothing in scope was deliberately left undone.
 - **Design of record.** `lsf-workflow.md::lifecycle-mapping` (stages 3–5),
   the merge paragraph, the stop rule and the relaunch table were amended in
   `aaccca4`, step 6, the last behavioural step. They were corrected in
-  `6de225c` and `784baba`.
+  `6de225c`, and with each Phase 5 behaviour change (`1ed1a82`, `784baba`,
+  `7e88e58`).
 
 ## External-gate re-verification
 
@@ -172,7 +175,7 @@ None. Nothing in scope was deliberately left undone.
   - the derivation placed in Phase 1.
 
   None moved the design's approach.
-- **Size:** about 3,000 lines over 30 files, two thirds of them tests.
+- **Size:** about 3,300 lines over 31 files, two thirds of them tests.
 
 ## Open questions for the requester
 
@@ -182,8 +185,9 @@ None. Nothing in scope was deliberately left undone.
    signal. Keep this, or match calls?
 2. **Red replay.** A set whose gates all completed, red included, replays for
    the same tree and declaration. A red result caused by the environment
-   (exit 126 or 127, a missing service) needs its record removed by hand.
-   Signal deaths are already not-run. Keep this, treat 126 and 127 as not-run,
-   or add an invalidation switch?
+   (exit 126 or 127, a missing service, a command OOM-killed, which the
+   shell reports as exit 128+N) needs its record removed by hand. A gate
+   whose own shell is killed is already not-run. Keep this, treat those
+   exits as not-run, or add an invalidation switch?
 
 Run `/phronithm:breakdown` in re-plan mode with the decomposition plan and this report before starting any dependent unit.

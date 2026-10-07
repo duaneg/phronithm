@@ -198,6 +198,49 @@ a decision re-plan changes becomes the baseline (D27).
 
 `skills/lsf-drive/SKILL.md` was edited outside the step's file list (S4).
 
+## Phase 5
+
+- **Lens review.** All applicable lenses. The pre-scan found `go vet` and
+  `gofmt` clean; staticcheck and golangci-lint are not installed. It raised
+  0 Critical, 2 Significant and 6 Minor findings.
+- **Full-diff critique.** Round 1 raised 0 Critical, 3 Significant and 6
+  Minor. Round 2, on the fixes, raised 0 Critical, 3 Significant and 6 Minor.
+  The gate passes.
+- **Addressed:**
+  - **A regressed merge's result was journaled** (round 1, S-1). A relaunch
+    replayed the stop without re-gating. The result is now not journaled
+    (`launch.mergeStep`, declared mode). A real-runtime test fails with the
+    old behaviour.
+  - **Signal-killed gates were classed red.** A gate whose shell is killed is
+    now not-run. A killed child of the shell remains exit 128+N, red; this is
+    pinned by a test and documented, and folded into open question 2.
+  - **A gate that finished as a stop arrived was discarded.** Its result is
+    now kept unless the cancellation reached the process.
+  - **A stop before `Start` hit a nil `ProcessState`** (round 2, S1). It now
+    returns the stop.
+  - **Gate log names** now carry a per-run sequence.
+  - **Docs:** the tree-only invariant, submodules in `setup`, failing tails
+    reaching prompts and the journal, fenced examples counting as blocks,
+    when a regressed merge's gates replay or rerun, and D26's note that
+    outcome records are kept in either mode.
+- **End-to-end tests on the real runtime:**
+  - `TestOnRuntimeDeclaredGates`: implement red, then a misreport, then the
+    fix green, then the merge by reuse, then a relaunch replaying everything
+    with no gate run.
+  - `TestOnRuntimeRegressedMergeRelaunch`: a merge regression; an unchanged
+    relaunch replays the red record; the recovery; the merge lands.
+- **Noted, not changed:**
+  - `mergeOne` is long, about 250 lines.
+  - A `regressed` merge's `Files` carry gate descriptions, not paths: a
+    latent coupling, since no consumer reads them as paths.
+  - A flaky green replays like a red (open question 2).
+  - The unjournaled merge rerun is `interrupted`, which relaxes the start
+    checks as a crash recovery would.
+  - `step-failed` events and log lines on the expected unjournaled paths.
+  - A waiter's sequential reruns under a broken environment.
+  - The S2 claim, "a stop kills the group", now excludes a gate already
+    reaped.
+
 ## Success criteria
 
 | | Target | Achieved | Status | Evidence |
@@ -215,8 +258,9 @@ a decision re-plan changes becomes the baseline (D27).
 
 **Rigour caveat.** S7's kill tests run against a journaling test runtime, not
 `lsfrt.Runtime.Step`. The nested-step journal itself is proven against the
-real runtime by `TestNestedStep`. The upgrade path is an end-to-end kill test
-of the merge step under `lsfrt.Run`.
+real runtime by `TestNestedStep`, and two real-runtime end-to-end tests cover
+replay and the regressed-merge relaunch. The upgrade path is a real-runtime
+kill of the merge step mid-gate.
 
 ## Open questions for the requester
 
@@ -231,4 +275,4 @@ of the merge step under `lsfrt.Run`.
    this, treat 126/127 as not-run, or add a way to invalidate a journaled set?
 
 ## Remaining phases
-Complete Phase 5 (Review) as defined in the phronithm:feature skill.
+Phase 5 is complete. The completion report is `docs/plans/declared-gates-completion.md`.
