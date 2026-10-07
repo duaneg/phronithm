@@ -381,3 +381,57 @@ func TestReplayRevalidates(t *testing.T) {
 		t.Fatalf("%+v, spawns %d", again, stubCount(t, stub))
 	}
 }
+
+// A step inside a step's fn journals and replays on its own: after a kill
+// between the inner record and the outer record, the rerun outer step
+// replays the inner one; after a kill inside the inner step, the inner step
+// reruns, told it was interrupted.
+func TestNestedStep(t *testing.T) {
+	cfg, _ := testConfig(t)
+	var innerRuns, outerRuns int
+	var innerInterrupted []bool
+	killed := errors.New("killed")
+	nested := func(failInner, failOuter bool) error {
+		var err error
+		launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+			_, err = rt.Step(ctx, "outer", []byte("o"), func(ctx context.Context, _ bool) (json.RawMessage, error) {
+				outerRuns++
+				in, err := rt.Step(ctx, "inner", []byte("i"), func(_ context.Context, interrupted bool) (json.RawMessage, error) {
+					innerRuns++
+					innerInterrupted = append(innerInterrupted, interrupted)
+					if failInner {
+						return nil, killed
+					}
+					return json.RawMessage(`"inner"`), nil
+				})
+				if err != nil {
+					return nil, err
+				}
+				if failOuter {
+					return nil, killed
+				}
+				return json.RawMessage(`[` + string(in) + `]`), nil
+			})
+			return nil, nil
+		})
+		return err
+	}
+	if err := nested(true, false); !errors.Is(err, killed) {
+		t.Fatal(err)
+	}
+	if err := nested(false, true); !errors.Is(err, killed) {
+		t.Fatal(err)
+	}
+	if innerRuns != 2 || !slices.Equal(innerInterrupted, []bool{false, true}) {
+		t.Fatalf("inner after its own kill: %d runs, interrupted %v", innerRuns, innerInterrupted)
+	}
+	if err := nested(true, false); err != nil {
+		t.Fatalf("inner replays, outer completes: %v", err)
+	}
+	if innerRuns != 2 || outerRuns != 3 {
+		t.Errorf("runs: inner %d outer %d", innerRuns, outerRuns)
+	}
+	if err := nested(true, true); err != nil || outerRuns != 3 {
+		t.Errorf("outer replays: %v, %d runs", err, outerRuns)
+	}
+}

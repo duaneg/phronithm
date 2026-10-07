@@ -356,6 +356,17 @@ func (l *launch) loadPlan(ctx context.Context, sha, label string, wave *int) (lo
 	for _, p := range g.Problems {
 		out.stops = append(out.stops, problem(p))
 	}
+	decl, problems := plan.ParseDeclaration(cp.Result.PlanBlock)
+	for _, p := range problems {
+		out.stops = append(out.stops, problem(p))
+	}
+	switch {
+	case len(problems) > 0:
+	case !l.declSet:
+		l.decl, l.declSet = decl, true
+	case decl.Identity() != l.decl.Identity():
+		out.stops = append(out.stops, declChanged(l.decl, decl, wave))
+	}
 	if g.Plan != nil {
 		p := *g.Plan
 		p.Path, p.Sha = l.ctx.planPath, sha

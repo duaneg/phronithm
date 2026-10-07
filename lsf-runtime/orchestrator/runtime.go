@@ -23,7 +23,8 @@ import (
 // returns the first stop after every branch finishes. Step journals a code
 // step (lsfrt.Runtime.Step). Repo is the main checkout ("" when there is
 // none); Worktree is a code step's own worktree and its branch;
-// RemoveWorktree removes a label's merged worktree (lsfrt.Runtime).
+// RemoveWorktree removes a label's merged worktree; RunGates runs declared
+// gates on a clean checkout (lsfrt.Runtime).
 type Runtime interface {
 	Call(ctx context.Context, prompt string, o lsfrt.Opts) (lsfrt.CallResult, error)
 	Parallel(ctx context.Context, thunks []func(context.Context) (json.RawMessage, error)) ([]json.RawMessage, error)
@@ -31,6 +32,7 @@ type Runtime interface {
 	Repo() string
 	Worktree(ctx context.Context, label string) (path, branch string, err error)
 	RemoveWorktree(ctx context.Context, label, integration string, deleteBranch bool) (lsfrt.WorktreeRemoval, error)
+	RunGates(ctx context.Context, label, commit, setup string, gates []lsfrt.GateSpec) ([]lsfrt.GateRun, error)
 	Log(msg string)
 	Args() json.RawMessage
 }
@@ -58,11 +60,17 @@ type orch struct {
 	// unit's stages ran this launch, in order (D25).
 	worktrees map[string][]string
 	tips      map[string]string // branch → tip its writer's check journaled (D23)
+
+	// decl is the plan's gate declaration as the launch's first load read
+	// it, nil when undeclared; declSet once that load has run (D27).
+	decl     *plan.Declaration
+	declSet  bool
+	gateMemo map[string]*gateFlight // tree → its gate run this launch
 }
 
 // newOrch is a launch's orch over rt.
 func newOrch(rt Runtime, c *runCtx, seed map[string]json.RawMessage) *orch {
-	o := &orch{rt: rt, ctx: c, seed: seed, uses: map[string]int{}, worktrees: map[string][]string{}, tips: map[string]string{}, today: func() string { return time.Now().Format(time.DateOnly) }}
+	o := &orch{rt: rt, ctx: c, seed: seed, uses: map[string]int{}, worktrees: map[string][]string{}, tips: map[string]string{}, gateMemo: map[string]*gateFlight{}, today: func() string { return time.Now().Format(time.DateOnly) }}
 	if repo := rt.Repo(); repo != "" {
 		o.git, o.repo = execGit{}, repo
 	}

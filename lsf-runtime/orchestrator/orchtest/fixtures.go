@@ -98,6 +98,14 @@ func Copied(p *plan.Plan, extra M) M {
 	return Ret(r)
 }
 
+// GatesBlock is body as a fenced ```yaml lsf-gates block, "" for "".
+func GatesBlock(body string) string {
+	if body == "" {
+		return ""
+	}
+	return "\n\n```yaml lsf-gates\n" + body + "```\n"
+}
+
 // NoDistress is an implement stage's distress with nothing to report.
 func NoDistress() M {
 	return M{"contextNearExhaustion": false, "midImplementationDesignDecisions": 0, "deviations": 0, "deferrals": 0}
@@ -181,7 +189,9 @@ func withComplete(p *plan.Plan, sha string, done func(id string) bool) *plan.Pla
 // Defaults are the handlers by label prefix, ported from the JS defaults().
 func Defaults() map[string]Handler {
 	return map[string]Handler{
-		"load": func(c Call, s *State) any { return Copied(s.Plan, nil) },
+		"load": func(c Call, s *State) any {
+			return Copied(s.Plan, M{"planBlock": ToBlock(s.Plan) + GatesBlock(s.GatesBlock)})
+		},
 		"plan": func(c Call, s *State) any {
 			return Ret(M{"branch": "plan-" + c.Unit, "sha": "p", "path": "docs/plans/" + c.Unit + "-plan.md", "bytes": 0, "readings": []any{}})
 		},

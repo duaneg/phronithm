@@ -57,6 +57,7 @@ type Call struct {
 // serves, the units merged so far and the current merge's order.
 type State struct {
 	Plan       *plan.Plan
+	GatesBlock string // the body of the plan's ```yaml lsf-gates block the copy stage serves; "" for none
 	Completed  map[string]bool
 	MergeOrder []string
 	Seq        int // SHA counter for merge and re-plan
@@ -83,12 +84,51 @@ type Stub struct {
 	Concurrent bool // run Parallel branches on goroutines
 	// ExpectPanic allows a recovered panic in a Parallel branch.
 	ExpectPanic bool
+	// Gates answers RunGates; nil runs every gate green. A gate step with
+	// no handler of its own runs its fn, so RunGates is reached as with a
+	// real runtime.
+	Gates func(g GateCall) ([]lsfrt.GateRun, error)
 
 	mu       sync.Mutex
 	Calls    []Call
 	Logs     []string
 	Returns  map[string]json.RawMessage // by final label, calls and steps; null included; none for a handler error or a harness failure
 	Failures []string                   // harness failures: repeated label, missing handler, unexpected panic
+	GateRuns []GateCall                 // RunGates calls, in order
+}
+
+// GateCall is one RunGates call.
+type GateCall struct {
+	Label, Commit, Setup string
+	Gates                []lsfrt.GateSpec
+}
+
+// RunGates records the call and answers from Gates; by default every gate
+// is green, its summary naming the commit.
+func (s *Stub) RunGates(ctx context.Context, label, commit, setup string, gates []lsfrt.GateSpec) ([]lsfrt.GateRun, error) {
+	g := GateCall{Label: label, Commit: commit, Setup: setup, Gates: gates}
+	s.mu.Lock()
+	s.GateRuns = append(s.GateRuns, g)
+	h := s.Gates
+	s.mu.Unlock()
+	if h != nil {
+		return h(g)
+	}
+	return GateRuns(gates, func(lsfrt.GateSpec) string { return lsfrt.GateGreen }, commit), nil
+}
+
+// GateRuns are runs of gates with status(g) each, summary "<status> at <at>".
+func GateRuns(gates []lsfrt.GateSpec, status func(lsfrt.GateSpec) string, at string) []lsfrt.GateRun {
+	out := []lsfrt.GateRun{}
+	for _, g := range gates {
+		st := status(g)
+		r := lsfrt.GateRun{Name: g.Name, Command: g.Command, Status: st, Summary: st + " at " + at, Log: "logs/" + g.Name + ".log"}
+		if st != lsfrt.GateGreen {
+			r.ExitCode, r.Tail = 1, "FAILED "+g.Name+"\n"
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // New is a stub over p with the default handlers, overrides applied, and
@@ -238,12 +278,36 @@ func (s *Stub) Step(ctx context.Context, label string, input []byte, fn func(con
 			}
 		}
 	}
+	if c.Prefix == "gates" && s.Handlers["gates"] == nil {
+		return s.runGateStep(ctx, c, fn)
+	}
 	cr, err := s.answer(c)
 	if err != nil {
 		return nil, err
 	}
 	s.noteMerged(c, cr)
 	return cr.Value, nil
+}
+
+// runGateStep records a gate step and runs its fn without the lock; the
+// caller holds it.
+func (s *Stub) runGateStep(ctx context.Context, c Call, fn func(context.Context, bool) (json.RawMessage, error)) (json.RawMessage, error) {
+	for _, prev := range s.Calls {
+		if prev.Label == c.Label {
+			s.fail("label %q repeated within the launch", c.Label)
+		}
+	}
+	s.Calls = append(s.Calls, c)
+	s.mu.Unlock()
+	v, err := fn(ctx, false)
+	s.mu.Lock()
+	if err == nil {
+		if v == nil {
+			v = json.RawMessage("null")
+		}
+		s.Returns[c.Label] = v
+	}
+	return v, err
 }
 
 // Repo is "": the stub has no repository.
