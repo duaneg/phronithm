@@ -42,7 +42,8 @@ func (execGit) run(ctx context.Context, dir string, args ...string) ([]byte, err
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	cmd.Env = append(scrubbedEnv(), "GIT_TERMINAL_PROMPT=0")
+	// Paths are literal: a hook-touched path like `a*b` must not match others.
+	cmd.Env = append(scrubbedEnv(), "GIT_TERMINAL_PROMPT=0", "GIT_LITERAL_PATHSPECS=1")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// SIGTERM lets git remove its own lock files; WaitDelay then kills git
 	// if it lingers.
@@ -207,19 +208,18 @@ func (g gitOps) trailer(ctx context.Context, dir, sha, key string) (string, erro
 
 // contentFor is the Lsf-Content digest a commit's trailers give path: the
 // value "<digest> <path>" of a multi-path commit, else the last bare
-// "<digest>" of a single-path one; "" when none does.
-func contentFor(values []string, path string) string {
-	bare := ""
+// "<digest>" of a single-path one (bare true); "" when none does.
+func contentFor(values []string, path string) (digest string, bare bool) {
 	for _, v := range values {
-		digest, p, multi := strings.Cut(v, " ")
+		d, p, multi := strings.Cut(v, " ")
 		switch {
 		case multi && p == path:
-			return digest
+			return d, false
 		case !multi:
-			bare = v
+			digest, bare = v, true
 		}
 	}
-	return bare
+	return digest, bare
 }
 
 // intact reports whether sha carries Lsf-Content for path and its blob at
@@ -229,9 +229,17 @@ func (g gitOps) intact(ctx context.Context, dir, sha, path string) (stage, intac
 	if err != nil || len(values) == 0 {
 		return false, false, err
 	}
-	want := contentFor(values, path)
+	want, bare := contentFor(values, path)
 	if want == "" {
 		return true, false, nil
+	}
+	if bare {
+		// A bare digest covers the one path its commit changed, not any
+		// path that happens to hold the same bytes.
+		files, err := g.changed(ctx, dir, sha)
+		if err != nil || !slices.Contains(files, path) {
+			return true, false, err
+		}
 	}
 	b, ok, err := g.blob(ctx, dir, sha, path)
 	if err != nil {
@@ -510,9 +518,17 @@ func contentTrailers(files []fileWrite) string {
 // HEAD's.
 func (g gitOps) commitFiles(ctx context.Context, dir, branch string, files []fileWrite, subject, label, pre string) (string, error) {
 	paths := pathsOf(files)
-	for _, p := range paths {
-		if strings.ContainsAny(p, "\n\r") {
-			return "", fmt.Errorf("path %q has a line break", p)
+	if len(paths) == 0 {
+		return "", errors.New("no file to commit")
+	}
+	for i, p := range paths {
+		switch {
+		case strings.ContainsAny(p, "\n\r") || strings.TrimSpace(p) != p:
+			return "", fmt.Errorf("path %q has a line break or edge whitespace", p)
+		case p == "" || filepath.IsAbs(p) || !filepath.IsLocal(p):
+			return "", fmt.Errorf("path %q is not a relative path inside the repository", p)
+		case slices.Contains(paths[:i], p):
+			return "", fmt.Errorf("path %q is given twice", p)
 		}
 	}
 	if cur, err := g.head(ctx, dir); err != nil {
@@ -521,16 +537,14 @@ func (g gitOps) commitFiles(ctx context.Context, dir, branch string, files []fil
 		return "", fmt.Errorf("%s moved from %s to %s while the stage ran; relaunch", branch, pre, cur)
 	}
 	if pre != "" {
-		same := 0
+		// Every path must change: a commit missing one would fail
+		// verification after it landed.
 		for _, f := range files {
 			if b, ok, err := g.blob(ctx, dir, pre, f.Path); err != nil {
 				return "", err
 			} else if ok && bytes.Equal(b, f.Want) {
-				same++
+				return "", fmt.Errorf("%s already holds this content at %s; nothing to commit", f.Path, pre)
 			}
-		}
-		if same == len(files) {
-			return "", fmt.Errorf("%s already holds this content at %s; nothing to commit", strings.Join(paths, " and "), pre)
 		}
 	}
 	type prior struct {
@@ -546,13 +560,27 @@ func (g gitOps) commitFiles(ctx context.Context, dir, branch string, files []fil
 		}
 		priors = append(priors, prior{b, err == nil})
 	}
-	for _, f := range files {
-		file := filepath.Join(dir, f.Path)
-		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
-			return "", err
+	restore := func(n int) []error {
+		var errs []error
+		for i, f := range files[:n] {
+			file := filepath.Join(dir, f.Path)
+			if priors[i].existed {
+				errs = append(errs, os.WriteFile(file, priors[i].b, 0o644))
+			} else if e := os.Remove(file); e != nil && !errors.Is(e, os.ErrNotExist) {
+				errs = append(errs, e)
+			}
 		}
-		if err := os.WriteFile(file, f.Want, 0o644); err != nil {
-			return "", err
+		return errs
+	}
+	for i, f := range files {
+		file := filepath.Join(dir, f.Path)
+		err := os.MkdirAll(filepath.Dir(file), 0o755)
+		if err == nil {
+			err = os.WriteFile(file, f.Want, 0o644)
+		}
+		if err != nil {
+			// The files written so far go back as they were.
+			return "", errors.Join(append([]error{err}, restore(i)...)...)
 		}
 	}
 	msg := subject + "\n\n" + trailerStep + ": " + label + "\n" + contentTrailers(files)
@@ -577,16 +605,7 @@ func (g gitOps) commitFiles(ctx context.Context, dir, branch string, files []fil
 	_, resetErr := g.r.run(context.WithoutCancel(ctx), dir, append([]string{"reset", "-q", "--"}, reset...)...)
 	if err != nil && headErr == nil && sha == pre {
 		// No commit landed: put the files back.
-		var restoreErrs []error
-		for i, f := range files {
-			file := filepath.Join(dir, f.Path)
-			if priors[i].existed {
-				restoreErrs = append(restoreErrs, os.WriteFile(file, priors[i].b, 0o644))
-			} else if e := os.Remove(file); e != nil && !errors.Is(e, os.ErrNotExist) {
-				restoreErrs = append(restoreErrs, e)
-			}
-		}
-		return "", errors.Join(append([]error{fmt.Errorf("commit of %s rejected: %w", strings.Join(paths, " and "), err), resetErr}, restoreErrs...)...)
+		return "", errors.Join(append([]error{fmt.Errorf("commit of %s rejected: %w", strings.Join(paths, " and "), err), resetErr}, restore(len(files))...)...)
 	}
 	if headErr != nil {
 		return "", errors.Join(err, headErr)
@@ -594,11 +613,11 @@ func (g gitOps) commitFiles(ctx context.Context, dir, branch string, files []fil
 	// A commit landed, even if git reported an error after it (a
 	// post-commit hook): it is checked like any other.
 	if err := g.verifySet(ctx, dir, branch, sha, pre, files); err != nil {
-		return "", err
+		return "", errors.Join(err, resetErr)
 	}
 	for _, p := range paths {
 		if _, ok, err := g.intact(ctx, dir, sha, p); err != nil || !ok {
-			return "", errors.Join(fmt.Errorf("commit %s does not carry the %s trailer of its content (a commit-msg hook may have rewritten the message)", sha, trailerContent), err)
+			return "", errors.Join(fmt.Errorf("commit %s does not carry the %s trailer of its content (a commit-msg hook may have rewritten the message)", sha, trailerContent), err, resetErr)
 		}
 	}
 	if resetErr != nil {

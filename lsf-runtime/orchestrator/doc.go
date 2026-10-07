@@ -86,8 +86,10 @@
 //     log drops a decision already present with identical content, and when
 //     none remains returns the last commit touching the log. Each commit
 //     carries Lsf-Step: <label> and Lsf-Content: sha256:<digest of the
-//     bytes written> trailers; a stage commit whose content no longer
-//     matches its digest is not intact. An interrupted rerun adopts its own
+//     bytes written> trailers (a commit of several paths, one
+//     "Lsf-Content: sha256:<digest> <path>" per path, D24); a stage commit
+//     whose content no longer matches its digest, or a bare digest's
+//     commit that did not touch the path, is not intact. An interrupted rerun adopts its own
 //     intact commit instead of committing again; without an intent, a
 //     ledger whose tip already holds the block refuses to append it again.
 //     The completion report's input carries the unit branch's tip, so a

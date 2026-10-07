@@ -122,12 +122,81 @@ func TestAdoptSet(t *testing.T) {
 		t.Errorf("own commit: %q %v", got, err)
 	}
 	for name, try := range map[string]func() (string, error){
-		"other label":  func() (string, error) { return g.adoptSet(ctx, r.dir, "integration", paths, "merge:w2", ours) },
-		"other set":    func() (string, error) { return g.adoptSet(ctx, r.dir, "integration", paths[:1], "merge:w1", ours) },
-		"not matching": func() (string, error) { return g.adoptSet(ctx, r.dir, "integration", paths, "merge:w1", func(_, _ map[string]blobAt) bool { return false }) },
+		"other label": func() (string, error) { return g.adoptSet(ctx, r.dir, "integration", paths, "merge:w2", ours) },
+		"other set":   func() (string, error) { return g.adoptSet(ctx, r.dir, "integration", paths[:1], "merge:w1", ours) },
+		"not matching": func() (string, error) {
+			return g.adoptSet(ctx, r.dir, "integration", paths, "merge:w1", func(_, _ map[string]blobAt) bool { return false })
+		},
 	} {
 		if got, err := try(); err != nil || got != "" {
 			t.Errorf("%s: adopted %q %v", name, got, err)
 		}
+	}
+}
+
+// A hook that deletes a tracked path is caught, and the index still
+// matches HEAD afterwards.
+func TestCommitFilesDeletingHook(t *testing.T) {
+	r := newGitRepo(t)
+	r.commit("docs/plan.md", "plan v1\n", "plan")
+	r.commit("other.md", "other\n", "other")
+	pre := r.head()
+	r.hook("pre-commit", "git rm -q other.md")
+	_, err := gitOps{execGit{}}.commitFiles(context.Background(), r.dir, "integration", twoFiles, "s", "merge:w1", pre)
+	errMatch(t, err, `fails verification: changes .*other\.md`)
+	cmd := exec.Command("git", "diff", "--cached", "--quiet")
+	cmd.Dir = r.dir
+	if err := cmd.Run(); err != nil {
+		t.Errorf("the index differs from HEAD: %s", r.git("diff", "--cached", "--name-status"))
+	}
+}
+
+// Refusals before anything is written or committed: a path already
+// holding its bytes, an empty set, a duplicate, an escaping or
+// whitespace-edged path. A write failing mid-set puts back the files
+// written before it.
+func TestCommitFilesRefusals(t *testing.T) {
+	r := newGitRepo(t)
+	r.commit("docs/plan.md", "plan v2\n", "plan")
+	pre := r.head()
+	g := gitOps{execGit{}}
+	ctx := context.Background()
+	commit := func(files []fileWrite) error {
+		_, err := g.commitFiles(ctx, r.dir, "integration", files, "s", "l", pre)
+		return err
+	}
+	errMatch(t, commit(twoFiles), `docs/plan\.md already holds this content`)
+	errMatch(t, commit(nil), `no file to commit`)
+	errMatch(t, commit([]fileWrite{{"a.md", []byte("1")}, {"a.md", []byte("2")}}), `given twice`)
+	errMatch(t, commit([]fileWrite{{"../x.md", []byte("1")}}), `not a relative path`)
+	errMatch(t, commit([]fileWrite{{"/tmp/x.md", []byte("1")}}), `not a relative path`)
+	errMatch(t, commit([]fileWrite{{"x.md ", []byte("1")}}), `edge whitespace`)
+	eq(t, r.head(), pre)
+
+	r.write("README.md", "requester draft\n")
+	errMatch(t, commit([]fileWrite{{"README.md", []byte("ours\n")}, {"README.md/x", []byte("y")}}), `not a directory`)
+	eq(t, r.read("README.md"), "requester draft\n", "the first file is put back")
+	eq(t, r.head(), pre)
+}
+
+// A bare digest covers the path its commit changed, not another path
+// holding the same bytes.
+func TestIntactBareDigestScope(t *testing.T) {
+	r := newGitRepo(t)
+	g := gitOps{execGit{}}
+	ctx := context.Background()
+	r.commit("copy.md", "A\n", "same bytes, no trailer")
+	sha, err := g.writeAndCommit(ctx, r.dir, "integration", "a.md", "s", "l", []byte("A\n"), r.head())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := g.intact(ctx, r.dir, sha, "a.md"); err != nil || !ok {
+		t.Errorf("a.md: %v", err)
+	}
+	if _, ok, err := g.intact(ctx, r.dir, sha, "copy.md"); err != nil || ok {
+		t.Errorf("copy.md is intact through a commit that did not touch it: %v", err)
+	}
+	if err := g.guard(ctx, r.dir, "integration", "a.md"); err != nil {
+		t.Errorf("guard: %v", err)
 	}
 }
