@@ -194,44 +194,59 @@ var shaHex = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 // checkSha is the reported SHA of a stage that commits on branch, checked
 // against the branch's tip. A SHA that is not a prefix of the tip is
 // replaced by it, with a sha-corrected record. Nothing reads these SHAs
-// yet: the check keeps the ledger's SHAs git's. The SHAs later stages
-// consume, merge's, are code-merge-cleanup's to check. The branch is the
-// one the stage reports, not checked against the worktree branch the
-// runtime gave it. A branch that does
-// not resolve, or is not a plain branch name, leaves the SHA as reported
-// with no signal; the completion report stops on it. Another git error
-// records that the SHA was not checked. With no repository there is
+// yet: the check keeps the ledger's SHAs git's. unresolved reports a
+// branch that does not resolve (exit 1), leaving the SHA as reported; a
+// branch that is not a plain branch name is left unchecked. Another git
+// error records that the SHA was not checked. With no repository there is
 // nothing to check; with ctx done the error is the cancellation's stop.
-func (o *orch) checkSha(ctx context.Context, at plan.At, branch, reported string) (string, *plan.Signal, error) {
+func (o *orch) checkSha(ctx context.Context, at plan.At, branch, reported string) (sha string, sig *plan.Signal, unresolved bool, err error) {
 	if o.git == nil || branch == "" || strings.HasPrefix(branch, "-") || strings.ContainsAny(branch, "~^:@{\\ \t\n") || strings.Contains(branch, "..") {
-		return reported, nil, nil
+		return reported, nil, false, nil
 	}
 	tip, err := gitOps{o.git}.out(ctx, o.repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
 	switch {
 	case err != nil && ctx.Err() != nil:
-		return reported, nil, &lsfrt.StopError{Reason: lsfrt.StopCancelled}
+		return reported, nil, false, &lsfrt.StopError{Reason: lsfrt.StopCancelled}
 	case err != nil && exitCode(err) == 1:
-		return reported, nil, nil
+		return reported, nil, true, nil
 	case err != nil:
-		return reported, plan.ShaCorrectedSignal(at, branch, reported, "", err.Error()), nil
+		return reported, plan.ShaCorrectedSignal(at, branch, reported, "", err.Error()), false, nil
 	}
 	if r := strings.ToLower(jsTrim(reported)); shaHex.MatchString(r) && strings.HasPrefix(tip, r) {
-		return r, nil, nil
+		return r, nil, false, nil
 	}
-	return tip, plan.ShaCorrectedSignal(at, branch, reported, tip, ""), nil
+	return tip, plan.ShaCorrectedSignal(at, branch, reported, tip, ""), false, nil
 }
 
-// correctSha applies checkSha to a result's SHA field.
-func (o *orch) correctSha(ctx context.Context, at plan.At, branch string, sha *string, sigs *[]*plan.Signal) error {
-	fixed, sig, err := o.checkSha(ctx, at, branch, *sha)
+// checkReturn checks a worktree writer's reported branch and SHA (D23).
+// With the runtime's branch for the call (rtBranch), a reported branch
+// that differs, or a branch that does not resolve, is a branch-mismatch
+// stop, and the SHA is checked against rtBranch. Without one (a stub, a
+// seed, a record journaled before the branch was), the SHA is checked
+// against the reported branch, and a branch that does not resolve leaves
+// it as reported with no signal. stop reports a branch-mismatch.
+func (o *orch) checkReturn(ctx context.Context, at plan.At, rtBranch, reported string, sha *string, sigs *[]*plan.Signal) (stop bool, err error) {
+	branch := reported
+	if rtBranch != "" {
+		if jsTrim(reported) != rtBranch {
+			*sigs = append(*sigs, plan.BranchMismatchSignal(at, reported, rtBranch, ""))
+			return true, nil
+		}
+		branch = rtBranch
+	}
+	fixed, sig, unresolved, err := o.checkSha(ctx, at, branch, *sha)
 	if err != nil {
-		return err
+		return false, err
+	}
+	if unresolved && rtBranch != "" {
+		*sigs = append(*sigs, plan.BranchMismatchSignal(at, reported, rtBranch, "does not resolve"))
+		return true, nil
 	}
 	*sha = fixed
 	if sig != nil {
 		*sigs = append(*sigs, sig)
 	}
-	return nil
+	return false, nil
 }
 
 // unitOpts are a unit stage's options: label `<label>:<unit>`, phase Units,
@@ -247,13 +262,15 @@ func (o *orch) unitOpts(u *plan.Unit, label, role string, opts lsfrt.Opts) lsfrt
 	return opts
 }
 
-// fixCall is a plan or code fix's call, its SHA checked against its branch.
+// fixCall is a plan or code fix's call, its branch and SHA checked
+// (checkReturn). A branch-mismatch is among the signals, so the critique
+// loop stops before taking the fix's branch.
 func (o *orch) fixCall(ctx context.Context, at plan.At, prompt string, opts lsfrt.Opts) (*ret[fixResult], []*plan.Signal, error) {
-	r, sigs, err := call[fixResult](ctx, o, site{at: at, writer: true}, prompt, opts)
+	r, sigs, rtBranch, err := callBranch[fixResult](ctx, o, site{at: at, writer: true}, prompt, opts)
 	if err != nil || r == nil {
 		return r, sigs, err
 	}
-	err = o.correctSha(ctx, at, r.Result.Branch, &r.Result.Sha, &sigs)
+	_, err = o.checkReturn(ctx, at, rtBranch, r.Result.Branch, &r.Result.Sha, &sigs)
 	return r, sigs, err
 }
 
@@ -276,7 +293,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	}
 
 	// 1. plan
-	planned, cs, err := call[unitPlanResult](ctx, o, site{at: at("plan"), writer: true}, unitPlanPrompt(c, pr, u), o.unitOpts(u, "plan", "planning", lsfrt.Opts{Isolation: "worktree", Schema: unitPlanSchema}))
+	planned, cs, rtBranch, err := callBranch[unitPlanResult](ctx, o, site{at: at("plan"), writer: true}, unitPlanPrompt(c, pr, u), o.unitOpts(u, "plan", "planning", lsfrt.Opts{Isolation: "worktree", Schema: unitPlanSchema}))
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +302,8 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 		sigs = append(sigs, plan.NullReturnSignal(at("plan")))
 		return abort("plan")
 	}
-	if err := o.correctSha(ctx, at("plan"), planned.Result.Branch, &planned.Result.Sha, &sigs); err != nil {
+	mismatch, err := o.checkReturn(ctx, at("plan"), rtBranch, planned.Result.Branch, &planned.Result.Sha, &sigs)
+	if err != nil {
 		return nil, err
 	}
 	pa := at("plan")
@@ -293,7 +311,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	sigs = append(sigs, plan.SignalsFromReadings(len(planned.Result.Readings), pa)...)
 	pa.TargetKB = unitPlanTargetKB
 	sigs = append(sigs, plan.SignalsFromDocumentSize(float64(planned.Result.Bytes), pa)...)
-	if hasStop(cs) {
+	if hasStop(cs) || mismatch {
 		return abort("plan")
 	}
 	branch := planned.Result.Branch
@@ -321,7 +339,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	}
 
 	// 3. implement
-	impl, cs, err := call[implementResult](ctx, o, site{at: at("implement"), writer: true}, implementPrompt(c, pr, u, branch), o.unitOpts(u, "implement", "", lsfrt.Opts{Isolation: "worktree", Schema: implementSchema}))
+	impl, cs, rtBranch, err := callBranch[implementResult](ctx, o, site{at: at("implement"), writer: true}, implementPrompt(c, pr, u, branch), o.unitOpts(u, "implement", "", lsfrt.Opts{Isolation: "worktree", Schema: implementSchema}))
 	if err != nil {
 		return nil, err
 	}
@@ -341,13 +359,16 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	if drifted {
 		return abort("implement")
 	}
-	branch = impl.Result.Branch
-	if err := o.correctSha(ctx, at("implement"), branch, &impl.Result.Sha, &sigs); err != nil {
+	mismatch, err = o.checkReturn(ctx, at("implement"), rtBranch, impl.Result.Branch, &impl.Result.Sha, &sigs)
+	if err != nil {
 		return nil, err
+	}
+	if !mismatch {
+		branch = impl.Result.Branch
 	}
 	sigs = append(sigs, plan.SignalsFromImplement(impl.Result.ImplementResult, at("implement"))...)
 	sigs = append(sigs, plan.DistressSignals(impl.Result.Distress.plan(), plan.At{Unit: u.ID, Wave: plan.W(wave)}, c.config)...)
-	if hasStop(cs) {
+	if hasStop(cs) || mismatch {
 		return abort("implement")
 	}
 	design := u.Type == "design"
@@ -443,13 +464,23 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	if o.git != nil {
 		// The tip is in the step's input, so a replay is a report on the
 		// branch as it stands: a moved branch reruns the step.
-		sha, err := gitOps{o.git}.out(ctx, o.repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
-		if err != nil && ctx.Err() != nil {
-			return nil, &lsfrt.StopError{Reason: lsfrt.StopCancelled}
-		}
-		if err != nil || strings.HasPrefix(branch, "-") {
-			sigs = append(sigs, stageFaultSignal(plan.At{Stage: "completion-report", Unit: u.ID, Wave: plan.W(wave), Path: completionPath(u)}, fmt.Sprintf("unit branch %q does not resolve", branch)))
+		// Exit 1 is an unresolved branch; any other git error is reported
+		// as itself, as checkSha separates them.
+		fault := func(reason string) (*unitResult, error) {
+			sigs = append(sigs, stageFaultSignal(plan.At{Stage: "completion-report", Unit: u.ID, Wave: plan.W(wave), Path: completionPath(u)}, reason))
 			return abort("completion-report")
+		}
+		if strings.HasPrefix(branch, "-") {
+			return fault(fmt.Sprintf("unit branch %q is not a branch name", branch))
+		}
+		sha, err := gitOps{o.git}.out(ctx, o.repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
+		switch {
+		case err != nil && ctx.Err() != nil:
+			return nil, &lsfrt.StopError{Reason: lsfrt.StopCancelled}
+		case err != nil && exitCode(err) == 1:
+			return fault(fmt.Sprintf("unit branch %q does not resolve", branch))
+		case err != nil:
+			return fault(fmt.Sprintf("unit branch %q: %v", branch, err))
 		}
 		in.BaseSha = sha
 	}

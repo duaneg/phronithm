@@ -45,11 +45,11 @@ func realRun(t *testing.T, over ...answer) (view, string, string, *gitRepo) {
 	r.git("checkout", "-q", "integration")
 
 	answers := []answer{
-		{Contains: "Write the implementation plan for this unit", Return: R(M{"branch": "work-A", "sha": workTip[:7], "path": "docs/plans/A-plan.md", "bytes": 0, "readings": []any{}})},
+		{Contains: "Write the implementation plan for this unit", Return: R(M{"branch": "@branch", "sha": workTip[:7], "path": "docs/plans/A-plan.md", "bytes": 0, "readings": []any{}})},
 		{Contains: "Critique the implementation plan at", Return: orchtest.NoFindings()},
 		{Contains: "Run the phronithm:critique skill with type critique-code", Return: orchtest.NoFindings()},
 		{Contains: "Run the phronithm:review skill", Return: orchtest.NoFindings()},
-		{Contains: "Implementation plan: docs/plans/", Return: R(orchtest.Implemented("A", M{"branch": "work-A", "sha": workTip}))},
+		{Contains: "Implementation plan: docs/plans/", Return: R(orchtest.Implemented("A", M{"branch": "@branch", "sha": workTip}))},
 		{Contains: "Merge each unit branch below into", Return: R(M{"integrationBranch": "integration", "merges": []plan.Merge{{Unit: "A", Status: "clean", Files: []string{}, Sha: "m"}},
 			"planSha": completeSha, "pauseRequested": false, "architectureSha": ""})},
 		{Contains: "has merged these units into", Return: R(M{"invalidations": []any{}, "notes": []any{}, "amendments": []any{}})},
@@ -62,6 +62,12 @@ func realRun(t *testing.T, over ...answer) (view, string, string, *gitRepo) {
 			if answers[i].Contains == o.Contains {
 				answers[i] = o
 			}
+		}
+	}
+	// The worktree writers build on work-A, as resetting to their base would.
+	for i := range answers {
+		if answers[i].Contains == "Write the implementation plan for this unit" || answers[i].Contains == "Implementation plan: docs/plans/" {
+			answers[i].Shell = strings.Trim("git reset -q --hard work-A; "+answers[i].Shell, "; ")
 		}
 	}
 	dir := t.TempDir()
@@ -115,7 +121,7 @@ func journaled(t *testing.T, stateDir, prefix string) bool {
 func TestOnRuntimeDeniedCommit(t *testing.T) {
 	out, ledger, state, _ := realRun(t, answer{
 		Contains: "Implementation plan: docs/plans/",
-		Return:   R(orchtest.Implemented("A", M{"branch": "work-A", "sha": "@workTip"})),
+		Return:   R(orchtest.Implemented("A", M{"branch": "@branch", "sha": "@workTip"})),
 		Shell:    "echo 'package a // more' > a2.go",
 		Denials:  []string{"git commit -m 'feat(A): implement'"},
 	})
@@ -147,13 +153,28 @@ func TestOnRuntimeDeniedBranchDelete(t *testing.T) {
 func TestOnRuntimeTransientRetried(t *testing.T) {
 	out, ledger, state, _ := realRun(t, answer{
 		Contains:  "Implementation plan: docs/plans/",
-		Return:    R(orchtest.Implemented("A", M{"branch": "work-A"})),
+		Return:    R(orchtest.Implemented("A", M{"branch": "@branch"})), // the fixture's SHA is corrected: the ledger has a row
 		FailFirst: true,
 	})
 	eq(t, out.Status, "complete", out.raw)
 	noMatch(t, ledger, `agent-null`)
 	if m, _ := filepath.Glob(filepath.Join(filepath.Dir(state), "calls", "failed-*")); len(m) != 1 {
 		t.Errorf("the first attempt did not fail: %v", m)
+	}
+}
+
+// D23 on the real runtime: an implement that commits on another branch and
+// reports it stops at its return with branch-mismatch; nothing is reviewed.
+func TestOnRuntimeBranchMismatch(t *testing.T) {
+	out, _, state, _ := realRun(t, answer{
+		Contains: "Implementation plan: docs/plans/",
+		Return:   R(orchtest.Implemented("A", M{"branch": "work-A", "sha": "@workTip"})),
+	})
+	eq(t, out.Status, "stopped", out.raw)
+	eqs(t, out.stopKinds(), []string{"branch-mismatch"})
+	match(t, out.stops()[0].Statement, `^reported branch "work-A"; the call's worktree branch is lsf/[0-9a-f]{8}/implement_A-`)
+	if journaled(t, state, "critique-code") {
+		t.Error("reviewed after the stop")
 	}
 }
 
@@ -168,27 +189,66 @@ func TestCheckSha(t *testing.T) {
 		name, branch, reported, want string
 		kind                         string // "" for no signal
 		stmt                         string
+		unresolved                   bool
 	}{
-		{"short prefix", "integration", tip[:7], tip[:7], "", ""},
-		{"full", "integration", tip, tip, "", ""},
-		{"upper case", "integration", strings.ToUpper(tip[:8]), tip[:8], "", ""},
-		{"mismatch", "integration", "deadbee", tip, "sha-corrected", "integration: reported deadbee, tip " + tip + "; corrected"},
-		{"empty", "integration", "", tip, "sha-corrected", "integration: reported no SHA, tip " + tip + "; corrected"},
-		{"too short", "integration", tip[:4], tip, "sha-corrected", ""},
-		{"longer than the tip", "integration", tip + "0", tip, "sha-corrected", ""},
-		{"unresolvable branch", "nope", "deadbee", "deadbee", "", ""},
-		{"revision syntax", "integration~1", "deadbee", "deadbee", "", ""},
+		{"short prefix", "integration", tip[:7], tip[:7], "", "", false},
+		{"full", "integration", tip, tip, "", "", false},
+		{"upper case", "integration", strings.ToUpper(tip[:8]), tip[:8], "", "", false},
+		{"mismatch", "integration", "deadbee", tip, "sha-corrected", "integration: reported deadbee, tip " + tip + "; corrected", false},
+		{"empty", "integration", "", tip, "sha-corrected", "integration: reported no SHA, tip " + tip + "; corrected", false},
+		{"too short", "integration", tip[:4], tip, "sha-corrected", "", false},
+		{"longer than the tip", "integration", tip + "0", tip, "sha-corrected", "", false},
+		{"unresolvable branch", "nope", "deadbee", "deadbee", "", "", true},
+		{"revision syntax", "integration~1", "deadbee", "deadbee", "", "", false},
 	} {
-		got, sig, err := o.checkSha(ctx, at, tc.branch, tc.reported)
-		if err != nil || got != tc.want || (sig == nil) != (tc.kind == "") || (sig != nil && (sig.Kind != tc.kind || (tc.stmt != "" && sig.Statement != tc.stmt))) {
-			t.Errorf("%s: %q %+v %v", tc.name, got, sig, err)
+		got, sig, unresolved, err := o.checkSha(ctx, at, tc.branch, tc.reported)
+		if err != nil || got != tc.want || unresolved != tc.unresolved || (sig == nil) != (tc.kind == "") || (sig != nil && (sig.Kind != tc.kind || (tc.stmt != "" && sig.Statement != tc.stmt))) {
+			t.Errorf("%s: %q %+v %v %v", tc.name, got, sig, unresolved, err)
 		}
 	}
 	// A git error other than an unresolved ref records that it could not check.
 	broken := &orch{git: execGit{}, repo: filepath.Join(t.TempDir(), "missing")}
-	got, sig, err := broken.checkSha(ctx, at, "integration", "deadbee")
+	got, sig, _, err := broken.checkSha(ctx, at, "integration", "deadbee")
 	if err != nil || got != "deadbee" || sig == nil || !strings.Contains(sig.Statement, "not checked") {
 		t.Errorf("git error: %q %+v %v", got, sig, err)
+	}
+}
+
+// checkReturn: with the runtime's branch, a reported branch that differs,
+// or the runtime's branch not resolving, is a branch-mismatch stop, and
+// the SHA is checked against the runtime's branch; without it, the old
+// rule holds (an unresolvable reported branch is silent).
+func TestCheckReturn(t *testing.T) {
+	r := newGitRepo(t)
+	tip := r.git("rev-parse", "integration")
+	o := &orch{git: execGit{}, repo: r.dir}
+	at := plan.At{Stage: "implement", Unit: "A", Wave: plan.W(1)}
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name, rt, reported, sha, want string
+		stop                          bool
+		kind, stmt                    string
+	}{
+		{"match", "integration", "integration", tip[:7], tip[:7], false, "", ""},
+		{"match, SHA corrected against the runtime branch", "integration", "integration", "deadbee", tip, false, "sha-corrected", ""},
+		{"foreign branch", "integration", "work-A", tip, tip, true, "branch-mismatch", `reported branch "work-A"; the call's worktree branch is integration`},
+		{"runtime branch gone", "lsf/x/gone", "lsf/x/gone", "deadbee", "deadbee", true, "branch-mismatch", "branch lsf/x/gone does not resolve"},
+		{"no runtime branch, unresolvable", "", "nope", "deadbee", "deadbee", false, "", ""},
+		{"no runtime branch, reported checked", "", "integration", "deadbee", tip, false, "sha-corrected", ""},
+	} {
+		sigs := []*plan.Signal{}
+		sha := tc.sha
+		stop, err := o.checkReturn(ctx, at, tc.rt, tc.reported, &sha, &sigs)
+		kind, stmt := "", ""
+		if len(sigs) == 1 {
+			kind, stmt = sigs[0].Kind, sigs[0].Statement
+		}
+		if err != nil || stop != tc.stop || sha != tc.want || len(sigs) > 1 || kind != tc.kind || (tc.stmt != "" && stmt != tc.stmt) {
+			t.Errorf("%s: stop %v sha %q sigs %+v err %v", tc.name, stop, sha, sigs, err)
+		}
+		if tc.stop && plan.IsStopKind(kind) != true {
+			t.Errorf("%s: %s is not a stop kind", tc.name, kind)
+		}
 	}
 }
 
@@ -212,10 +272,10 @@ func TestOnRuntimeLiveSchemaViolation(t *testing.T) {
 func TestOnRuntimeShaCorrected(t *testing.T) {
 	out, ledger, _, r := realRun(t, answer{
 		Contains: "Implementation plan: docs/plans/",
-		Return:   R(orchtest.Implemented("A", M{"branch": "work-A", "sha": "deadbee"})),
+		Return:   R(orchtest.Implemented("A", M{"branch": "@branch", "sha": "deadbee"})),
 	})
 	eq(t, out.Status, "complete", out.raw)
 	tip := r.git("rev-parse", "work-A")
-	contains(t, ledger, "| implement | structural | sha-corrected | work-A: reported deadbee, tip "+tip+"; corrected | work-A |")
+	match(t, ledger, `\| implement \| structural \| sha-corrected \| (lsf/[^ ]+implement_A[^ ]*): reported deadbee, tip `+tip+`; corrected \| lsf/[^ ]+ \|`)
 	noMatch(t, ledger, `\| plan \| structural \| sha-corrected`, "a correct short SHA is not corrected")
 }

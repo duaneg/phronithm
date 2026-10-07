@@ -484,6 +484,17 @@ func ShaCorrectedSignal(at At, branch, reported, tip, err string) *Signal {
 	return NewSignal(Signal{Kind: "sha-corrected", Source: "structural", Stage: at.Stage, Unit: at.Unit, Wave: at.Wave, Statement: statement, Referent: branch})
 }
 
+// BranchMismatchSignal is a worktree stage's reported branch that is not
+// the branch the runtime gave its call (runtime set), or that does not
+// resolve (why set).
+func BranchMismatchSignal(at At, reported, runtime, why string) *Signal {
+	statement := fmt.Sprintf("reported branch %s; the call's worktree branch is %s", strconv.Quote(reported), runtime)
+	if why != "" {
+		statement = fmt.Sprintf("branch %s %s", runtime, why)
+	}
+	return NewSignal(Signal{Kind: "branch-mismatch", Source: "structural", Stage: at.Stage, Unit: at.Unit, Wave: at.Wave, Statement: statement, Referent: runtime})
+}
+
 // ReplanItemKinds are the kinds the re-plan is handed with ids and must
 // return a verdict on.
 var ReplanItemKinds = []string{"deferral", "discovery", "claimed-disjoint-conflict", "architecture-note", "execution-distress"}

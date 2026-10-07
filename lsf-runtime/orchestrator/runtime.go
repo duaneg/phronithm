@@ -263,12 +263,19 @@ func hasStop(sigs []*plan.Signal) bool {
 // call is agent, the driver-event mapping and decode. sigs are the call's
 // driver-event signals; the caller appends them to its stage's signals.
 func call[T any](ctx context.Context, o *orch, s site, prompt string, opts lsfrt.Opts) (*ret[T], []*plan.Signal, error) {
+	r, sigs, _, err := callBranch[T](ctx, o, s, prompt, opts)
+	return r, sigs, err
+}
+
+// callBranch is call, also returning the worktree branch the runtime gave
+// the call ("" without isolation, for a seed, or from a stub).
+func callBranch[T any](ctx context.Context, o *orch, s site, prompt string, opts lsfrt.Opts) (*ret[T], []*plan.Signal, string, error) {
 	cr, label, err := o.agent(ctx, prompt, opts)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 	v, sigs := o.callSigs(s, cr, label)
-	return decode[T](o.rt, label, v), sigs, nil
+	return decode[T](o.rt, label, v), sigs, cr.Branch, nil
 }
 
 // step is runStep plus decode. fault is the stage's failure reason, "" when

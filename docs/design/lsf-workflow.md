@@ -499,6 +499,9 @@ STOP (return an escalation record):
 - a gate a stage left out of its return (`gate-omitted`): none reported, or
   one the implement stage ran that a code fix did not report;
 - a code stage's own failure (`stage-fault`), its reason in the statement;
+- a worktree stage that reports a branch other than the one the runtime gave
+  its call, or whose branch does not resolve (`branch-mismatch`), at that
+  stage's return;
 - a stage result outside its schema (an enum value, a missing field), even
   where its mapping would otherwise record it: an unknown merge status is
   not a claimed-disjoint conflict, and an unknown finding severity is not

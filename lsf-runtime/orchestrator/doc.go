@@ -142,4 +142,20 @@
 //     gate dropped is two stops. promptparity maps gate-omitted back, with
 //     its statement; no scenario has both.
 //     declared-gates raises gate-omitted for a declared gate missing.
+//
+// D23 to D25 are merge and cleanup as code (unit code-merge-cleanup).
+//
+//   - D23. A worktree writer (plan, implement, a plan or code fix) that
+//     reports a branch other than the one the runtime gave its call
+//     (CallResult.Branch), or whose branch does not resolve, raises a
+//     branch-mismatch stop at its return; the unit aborts there and the
+//     wave's stop rule stops the run. Its SHA is checked against the
+//     runtime's branch (checkReturn). A fix's mismatch stops the critique
+//     loop before its branch is taken; its critical-fixed rows are already
+//     recorded. Without a runtime branch (a stub, a seed, a call journaled
+//     before the branch was) the SHA is checked against the reported
+//     branch as before, and an unresolvable one is silent. The readers
+//     report no branch, and the main-checkout stages have none. The
+//     completion report's tip read faults with "does not resolve" on exit
+//     1 and with the git error otherwise. JS trusts the reported branch.
 package orchestrator

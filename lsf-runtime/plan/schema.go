@@ -28,12 +28,13 @@ var StopKinds = []string{
 	"precondition",
 	"invalid-plan",
 	"unserialised-overlap",
-	// Go only (orchestrator D19, D21, D22): driver-detected and code-stage stops.
+	// Go only (orchestrator D19, D21, D22, D23): driver-detected and code-stage stops.
 	"uncommitted-at-return", // driver: a stage that commits returned with changes no commit holds, or the check failed
 	"skill-not-loaded",      // driver: the call's skill did not load after the runtime's retry
 	"schema-violation",      // driver: a stage result outside its schema (an enum value, a missing field)
 	"stage-fault",           // a code stage failed; the statement gives the reason
 	"gate-omitted",          // implement or code-fix stage: no gate reported, or a gate the implement stage ran left out
+	"branch-mismatch",       // driver: a worktree stage reported a branch other than the one the runtime gave it, or one that does not resolve
 }
 
 // RecordKinds reach the ledger and, where the re-plan can act on them, the
@@ -64,9 +65,9 @@ var RecordKinds = []string{
 }
 
 // GoOnlyKinds are the kinds the JavaScript does not have (orchestrator D19,
-// D21, D22). tools/graphparity leaves them out of the constants comparison.
+// D21 to D23). tools/graphparity leaves them out of the constants comparison.
 var GoOnlyKinds = []string{
-	"uncommitted-at-return", "skill-not-loaded", "schema-violation", "stage-fault", "gate-omitted",
+	"uncommitted-at-return", "skill-not-loaded", "schema-violation", "stage-fault", "gate-omitted", "branch-mismatch",
 	"residue-at-return", "permission-denied", "sha-corrected", "guard-killed-after-result",
 }
 

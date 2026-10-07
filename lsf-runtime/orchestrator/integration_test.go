@@ -29,6 +29,8 @@ import (
 // A list entry may also carry shell (a bash command run in the call's cwd
 // before answering), denials (Bash commands reported in the result's
 // permission_denials) and failFirst (the entry's first call is an API 529).
+// In a return, @branch and @head stand for the cwd's branch and HEAD after
+// the shell command, so a worktree stage reports the runtime's branch.
 func TestMain(m *testing.M) {
 	if table := os.Getenv("LSF_FAKE_CLAUDE_TABLE"); table != "" && slices.Contains(os.Args, "--session-id") {
 		os.Exit(fakeClaude(table))
@@ -116,6 +118,21 @@ func fakeClaude(table string) int {
 			fmt.Fprintf(os.Stderr, "fake claude: shell: %v %s\n", err, out)
 			return 3
 		}
+	}
+	for _, sub := range []struct{ token, arg string }{{"@branch", "--abbrev-ref"}, {"@head", ""}} {
+		if !strings.Contains(string(v), sub.token) {
+			continue
+		}
+		args := []string{"rev-parse", "HEAD"}
+		if sub.arg != "" {
+			args = []string{"rev-parse", sub.arg, "HEAD"}
+		}
+		out, err := exec.Command("git", args...).Output()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "fake claude: "+sub.token+":", err)
+			return 3
+		}
+		v = json.RawMessage(strings.ReplaceAll(string(v), sub.token, strings.TrimSpace(string(out))))
 	}
 	denials := []map[string]any{}
 	for _, d := range entry.Denials {
@@ -296,6 +313,14 @@ type scriptedSteps struct {
 // does not have, so the orchestrator must not read git around the steps.
 func (r scriptedSteps) Repo() string { return "" }
 
+// Call drops the worktree branch: the scripted returns name the stub run's
+// branches, and the branch check is not this test's subject.
+func (r scriptedSteps) Call(ctx context.Context, prompt string, o lsfrt.Opts) (lsfrt.CallResult, error) {
+	cr, err := r.Runtime.Call(ctx, prompt, o)
+	cr.Branch = ""
+	return cr, err
+}
+
 func (r scriptedSteps) Step(ctx context.Context, label string, input []byte, fn func(context.Context, bool) (json.RawMessage, error)) (json.RawMessage, error) {
 	v, ok := r.values[label]
 	if !ok {
@@ -324,23 +349,20 @@ func TestOnRuntimeCodeStages(t *testing.T) {
 	completeSha := r.commit(planPath, doc(&done), "A complete")
 	r.git("checkout", "-q", "integration")
 
-	answers := []struct {
-		Contains string `json:"contains"`
-		Return   any    `json:"return"`
-	}{
-		{"The requester has answered the questions", R(M{"planSha": planSha, "amendments": []any{}, "overBudget": []any{},
+	answers := []answer{
+		{Contains: "The requester has answered the questions", Return: R(M{"planSha": planSha, "amendments": []any{}, "overBudget": []any{},
 			"verdicts": []M{{"id": "d1", "verdict": "amended", "statement": "noted"}}, "directEdits": []any{}, "summary": "applied"})},
-		{"Write the implementation plan for this unit", R(M{"branch": "work-A", "sha": "p", "path": "docs/plans/A-plan.md", "bytes": 0, "readings": []any{}})},
-		{"Critique the implementation plan at", orchtest.NoFindings()},
-		{"Run the phronithm:critique skill with type critique-code", orchtest.NoFindings()},
-		{"Run the phronithm:review skill", orchtest.NoFindings()},
-		{"Implementation plan: docs/plans/", R(orchtest.Implemented("A", M{"branch": "work-A"}))},
-		{"Merge each unit branch below into", R(M{"integrationBranch": "integration", "merges": []plan.Merge{{Unit: "A", Status: "clean", Files: []string{}, Sha: "m"}},
+		{Contains: "Write the implementation plan for this unit", Shell: "git reset -q --hard work-A", Return: R(M{"branch": "@branch", "sha": "@head", "path": "docs/plans/A-plan.md", "bytes": 0, "readings": []any{}})},
+		{Contains: "Critique the implementation plan at", Return: orchtest.NoFindings()},
+		{Contains: "Run the phronithm:critique skill with type critique-code", Return: orchtest.NoFindings()},
+		{Contains: "Run the phronithm:review skill", Return: orchtest.NoFindings()},
+		{Contains: "Implementation plan: docs/plans/", Shell: "git reset -q --hard work-A", Return: R(orchtest.Implemented("A", M{"branch": "@branch", "sha": "@head"}))},
+		{Contains: "Merge each unit branch below into", Return: R(M{"integrationBranch": "integration", "merges": []plan.Merge{{Unit: "A", Status: "clean", Files: []string{}, Sha: "m"}},
 			"planSha": completeSha, "pauseRequested": false, "architectureSha": ""})},
-		{"has merged these units into", R(M{"invalidations": []any{}, "notes": []any{}, "amendments": []any{}})},
-		{"Cleanup stage, wave", R(M{"removed": 0, "kept": []any{}})},
-		{"Read its Meta-Tasks and Standing Obligations sections", R(M{"planSha": completeSha, "appendedUnits": []any{}, "directEdits": []any{}})},
-		{"For each standing obligation", R(M{"obligations": []any{}})},
+		{Contains: "has merged these units into", Return: R(M{"invalidations": []any{}, "notes": []any{}, "amendments": []any{}})},
+		{Contains: "Cleanup stage, wave", Return: R(M{"removed": 0, "kept": []any{}})},
+		{Contains: "Read its Meta-Tasks and Standing Obligations sections", Return: R(M{"planSha": completeSha, "appendedUnits": []any{}, "directEdits": []any{}})},
+		{Contains: "For each standing obligation", Return: R(M{"obligations": []any{}})},
 	}
 	dir := t.TempDir()
 	tablePath := filepath.Join(dir, "table.json")
