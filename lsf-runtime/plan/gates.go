@@ -26,15 +26,20 @@ type Declaration struct {
 	Gates []DeclaredGate `json:"gates"`
 }
 
+var gatesBlockRE = blockRE(GatesTag)
+
 func gatesProblem(statement, referent string) Problem {
 	return problem("gates block: "+statement, referent)
 }
 
 // ParseDeclaration parses the lsf-gates block of a plan document. It returns
 // nil, nil when the document has none; any problem is an invalid-plan
-// problem and the declaration is then nil.
+// problem and the declaration is then nil, so a caller checks problems
+// before comparing identities. A present key with a null value is a
+// problem, not an absent key. Values are compared as written: `1h` and
+// `60m` are different declarations.
 func ParseDeclaration(markdown string) (*Declaration, []Problem) {
-	matches := blockRE(GatesTag).FindAllStringSubmatch(markdown, -1)
+	matches := gatesBlockRE.FindAllStringSubmatch(markdown, -1)
 	switch len(matches) {
 	case 0:
 		return nil, nil
@@ -54,7 +59,7 @@ func ParseDeclaration(markdown string) (*Declaration, []Problem) {
 		return gatesProblem("unknown top-level key "+k, k)
 	})
 	d := &Declaration{Gates: []DeclaredGate{}}
-	if v, _ := top.Get("setup"); v != nil {
+	if v, present := top.Get("setup"); present {
 		s, ok := v.(string)
 		if !ok || strings.TrimSpace(s) == "" {
 			problems = append(problems, gatesProblem("setup must be a non-empty command", "setup"))
@@ -70,7 +75,7 @@ func ParseDeclaration(markdown string) (*Declaration, []Problem) {
 	for idx, g := range gates {
 		name, _ := get(g, "name")
 		ref, hasName := nonEmptyString(name)
-		if !hasName {
+		if !hasName || !validGateName(ref) {
 			ref = fmt.Sprintf("gates[%d]", idx)
 		}
 		gm, isMap := g.(*Map)
@@ -82,18 +87,23 @@ func ParseDeclaration(markdown string) (*Declaration, []Problem) {
 			return gatesProblem(ref+": unknown key "+k, ref)
 		})...)
 		switch {
-		case !hasName:
+		case name == nil:
 			problems = append(problems, gatesProblem(ref+": missing name", ref))
+		case !hasName || ref != name:
+			problems = append(problems, gatesProblem(fmt.Sprintf("%s: name must be a non-empty string without surrounding space, control characters or /; got %s", ref, jsJSON(name)), ref))
 		case seen[ref]:
 			problems = append(problems, gatesProblem("duplicate gate name "+ref, ref))
+		default:
+			seen[ref] = true
 		}
-		seen[ref] = true
 		gate := DeclaredGate{Name: ref}
 		cmd, _ := gm.Get("command")
-		if gate.Command, ok = cmd.(string); !ok || strings.TrimSpace(gate.Command) == "" {
+		command, isStr := cmd.(string)
+		if !isStr || strings.TrimSpace(command) == "" {
 			problems = append(problems, gatesProblem(ref+": command must be a non-empty string", ref))
 		}
-		if v, _ := gm.Get("timeout"); v != nil {
+		gate.Command = command
+		if v, present := gm.Get("timeout"); present {
 			s, _ := v.(string)
 			if dur, err := time.ParseDuration(s); err != nil || dur <= 0 {
 				problems = append(problems, gatesProblem(fmt.Sprintf("%s: timeout must be a positive duration such as 45m; got %s", ref, jsJSON(v)), ref))
@@ -106,6 +116,11 @@ func ParseDeclaration(markdown string) (*Declaration, []Problem) {
 		return nil, problems
 	}
 	return d, nil
+}
+
+// validGateName keeps a name usable in labels and log names.
+func validGateName(n string) bool {
+	return n == strings.TrimSpace(n) && !strings.ContainsFunc(n, func(r rune) bool { return r < 0x20 || r == 0x7f || r == '/' })
 }
 
 // Identity is the declaration's JSON, which two loads compare.

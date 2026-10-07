@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -59,6 +60,14 @@ func TestParseDeclarationProblems(t *testing.T) {
 		{"bad timeout", "gates:\n  - name: a\n    command: x\n    timeout: soon\n", `a: timeout must be a positive duration such as 45m; got "soon"`},
 		{"zero timeout", "gates:\n  - name: a\n    command: x\n    timeout: 0s\n", "a: timeout must be a positive duration"},
 		{"negative timeout", "gates:\n  - name: a\n    command: x\n    timeout: -5m\n", "a: timeout must be a positive duration"},
+		{"null timeout", "gates:\n  - name: a\n    command: x\n    timeout:\n", "a: timeout must be a positive duration"},
+		{"null setup", "setup: ~\ngates:\n  - name: a\n    command: x\n", "setup must be a non-empty command"},
+		{"setup not a string", "setup: true\ngates:\n  - name: a\n    command: x\n", "setup must be a non-empty command"},
+		{"name not a string", "gates:\n  - name: true\n    command: x\n", "gates[0]: name must be a non-empty string"},
+		{"name with slash", "gates:\n  - name: a/b\n    command: x\n", `gates[0]: name must be a non-empty string without surrounding space, control characters or /; got "a/b"`},
+		{"name with space", "gates:\n  - name: \" a\"\n    command: x\n", "gates[0]: name must be"},
+		{"command not a string", "gates:\n  - name: a\n    command: true\n", "a: command must be a non-empty string"},
+		{"empty block", "# nothing\n", "top level must be a mapping"},
 		{"timeout not a string", "gates:\n  - name: a\n    command: x\n    timeout: [1]\n", "a: timeout must be a positive duration"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -77,6 +86,23 @@ func TestParseDeclarationProblems(t *testing.T) {
 				t.Errorf("want %q in %v", c.want, statements(problems))
 			}
 		})
+	}
+}
+
+func TestParseDeclarationProblemsAccumulate(t *testing.T) {
+	_, problems := ParseDeclaration(gatesDoc("extra: 1\ngates:\n  - name: a\n  - command: x\n"))
+	want := []string{"gates block: unknown top-level key extra", "gates block: a: command must be a non-empty string", "gates block: gates[1]: missing name"}
+	if got := statements(problems); !slices.Equal(got, want) {
+		t.Fatalf("\n got %q\nwant %q", got, want)
+	}
+}
+
+// Gate order is run order, so it is part of the identity.
+func TestDeclarationIdentityOrder(t *testing.T) {
+	ab, _ := ParseDeclaration(gatesDoc("gates:\n  - name: a\n    command: x\n  - name: b\n    command: y\n"))
+	ba, _ := ParseDeclaration(strings.ReplaceAll(gatesDoc("gates:\n  - name: b\n    command: y\n  - name: a\n    command: x\n"), "\n", "\r\n"))
+	if ab == nil || ba == nil || ab.Identity() == ba.Identity() {
+		t.Fatalf("order: %v %v", ab, ba)
 	}
 }
 
