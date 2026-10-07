@@ -44,7 +44,8 @@ func TestRunGatesStatuses(t *testing.T) {
 		{Name: "fails", Command: "echo first; echo 'last line'; exit 3"},
 		{Name: "slow", Command: "sleep 5", Timeout: 200 * time.Millisecond},
 		{Name: "after", Command: "true"},
-		{Name: "oom", Command: "kill -KILL $$"},
+		{Name: "shell killed", Command: "kill -KILL $$"},
+		{Name: "child killed", Command: "sh -c 'kill -KILL $$'"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -60,6 +61,7 @@ func TestRunGatesStatuses(t *testing.T) {
 		{GateNotRun, -1, "timed out after 200ms", false},
 		{GateGreen, 0, "", false},
 		{GateNotRun, -1, "killed by signal killed", false},
+		{GateRed, 137, "", false}, // no output: no tail
 	}
 	for i, w := range want {
 		r := runs[i]

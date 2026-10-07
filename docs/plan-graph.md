@@ -138,7 +138,8 @@ Each command runs through `sh` on a clean detached checkout of the commit
 being gated, so it sees only committed files (submodules are not
 initialised: `setup` does that). A command must depend on the checkout's files
 alone, not on history, branch names or the machine's state, because results
-are kept per tree. A command killed by a signal is not run, not red. The
+are kept per tree. A gate whose shell is killed by a signal is not run; a
+command the shell runs that is killed (an OOM kill) exits 128+N, red. The
 runtime gates:
 
 - a unit's implement commit (not for design units);
@@ -150,7 +151,8 @@ An identical tree is gated once. A result whose gates all completed, red ones
 included, is journaled and replays on relaunch; a gate not run (its timeout, a
 failed setup) reruns. To rerun a red result after fixing the environment,
 remove its record, `journal/gates_<tree prefix>-*.json`, from the state
-directory. A merge that differs from the unit's last gated tree only at its
+directory; a merge whose integration branch has moved since is gated afresh
+anyway. A merge that differs from the unit's last gated tree only at its
 completion report reuses that result within the launch (in practice, the
 first merge of a wave), so a gate that reads the completion report is not
 re-run for the merge.

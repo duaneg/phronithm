@@ -267,11 +267,12 @@ func (o *orch) declaredGates(ctx context.Context, at plan.At, sha string, report
 	return declaredRun{gr: gatesRun{by: "The runtime, on a clean checkout,", gates: gates}, tree: set.Tree}, sigs, false, nil
 }
 
-// mergeStep runs the merge step. A result with a regressed unit (declared
-// gates only) is returned but not journaled, so a relaunch reruns the step:
-// it adopts the merges committed, and the regressed unit's gates replay
-// from their own record, or rerun once that record is gone or was never
-// kept (a gate not run).
+// mergeStep runs the merge step. With declared gates, a result with a
+// regressed unit is returned but not journaled, so a relaunch reruns the
+// step: it adopts the merges committed, and gates the regressed unit's
+// merge again: its record replays for an unchanged tree (a moved
+// integration branch gives a new one), and reruns once removed or when
+// never kept.
 func (l *launch) mergeStep(ctx context.Context, label string, in mergeInput) (*ret[mergeResult], string, error) {
 	var unjournaled json.RawMessage
 	stage := l.mergeStage(in)
@@ -283,7 +284,7 @@ func (l *launch) mergeStep(ctx context.Context, label string, in mergeInput) (*r
 		var r struct {
 			Result mergeResult `json:"result"`
 		}
-		if json.Unmarshal(v, &r) == nil && slices.ContainsFunc(r.Result.Merges, func(x plan.Merge) bool { return x.Status == "regressed" }) {
+		if in.Declared && json.Unmarshal(v, &r) == nil && slices.ContainsFunc(r.Result.Merges, func(x plan.Merge) bool { return x.Status == "regressed" }) {
 			unjournaled = v
 			return nil, errMergeNotJournaled
 		}

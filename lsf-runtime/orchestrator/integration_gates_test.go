@@ -123,16 +123,18 @@ func TestOnRuntimeDeclaredGates(t *testing.T) {
 	eq(t, r.git("for-each-ref", "--format=%(refname) %(objectname)")+"\nHEAD "+r.head(), tips, "no new commit")
 }
 
-// A merge that regresses is not journaled: once the requester fixes the
-// environment and removes the red gate record (docs/plan-graph.md), the
-// relaunch gates the merge again and merges, rather than replay the stop.
+// A merge that regresses is not journaled: a relaunch reruns the merge
+// step. Its gates replay for an unchanged merge tree, and once the
+// requester fixes the environment and removes the red record
+// (docs/plan-graph.md), the relaunch gates again and merges.
 func TestOnRuntimeRegressedMergeRelaunch(t *testing.T) {
 	r := newGitRepo(t)
 	const planPath = "docs/plans/f-breakdown.md"
 	allow := filepath.Join(t.TempDir(), "allow")
+	counter := filepath.Join(t.TempDir(), "gate-runs")
 	// Red only on a tree holding the decision log, which the unit's branch
 	// predates: the unit gates green, its merge red.
-	gates := "gates:\n  - name: env\n    command: \"test -e " + allow + " || ! test -e docs/plans/f-decisions.md\"\n"
+	gates := "gates:\n  - name: env\n    command: \"echo run >> " + counter + "; test -e " + allow + " || ! test -e docs/plans/f-decisions.md\"\n"
 	p := orchtest.Graph("", orchtest.Unit("A"))
 	r.commit("docs/architecture/f.md", "# Architecture\n", "architecture")
 	planSha := r.commit(planPath, planDocFor(p)+orchtest.GatesBlock(gates), "plan")
@@ -184,17 +186,25 @@ func TestOnRuntimeRegressedMergeRelaunch(t *testing.T) {
 	eq(t, strings.Join(first.stopKinds(), ","), "merge-regression", first.raw)
 	contains(t, first.stops()[0].Statement, "failed its gates")
 	eq(t, r.git("log", "--merges", "--oneline", "integration"), "", "nothing merged")
+	runs := func() int { b, _ := os.ReadFile(counter); return strings.Count(string(b), "run") }
+	gated := runs()
+
+	// Unchanged, relaunches regress again. The first stop's ledger commit
+	// may move the branch (a new tree, gated); once it stands still the red
+	// record replays.
+	launch()
+	gated = runs()
+	unchanged := launch()
+	eq(t, strings.Join(unchanged.stopKinds(), ","), "merge-regression")
+	eq(t, runs(), gated, "the red gate record replays")
 
 	os.WriteFile(allow, nil, 0o644)
 	records, _ := filepath.Glob(filepath.Join(cfg.StateDir, "journal", "gates_*.json"))
-	removed := 0
 	for _, rec := range records {
 		if b, _ := os.ReadFile(rec); strings.Contains(string(b), `"status":"red"`) {
 			os.Remove(rec)
-			removed++
 		}
 	}
-	eq(t, removed, 1, "the merge's red gate record")
 	again := launch()
 	eq(t, again.Status, "complete", again.raw)
 	eq(t, r.git("log", "--merges", "--format=%(trailers:key=Lsf-Unit,valueonly)", "integration"), "A")

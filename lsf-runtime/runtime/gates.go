@@ -259,7 +259,10 @@ func (rt *Runtime) gateProcess(ctx context.Context, dir, logPath, command string
 			r.Summary = "did not start: " + err.Error()
 			return r, nil
 		}
-		cancelled.Store(true)
+		if s := rt.stopped(); s != nil {
+			return r, s
+		}
+		return r, &StopError{Reason: StopCancelled}
 	} else {
 		pid := cmd.Process.Pid
 		rt.setChildPid(marker, pid)
@@ -267,8 +270,10 @@ func (rt *Runtime) gateProcess(ctx context.Context, dir, logPath, command string
 		syscall.Kill(-pid, syscall.SIGKILL)
 	}
 	r.Secs = time.Since(t0).Seconds()
-	// A command that ended before a timeout or stop reached it keeps its
-	// result; one killed by a signal of its own is not a verdict.
+	// A command reaped before a timeout or stop reached it keeps its result
+	// (one that exits in the instant before it is reaped may still count as
+	// stopped). A shell killed by a signal is not a verdict; a command the
+	// shell runs that is killed is the shell's exit 128+N, red.
 	ws, _ := cmd.ProcessState.Sys().(syscall.WaitStatus)
 	switch cause := context.Cause(pctx); {
 	case cancelled.Load() && errors.Is(cause, errGateTimeout):

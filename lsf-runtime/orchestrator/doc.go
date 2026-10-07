@@ -237,8 +237,11 @@
 //     suite failed …; merge undone"), which describes JS's merge agent; an
 //     undeclared Go merge never reports regressed. A merge step result with a
 //     regressed unit is not journaled: a relaunch reruns the step, adopting
-//     what it committed and re-gating the regressed unit (its gate record
-//     replays unless removed). In either mode, each unit the merge step
+//     what it committed and gating the regressed unit's merge again: its
+//     record replays for an unchanged tree, and a moved integration branch
+//     (a unit the step merged first, a ledger commit) gives a new one.
+//     The rerun is interrupted (the step's intent is left), which the
+//     start checks treat as a crash recovery. In either mode, each unit the merge step
 //     does not merge (regressed, unresolvable, refused) is journaled as a
 //     nested step merge-outcome:<label>:<unit>, so a rerun resuming a later
 //     unit's merge in progress replays it rather than fail for want of a
