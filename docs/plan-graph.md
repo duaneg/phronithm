@@ -130,11 +130,16 @@ gates:
 - `setup` is optional. It runs once per checkout before the gates, for
   example to install dependencies. If it fails, no gate runs.
 - Quote a command that contains `: ` or ` #`; see the YAML subset below.
-- A plan has at most one gate block. Without one, stages run and report the
-  gates themselves.
+- A plan has at most one gate block, counting any fenced example at line
+  start in the plan document. Without one, stages run and report the gates
+  themselves.
 
 Each command runs through `sh` on a clean detached checkout of the commit
-being gated, so it sees only committed files. The runtime gates:
+being gated, so it sees only committed files (submodules are not
+initialised: `setup` does that). A command must depend on the checkout's files
+alone, not on history, branch names or the machine's state, because results
+are kept per tree. A command killed by a signal is not run, not red. The
+runtime gates:
 
 - a unit's implement commit (not for design units);
 - each code fix's commit;
@@ -160,7 +165,9 @@ written, so `1h` and `60m` differ. A wave re-plan that changes the block stops
 the run with `declared-gates-changed`, and the relaunch takes the changed
 block. A requester's change goes through a decision, which the decision
 re-plan applies before the first load. The commands run with the runtime's
-environment, credentials included, and are trusted as the plan document is.
+environment, credentials included, and are trusted as the plan document is;
+the last 4 KB of a failing gate's output goes to the reviewers' prompts and
+the journal.
 
 ## YAML subset
 

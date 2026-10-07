@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -243,7 +244,11 @@ func (rt *Runtime) gateProcess(ctx context.Context, dir, logPath, command string
 	cmd.Env = append(scrubbedEnv(), "LSF_GATE_COMMAND="+command)
 	cmd.Stdout, cmd.Stderr = out, out
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
+	var cancelled atomic.Bool // the context ended while the command ran
+	cmd.Cancel = func() error {
+		cancelled.Store(true)
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	}
 	cmd.WaitDelay = rt.cfg.KillGrace.D()
 
 	rt.addChild(marker)
@@ -254,6 +259,7 @@ func (rt *Runtime) gateProcess(ctx context.Context, dir, logPath, command string
 			r.Summary = "did not start: " + err.Error()
 			return r, nil
 		}
+		cancelled.Store(true)
 	} else {
 		pid := cmd.Process.Pid
 		rt.setChildPid(marker, pid)
@@ -261,14 +267,19 @@ func (rt *Runtime) gateProcess(ctx context.Context, dir, logPath, command string
 		syscall.Kill(-pid, syscall.SIGKILL)
 	}
 	r.Secs = time.Since(t0).Seconds()
+	// A command that ended before a timeout or stop reached it keeps its
+	// result; one killed by a signal of its own is not a verdict.
+	ws, _ := cmd.ProcessState.Sys().(syscall.WaitStatus)
 	switch cause := context.Cause(pctx); {
-	case errors.Is(cause, errGateTimeout):
+	case cancelled.Load() && errors.Is(cause, errGateTimeout):
 		r.Summary = "timed out after " + timeout.String()
-	case pctx.Err() != nil:
+	case cancelled.Load():
 		if s := rt.stopped(); s != nil {
 			return r, s
 		}
 		return r, &StopError{Reason: StopCancelled}
+	case ws.Signaled():
+		r.Summary = "killed by signal " + ws.Signal().String()
 	default:
 		r.ExitCode = cmd.ProcessState.ExitCode()
 		r.Status = GateRed
