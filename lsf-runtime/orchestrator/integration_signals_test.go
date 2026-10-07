@@ -21,6 +21,7 @@ type answer struct {
 	Shell     string   `json:"shell,omitempty"`
 	Denials   []string `json:"denials,omitempty"`
 	FailFirst bool     `json:"failFirst,omitempty"`
+	Once      bool     `json:"once,omitempty"`
 }
 
 // realRun is one unit, A, run end to end on the real runtime over a real

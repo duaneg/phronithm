@@ -165,8 +165,8 @@ func (m mergeGit) expectedStaged(ctx context.Context, pre, sha string) (staged, 
 	return staged, conflicts, tree, nil
 }
 
-// commitTrailers are a commit's trailers by key, first value each, and the
-// Lsf-Conflict values.
+// mergeTrailers are a merge commit's Lsf-Step, Lsf-Unit and Lsf-Merge
+// trailers by key (the last value of each), and its Lsf-Conflict values.
 func (m mergeGit) mergeTrailers(ctx context.Context, sha string) (map[string]string, []string, error) {
 	out := map[string]string{}
 	for _, k := range []string{trailerStep, trailerUnit, trailerMerge} {
@@ -294,7 +294,11 @@ func (m mergeGit) ownMergeInProgress(ctx context.Context, label string, units []
 // progress, HEAD at pre, every path the merge could touch clean.
 func (m mergeGit) abortOwn(ctx context.Context, pre string, paths []string) error {
 	ctx = context.WithoutCancel(ctx)
-	if h, _ := m.gitFile(ctx, "MERGE_HEAD"); h != "" {
+	h, err := m.gitFile(ctx, "MERGE_HEAD")
+	if err != nil {
+		return err
+	}
+	if h != "" {
 		if _, err := m.r.run(ctx, m.dir, "merge", "--abort"); err != nil {
 			if _, err2 := m.r.run(ctx, m.dir, "reset", "-q", "--merge"); err2 != nil {
 				return errors.Join(err, err2)
@@ -356,13 +360,35 @@ func (m mergeGit) outside(ctx context.Context, staged []string) (map[string]stri
 		if slices.Contains(staged, p) {
 			continue
 		}
-		digest := "absent"
-		if b, err := os.ReadFile(filepath.Join(m.dir, p)); err == nil {
-			digest = contentDigest(b)
-		}
-		out[p] = xy + " " + digest
+		out[p] = xy + " " + fileState(filepath.Join(m.dir, p))
 	}
 	return out, nil
+}
+
+// outsideHashMax bounds the bytes outside reads of one file; past it a
+// file is compared by size and modification time, as the runtime's
+// uncommitted check does.
+const outsideHashMax = 64 << 20
+
+// fileState is what outside compares of one path: its digest, its size
+// and mtime when large, "absent", or the error reading it.
+func fileState(path string) string {
+	fi, err := os.Lstat(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return "absent"
+	case err != nil:
+		return "unreadable: " + err.Error()
+	case !fi.Mode().IsRegular():
+		return fmt.Sprintf("%v %d %d", fi.Mode().Type(), fi.Size(), fi.ModTime().UnixNano())
+	case fi.Size() > outsideHashMax:
+		return fmt.Sprintf("size %d mtime %d", fi.Size(), fi.ModTime().UnixNano())
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "unreadable: " + err.Error()
+	}
+	return contentDigest(b)
 }
 
 // changedOutside names the paths whose state differs between two outside
@@ -589,11 +615,11 @@ func (o *orch) mergeOne(ctx context.Context, m mergeGit, in mergeInput, label st
 		if mustAdopt {
 			return out, fmt.Errorf("unit %s comes before the merge in progress but has no merge of its own to adopt", u.Unit)
 		}
-		in, err := m.status(ctx, m.dir, "merge-base", "--is-ancestor", u.Sha, "HEAD")
+		already, err := m.status(ctx, m.dir, "merge-base", "--is-ancestor", u.Sha, "HEAD")
 		if err != nil {
 			return out, fmt.Errorf("unit %s: %w", u.Unit, err)
 		}
-		if in {
+		if already {
 			return out, fmt.Errorf("%s (unit %s) is already in HEAD, merged outside this stage", u.Sha, u.Unit)
 		}
 	}
@@ -809,29 +835,35 @@ func (o *orch) bookkeep(ctx context.Context, m mergeGit, in mergeInput, bk bookI
 	}
 	merged = pending
 	// Dirt on the paths is this step's own write only after a kill inside
-	// its commit: it must be the rendering, dated as it was.
+	// its commit, on an interrupted rerun: the plan and archive must then
+	// hold the rendering, dated as it was.
+	dirty := false
 	for _, p := range paths {
 		clean, err := m.pathClean(ctx, m.dir, p)
 		if err != nil {
 			return err
 		}
-		if clean {
-			continue
+		dirty = dirty || !clean
+	}
+	if dirty {
+		gotPlan, err := readFile(m.dir, in.PlanPath)
+		if err != nil {
+			return err
 		}
-		dirty, _ := readFile(m.dir, in.PlanPath)
-		if d := maintenanceDate(dirty, merged[0].Unit); interrupted && d != "" {
+		gotArchive, err := readFile(m.dir, in.ArchivePath)
+		if err != nil {
+			return err
+		}
+		if d := maintenanceDate(gotPlan, merged[0].Unit); d != "" {
 			date = d
 		}
 		wantPlan, wantArchive, err := renderBookkeeping(planText, archive, archiveOK, bk, merged, date)
 		if err != nil {
 			return err
 		}
-		gotPlan, _ := readFile(m.dir, in.PlanPath)
-		gotArchive, _ := readFile(m.dir, in.ArchivePath)
 		if !interrupted || string(gotPlan) != string(wantPlan) || (gotArchive != nil && string(gotArchive) != string(wantArchive)) {
-			return fmt.Errorf("%s has uncommitted changes this stage did not make; commit or discard them and relaunch", p)
+			return fmt.Errorf("%s or %s has uncommitted changes this stage did not make; commit or discard them and relaunch", in.PlanPath, in.ArchivePath)
 		}
-		break
 	}
 	newPlan, newArchive, err := renderBookkeeping(planText, archive, archiveOK, bk, merged, date)
 	if err != nil {

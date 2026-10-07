@@ -43,7 +43,8 @@ func (execGit) run(ctx context.Context, dir string, args ...string) ([]byte, err
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	// Paths are literal: a hook-touched path like `a*b` must not match others.
-	cmd.Env = append(scrubbedEnv(), "GIT_TERMINAL_PROMPT=0", "GIT_LITERAL_PATHSPECS=1")
+	// LC_ALL=C: the merge reads git's refusal message.
+	cmd.Env = append(scrubbedEnv(), "GIT_TERMINAL_PROMPT=0", "GIT_LITERAL_PATHSPECS=1", "LC_ALL=C")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// SIGTERM lets git remove its own lock files; WaitDelay then kills git
 	// if it lingers.

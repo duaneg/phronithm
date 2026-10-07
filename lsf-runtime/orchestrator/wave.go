@@ -353,47 +353,49 @@ func (l *launch) checkMergeShas(ctx context.Context, r *mergeResult) (string, er
 		return "", nil
 	}
 	g := gitOps{l.git}
-	check := func(field, sha string) (string, error) {
-		s := strings.ToLower(jsTrim(sha))
+	check := func(field string, sha *string) (string, error) {
+		s := strings.ToLower(jsTrim(*sha))
 		if !shaHex.MatchString(s) {
-			return fmt.Sprintf("returned %s %q is not a commit SHA", field, sha), nil
+			return fmt.Sprintf("returned %s %q is not a commit SHA", field, *sha), nil
 		}
 		full, err := g.out(ctx, l.repo, "rev-parse", "--verify", "--quiet", s+"^{commit}")
 		switch {
 		case err != nil && ctx.Err() != nil:
 			return "", &lsfrt.StopError{Reason: lsfrt.StopCancelled}
 		case err != nil && exitCode(err) == 1:
-			return fmt.Sprintf("returned %s %s does not resolve to a commit", field, sha), nil
+			return fmt.Sprintf("returned %s %s does not resolve to a commit", field, *sha), nil
 		case err != nil:
-			return fmt.Sprintf("returned %s %s: %v", field, sha, err), nil
+			return fmt.Sprintf("returned %s %s: %v", field, *sha, err), nil
 		}
 		on, err := g.status(ctx, l.repo, "merge-base", "--is-ancestor", full, "refs/heads/"+l.ctx.integrationBranch)
 		switch {
 		case err != nil && ctx.Err() != nil:
 			return "", &lsfrt.StopError{Reason: lsfrt.StopCancelled}
 		case err != nil:
-			return fmt.Sprintf("returned %s %s: %v", field, sha, err), nil
+			return fmt.Sprintf("returned %s %s: %v", field, *sha, err), nil
 		case !on:
-			return fmt.Sprintf("returned %s %s is not on %s", field, sha, l.ctx.integrationBranch), nil
+			return fmt.Sprintf("returned %s %s is not on %s", field, *sha, l.ctx.integrationBranch), nil
 		}
+		*sha = full // the full SHA goes on, as git has it
 		return "", nil
 	}
-	for _, x := range r.Merges {
+	for i := range r.Merges {
+		x := &r.Merges[i]
 		if x.Status != "clean" && x.Status != "resolved" {
 			continue
 		}
 		if jsTrim(x.Sha) == "" {
 			return fmt.Sprintf("returned a %s merge of %s without its SHA", x.Status, x.Unit), nil
 		}
-		if f, err := check("merge SHA of "+x.Unit, x.Sha); f != "" || err != nil {
+		if f, err := check("merge SHA of "+x.Unit, &x.Sha); f != "" || err != nil {
 			return f, err
 		}
 	}
-	if f, err := check("planSha", r.PlanSha); f != "" || err != nil {
+	if f, err := check("planSha", &r.PlanSha); f != "" || err != nil {
 		return f, err
 	}
 	if jsTrim(r.ArchitectureSha) != "" {
-		return check("architectureSha", r.ArchitectureSha)
+		return check("architectureSha", &r.ArchitectureSha)
 	}
 	return "", nil
 }

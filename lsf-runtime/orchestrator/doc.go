@@ -169,59 +169,59 @@
 //     launch (a merged unit's replay after cleanup), and with the git error
 //     otherwise. A branch that resolves is read live, so a moved branch
 //     still reruns the report. JS trusts the reported branch.
-//   - D24. The merge is a journaled code step (merge.go), not an agent:
-//     it merges each unit's completion-report commit (the report step's
-//     journaled SHA, so a replay needs no branch) into the integration
-//     branch in the main checkout, with a merge commit carrying Lsf-Step,
-//     Lsf-Unit and Lsf-Merge trailers (Lsf-Conflict per resolved path). A
-//     conflict goes to a model call (merge-conflict:w<n>:<unit>, default
-//     tier) that may only edit and stage; the step accepts the resolution
-//     only with no unmerged path, no conflict marker, nothing staged
-//     outside the paths git's own merge touches, and every non-conflicted
-//     one as git's merge-tree has it, commits it, and otherwise aborts the
-//     merge (unresolvable). A conflicted file's content is the call's
-//     judgement: only its markers are checked. A call that changes the
-//     checkout outside the merge's paths (a new, deleted or reverted file,
-//     the requester's included) is a stage-fault naming them, the merge
-//     aborted; what it did there cannot be undone by the stage. The call's
-//     driver events travel in the value (mergeResult.Signals). A clean
-//     merge's tree must be git's merge-tree of the two; a path a hook
-//     leaves staged, and a merge git stops with nothing in conflict (a
-//     refusing pre-merge-commit hook), are faults. A merge git refuses over
-//     local changes is unresolvable, the changes untouched; any other
-//     failure is a stage-fault, with a merge this step started aborted. No project gate
-//     runs, so no merge is regressed (declared-gates). The bookkeeping
-//     (bookkeeping.go) is rendered for the units still to merge before the
-//     first merge a run makes, with the plan and archive clean, so a plan
-//     it cannot record merges nothing, and committed once over the plan
-//     and the archive (commitFiles, one Lsf-Content trailer per path); a
-//     unit whose stub at its merge commit is already in the plan (an
-//     earlier run of the step that failed later) is not recorded again. An
-//     interrupted rerun resumes only a merge in progress whose MERGE_MSG is
-//     this step's, adopts its own merge commits (verified again) and
-//     bookkeeping commit, and refuses a unit merged under another commit or
-//     outside the stage. A merge SHA, planSha or architectureSha that is
-//     not hex, does not resolve or is not on the integration branch is
-//     rejected (checkMergeShas, live or replayed, with a repository), and
-//     a clean merge without its SHA too: the value is a stage-fault and
-//     nothing in it is merged. There is no tip to correct a merge SHA
-//     against, so unlike checkSha it is not corrected; a journaled SHA a
-//     history rewrite removed faults until the state dir is cleared. A
-//     seed for the label is ignored (D18). JS's merge agent reports what
-//     it likes.
-//   - D25. Cleanup is a journaled code step (cleanup.go), run beside the
-//     wave gate. Its input is each merged unit's worktree labels from the
-//     run of its stages that merged (noteWorktree: every isolated call
-//     made or replayed, not a seeded one, whose worktree is an earlier
-//     launch's, and the completion-report step, sorted so a relaunch's
-//     input is the same). Each worktree is removed with every
-//     untracked, ignored and uncommitted file in it
-//     (lsfrt.Runtime.RemoveWorktree, which keeps one whose branch is not
-//     merged or that is not the runtime's), and its branch is deleted: the
-//     unit is complete, and its replay reads the tips the checks journaled
-//     (D23), not the branches. The step logs each removal's paths and each kept
-//     worktree as it runs, a failed removal's included, and its value
-//     lists them for a replay. A failure is logged, not signalled. JS's cleanup agent matches worktree-wf_* branches the
-//     runtime never makes, and its denials and residue were ledger rows;
-//     the removed-path list takes their place.
+//   - D24. The merge is a journaled code step (merge.go), not an agent: it
+//     merges each unit's completion-report commit (the report step's journaled
+//     SHA, so a replay needs no branch) into the integration branch in the
+//     main checkout, with a merge commit carrying Lsf-Step, Lsf-Unit and
+//     Lsf-Merge trailers (Lsf-Conflict per resolved path). A conflict goes to
+//     a model call (merge-conflict:w<n>:<unit>, default tier) that may only
+//     edit and stage; the step accepts the resolution only with no unmerged
+//     path, no conflict marker, nothing staged outside the paths git's own
+//     merge touches, and every non-conflicted one as git's merge-tree has it,
+//     commits it, and otherwise aborts the merge (unresolvable). A conflicted
+//     file's content is the call's judgement: only its markers are checked. A
+//     call that changes the checkout outside the merge's paths (a new, deleted
+//     or reverted file, the requester's included) is a stage-fault naming
+//     them, the merge aborted; what it did there cannot be undone by the
+//     stage. The call's driver events travel in the value
+//     (mergeResult.Signals). A clean merge's tree must be git's merge-tree of
+//     the two; a path a hook leaves staged, and a merge git stops with nothing
+//     in conflict (a refusing pre-merge-commit hook), are faults. A merge git
+//     refuses over local changes is unresolvable, the changes untouched; any
+//     other failure is a stage-fault, with a merge this step started aborted.
+//     No project gate runs, so no merge is regressed (declared-gates). The
+//     bookkeeping (bookkeeping.go) is rendered for the units still to merge
+//     before the first merge a run makes, with the plan and archive clean, so
+//     a plan it cannot record merges nothing, and committed once over the plan
+//     and the archive (commitFiles, one Lsf-Content trailer per path); a unit
+//     whose stub at its merge commit is already in the plan (an earlier run of
+//     the step that failed later) is not recorded again. An interrupted rerun
+//     resumes only a merge in progress whose MERGE_MSG is this step's, adopts
+//     its own merge commits (verified again) and bookkeeping commit, and
+//     refuses a unit merged under another commit or outside the stage. A merge
+//     SHA, planSha or architectureSha that is not hex, does not resolve or is
+//     not on the integration branch is rejected (checkMergeShas, live or
+//     replayed, with a repository), and a clean merge without its SHA too: the
+//     value is a stage-fault and nothing in it is merged. There is no tip to
+//     correct a merge SHA against, so unlike checkSha it is not corrected; a
+//     journaled SHA a history rewrite removed faults until its journal record
+//     (journal/merge_w<n>-*.json) is removed. A seed for the label is ignored
+//     (D18). JS's merge agent reports what it likes.
+//   - D25. Cleanup is a journaled code step (cleanup.go), run beside the wave
+//     gate. Its input is each merged unit's worktree labels from the run of
+//     its stages that merged (noteWorktree: every isolated call made or
+//     replayed, not a seeded one, whose worktree is an earlier launch's, and
+//     the completion-report step, sorted so a relaunch's input is the same).
+//     Each worktree is removed with every untracked, ignored and uncommitted
+//     file in it (lsfrt.Runtime.RemoveWorktree, which keeps one whose branch
+//     is not merged or that is not the runtime's), and its branch is deleted:
+//     the unit is complete, and its replay reads the tips the checks journaled
+//     (D23), not the branches. The step logs each removal's paths and each
+//     kept worktree as it runs, a failed removal's included, and its value
+//     lists them for a replay. A failure is logged, not signalled. JS's
+//     cleanup agent matches worktree-wf_* branches the runtime never makes,
+//     and its denials and residue were ledger rows; the removed-path list
+//     takes their place. A replay after cleanup re-checks no uncommitted
+//     paths: the worktrees, and their dirt, are gone. A failed removal is not
+//     retried.
 package orchestrator

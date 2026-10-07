@@ -312,6 +312,7 @@ Every call that spawned and returns a value or a null reports the paths it left 
 
 - **Uncommitted attribution.** A requester edit to the main checkout during a repo call is attributed to that call. The review gate runs beside the cleanup step, which writes only under the state dir and the refs, so a change made then is attributed to the gate.
 - **Earlier attempts' worktrees.** Cleanup removes the worktrees a merged unit's stages used, made or replayed, in the launch that merged it; a relaunch that replays a unit to its merge removes the earlier launch's worktrees with it. The worktrees of an attempt that did not merge (an aborted wave, or a unit the launch did not merge) stay, with their branches: they may hold work a stop left uncommitted. So does a seeded stage's.
+- **A failed cleanup is not retried.** A merged unit is not revisited, so a worktree whose removal failed stays, with its branch; the log names it.
 - **Worktrees git will not remove.** A worktree holding a submodule, or one that is locked, fails its removal, which is logged, and the worktree stays.
 - **A repo call's re-run.** A repo call that returned null keeps its uncommitted paths in `<key>.dirt`, and its re-run's before-state leaves them out, so they are reported again. A call that was stopped, killed, or crashed before returning keeps nothing: its re-run takes any dirt it left into its before-state.
 - **A replay that fails its schema** (a changed validator, an edited record) re-runs the call. For a writer, the re-run can repeat a commit the first run made.

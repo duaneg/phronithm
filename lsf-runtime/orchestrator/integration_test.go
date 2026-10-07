@@ -28,7 +28,8 @@ import (
 // entry whose substring the prompt contains. No answer is an API error.
 // A list entry may also carry shell (a bash command run in the call's cwd
 // before answering), denials (Bash commands reported in the result's
-// permission_denials) and failFirst (the entry's first call is an API 529).
+// permission_denials), failFirst (the entry's first call is an API 529)
+// and once (the entry answers one call; later ones fall to the next match).
 // In a return, @branch and @head stand for the cwd's branch and HEAD after
 // the shell command, so a worktree stage reports the runtime's branch.
 func TestMain(m *testing.M) {
@@ -76,6 +77,7 @@ func fakeClaude(table string) int {
 			Shell     string          `json:"shell"`
 			Denials   []string        `json:"denials"`
 			FailFirst bool            `json:"failFirst"`
+			Once      bool            `json:"once"`
 		}
 		err = json.Unmarshal(b, &list)
 		for i, e := range list {
@@ -83,7 +85,17 @@ func fakeClaude(table string) int {
 				fmt.Fprintln(os.Stderr, "fake claude: table entry without contains or return")
 				return 3
 			}
-			if strings.Contains(string(prompt), e.Contains) {
+			if !strings.Contains(string(prompt), e.Contains) {
+				continue
+			}
+			if e.Once {
+				used := filepath.Join(os.Getenv("LSF_FAKE_CLAUDE_STATE"), fmt.Sprintf("once-%d", i))
+				if _, err := os.Stat(used); err == nil {
+					continue
+				}
+				os.WriteFile(used, nil, 0o644)
+			}
+			{
 				v, ok = e.Return, true
 				entry.Shell, entry.Denials, entry.FailFirst, entryIdx = e.Shell, e.Denials, e.FailFirst, i
 				break
@@ -165,7 +177,7 @@ func events(t *testing.T, stateDir string) map[string]int {
 
 func calls(t *testing.T, dir string) int {
 	t.Helper()
-	es, err := os.ReadDir(dir)
+	es, err := filepath.Glob(filepath.Join(dir, "call-*")) // not the once/failed markers
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,8 +362,15 @@ func TestOnRuntimeCodeStages(t *testing.T) {
 			"verdicts": []M{{"id": "d1", "verdict": "amended", "statement": "noted"}}, "directEdits": []any{}, "summary": "applied"})},
 		{Contains: "Write the implementation plan for this unit", Shell: "git reset -q --hard work-A", Return: R(M{"branch": "@branch", "sha": "@head", "path": "docs/plans/A-plan.md", "bytes": 0, "readings": []any{}})},
 		{Contains: "Critique the implementation plan at", Return: orchtest.NoFindings()},
+		// One Critical in round 1: a code fix on its own branch, which the
+		// completion report builds on and a replay after cleanup reads the
+		// journaled tip of.
+		{Contains: "Run the phronithm:critique skill with type critique-code", Once: true,
+			Return: R(M{"findings": []plan.Finding{orchtest.Finding("Critical", "bad", "src/A/a.go:1")}, "systemic": false, "summary": "s"})},
 		{Contains: "Run the phronithm:critique skill with type critique-code", Return: orchtest.NoFindings()},
 		{Contains: "Run the phronithm:review skill", Return: orchtest.NoFindings()},
+		{Contains: "Critique gate round 1 found these Critical findings against the code", Shell: "git reset -q --hard work-A && echo '// fixed' >> src/A/a.go && git -c user.name=t -c user.email=t@x commit -qam fix",
+			Return: R(M{"branch": "@branch", "sha": "@head", "applied": []M{{"finding": "bad", "fix": "fixed"}}, "notApplied": []any{}, "gates": orchtest.GreenGates("1 passed")})},
 		{Contains: "Implementation plan: docs/plans/", Shell: "git reset -q --hard work-A && echo built > build.log", Return: R(orchtest.Implemented("A", M{"branch": "@branch", "sha": "@head"}))},
 		{Contains: "has merged these units into", Return: R(M{"invalidations": []any{}, "notes": []any{}, "amendments": []any{}})},
 		{Contains: "Read its Meta-Tasks and Standing Obligations sections", Return: R(M{"planSha": "@head", "appendedUnits": []any{}, "directEdits": []any{}})},
@@ -424,7 +443,7 @@ func TestOnRuntimeCodeStages(t *testing.T) {
 		t.Fatal("no merge commit on integration")
 	}
 	eq(t, trailers(reportSha), "completion-report:A", "the merge's second parent is the report's commit")
-	eq(t, r.git("rev-parse", reportSha+"^"), r.git("rev-parse", "work-A"))
+	eq(t, r.git("log", "-1", "--format=%s", reportSha+"^"), "fix", "the report builds on the code fix")
 	match(t, r.git("show", reportSha+":docs/plans/A-completion.md"), `^# A — completion report\n`)
 
 	// Cleanup (D25): every worktree of A's stages is gone, the ignored file

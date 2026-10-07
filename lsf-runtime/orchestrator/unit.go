@@ -230,17 +230,28 @@ func (o *orch) liveTip(ctx context.Context, branch string) (branchTipRead, error
 // journaledTip reads a writer call's branch tip as a code step,
 // branch-tip:<call label> (D23): a replay gets the tip the call returned
 // to, so the check, its correction and its ledger rows are the same
-// whether or not cleanup has since deleted the branch. The tip is kept for
-// the completion report's fallback (tipAt).
-func (o *orch) journaledTip(callLabel string) func(context.Context, string) (branchTipRead, error) {
+// whether or not cleanup has since deleted the branch. The input holds the
+// SHA the call reported, so a call that reran (and committed again) reads
+// afresh. Only a resolved tip is journaled: an unresolved branch or a git
+// error is read again next launch. The tip is kept for the completion
+// report's fallback (tipAt).
+func (o *orch) journaledTip(callLabel, reported string) func(context.Context, string) (branchTipRead, error) {
 	return func(ctx context.Context, branch string) (branchTipRead, error) {
-		raw, _, err := o.runStep(ctx, "branch-tip:"+callLabel, map[string]string{"branch": branch}, func(ctx context.Context, _ string, _ bool) (json.RawMessage, error) {
+		var unjournaled branchTipRead
+		raw, _, err := o.runStep(ctx, "branch-tip:"+callLabel, map[string]string{"branch": branch, "reported": reported}, func(ctx context.Context, _ string, _ bool) (json.RawMessage, error) {
 			r, err := o.liveTip(ctx, branch)
 			if err != nil {
 				return nil, err
 			}
+			if r.Tip == "" {
+				unjournaled = r
+				return nil, errNotJournaled
+			}
 			return json.Marshal(r)
 		})
+		if unjournaled != (branchTipRead{}) {
+			return unjournaled, nil
+		}
 		var se *stageErr
 		if errors.As(err, &se) {
 			return branchTipRead{Error: se.reason}, nil
@@ -260,6 +271,9 @@ func (o *orch) journaledTip(callLabel string) func(context.Context, string) (bra
 		return r, nil
 	}
 }
+
+// errNotJournaled fails a tip step whose read is not to be kept.
+var errNotJournaled = errors.New("tip not resolved; not journaled")
 
 // tipAt is the tip a writer call's check read for branch this launch, ""
 // when none did.
@@ -308,7 +322,7 @@ func (o *orch) checkReturn(ctx context.Context, at plan.At, call callMeta, branc
 			return true, nil
 		}
 		branch = rtBranch
-		read = o.journaledTip(call.label)
+		read = o.journaledTip(call.label, reported+" "+*sha)
 	}
 	fixed, sig, unresolved, err := o.checkShaFrom(ctx, at, branch, *sha, read)
 	if err != nil {
