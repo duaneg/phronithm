@@ -290,17 +290,15 @@ func (s *Stub) Step(ctx context.Context, label string, input []byte, fn func(con
 }
 
 // runGateStep records a gate step and runs its fn without the lock; the
-// caller holds it.
+// caller holds it. A gate step's label repeats when a run that was not kept
+// reruns, so it is not checked.
 func (s *Stub) runGateStep(ctx context.Context, c Call, fn func(context.Context, bool) (json.RawMessage, error)) (json.RawMessage, error) {
-	for _, prev := range s.Calls {
-		if prev.Label == c.Label {
-			s.fail("label %q repeated within the launch", c.Label)
-		}
-	}
 	s.Calls = append(s.Calls, c)
 	s.mu.Unlock()
+	defer s.mu.Lock()
 	v, err := fn(ctx, false)
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err == nil {
 		if v == nil {
 			v = json.RawMessage("null")

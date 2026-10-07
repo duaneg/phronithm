@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/duaneg/phronithm/lsf-runtime/orchestrator/orchtest"
 	"github.com/duaneg/phronithm/lsf-runtime/plan"
@@ -73,10 +74,16 @@ func TestDeclaredGatesLoad(t *testing.T) {
 	contains(t, v.stops()[0].Statement, "gates block: `gates` must be a non-empty sequence")
 }
 
-// The same tree is gated once in a launch, concurrent callers included.
+// The same tree is gated once in a launch: callers that arrive while the
+// run is in flight wait for it.
 func TestGatesMemoPerTree(t *testing.T) {
 	s := stub(t, orchtest.TwoWaves(), nil, nil)
-	s.Concurrent = true
+	release, started := make(chan struct{}), make(chan struct{}, 8)
+	s.Gates = func(g orchtest.GateCall) ([]lsfrt.GateRun, error) {
+		started <- struct{}{}
+		<-release
+		return orchtest.GateRuns(g.Gates, func(lsfrt.GateSpec) string { return lsfrt.GateGreen }, g.Commit), nil
+	}
 	o := stubOrch(t, s, nil)
 	o.decl = mustDecl(t, twoGates)
 	var wg sync.WaitGroup
@@ -88,12 +95,75 @@ func TestGatesMemoPerTree(t *testing.T) {
 			}
 		})
 	}
+	<-started
+	waitUntil(t, func() bool { // the other three are parked on the flight
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		return len(o.gateMemo) == 1
+	})
+	time.Sleep(50 * time.Millisecond)
+	close(release)
 	wg.Wait()
 	o.gates(context.Background(), "c2")
 	o.gates(context.Background(), "c1")
 	eq(t, len(s.GateRuns), 2)
 	eq(t, strings.Join(s.Labels(), ","), "gates:c1,gates:c2")
 	eq(t, s.GateRuns[0].Gates[0].Command, "make test")
+}
+
+// A waiter on a run that was not kept runs the gates itself; one whose own
+// context ends stops; a panicking run is a fault, not a hang.
+func TestGatesFlightFailures(t *testing.T) {
+	s := stub(t, orchtest.TwoWaves(), nil, nil)
+	release, started := make(chan struct{}), make(chan struct{})
+	n := 0
+	s.Gates = func(g orchtest.GateCall) ([]lsfrt.GateRun, error) {
+		n++ // calls are serial: the first blocks every other on its flight
+		switch n {
+		case 1:
+			close(started)
+			<-release
+			return orchtest.GateRuns(g.Gates, func(lsfrt.GateSpec) string { return lsfrt.GateNotRun }, g.Commit), nil
+		case 3:
+			panic("boom")
+		}
+		return orchtest.GateRuns(g.Gates, func(lsfrt.GateSpec) string { return lsfrt.GateRed }, g.Commit), nil
+	}
+	o := stubOrch(t, s, nil)
+	o.decl = mustDecl(t, twoGates)
+	var owner, waiter gateSet
+	var wg sync.WaitGroup
+	wg.Go(func() { owner, _, _ = o.gates(context.Background(), "c1") })
+	<-started
+	cctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := o.gates(cctx, "c1"); !isStop(err) {
+		t.Errorf("cancelled waiter: %v", err)
+	}
+	wg.Go(func() { waiter, _, _ = o.gates(context.Background(), "c1") })
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	eq(t, len(owner.notRun()), 2)
+	eq(t, len(waiter.failed()), 2)
+	eq(t, len(waiter.notRun()), 0, "the waiter ran its own")
+	if _, fault, err := o.gates(context.Background(), "c2"); err != nil || !strings.Contains(fault, "boom") {
+		t.Errorf("panic: %q %v", fault, err)
+	}
+	eq(t, len(s.GateRuns), 3)
+	// The stable label: a rerun of a tree keeps it.
+	eq(t, strings.Join(s.Labels(), ","), "gates:c1,gates:c1,gates:c2")
+}
+
+func waitUntil(t *testing.T, cond func() bool) {
+	t.Helper()
+	for range 200 {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("condition not reached")
 }
 
 // A set with a gate not run is returned, not kept: the next ask reruns it.
@@ -171,4 +241,127 @@ func TestGatesJournalReplay(t *testing.T) {
 	if set := gate(c2); set.Runs[1].Status != lsfrt.GateGreen || runs() != 3 || set.Tree != r.git("rev-parse", c1+"^{tree}") {
 		t.Fatalf("same tree, other commit: %+v, %d runs", set, runs())
 	}
+}
+
+// The declaration whose commands match the stub's GreenGates.
+const stubGates = "gates:\n  - name: tests\n    command: pytest -q\n  - name: lint\n    command: ruff check .\n"
+
+// statusAt answers RunGates with status(commit, gate name).
+func statusAt(status func(commit, gate string) string) func(orchtest.GateCall) ([]lsfrt.GateRun, error) {
+	return func(g orchtest.GateCall) ([]lsfrt.GateRun, error) {
+		return orchtest.GateRuns(g.Gates, func(s lsfrt.GateSpec) string { return status(g.Commit, s.Name) }, g.Commit), nil
+	}
+}
+
+func declaredStub(t *testing.T, p *plan.Plan, h Hs) *orchtest.Stub {
+	t.Helper()
+	s := stub(t, p, h, nil)
+	s.State.GatesBlock = stubGates
+	return s
+}
+
+// S3 (unit part), S4: the runtime gates the implement commit; a stage's
+// green for a gate the runtime found red is a gate-misreported record, and
+// the reviewers read the runtime's red, with its tail.
+func TestDeclaredGatesSupersedeStage(t *testing.T) {
+	s := declaredStub(t, graph("plan0", unit("A")), nil)
+	s.Gates = statusAt(func(_, gate string) string {
+		if gate == "tests" {
+			return lsfrt.GateRed
+		}
+		return lsfrt.GateGreen
+	})
+	out := run(t, s)
+	eq(t, out.Status, "complete", out.stopKinds())
+	eq(t, len(s.GateRuns), 1)
+	eq(t, s.GateRuns[0].Commit, "i")
+	eq(t, out.Digest.ByKind["gate-misreported"], 1)
+	for _, l := range []string{"critique-code:r1:A", "lens-review:r1:A"} {
+		match(t, s.Prompt(l), "The runtime, on a clean checkout, ran the project's gates at this branch's HEAD:\n- `pytest -q` — red: red at i\n\n  ```\nFAILED tests\n  ```\n- `ruff check \\.` — green: green at i\n", l)
+	}
+	impl := s.Prompt("implement:A")
+	contains(t, impl, "The runtime runs the project's declared gates on a clean checkout of the commit you return")
+	contains(t, impl, "- tests: `pytest -q`\n- lint: `ruff check .`\nDo not run them as a final check")
+	notContains(t, impl, "Run each gate detached", "no long-gate recipe")
+	match(t, input(t, s, "completion-report:A")["text"].(string), "Gates at HEAD:\n\n- `pytest -q` — red: red at i")
+}
+
+// S4: a stage that omits a declared gate, reports it not-run, or reports
+// none at all is not stopped; a runtime not-run is gate-not-run.
+func TestDeclaredGatesStageOmissions(t *testing.T) {
+	for name, gates := range map[string][]orchtest.Gate{
+		"none":    {},
+		"omitted": {g("pytest -q", "green", "ok")},
+		"not-run": {g("pytest -q", "not-run", "timeout"), g("ruff check .", "green", "")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := declaredStub(t, graph("plan0", unit("A")), Hs{"implement": func(c Call, _ *State) any {
+				return R(orchtest.Implemented(c.Unit, M{"gates": gates}))
+			}})
+			out := run(t, s)
+			eq(t, out.Status, "complete", out.stopKinds())
+			eq(t, out.Digest.ByKind["gate-omitted"]+out.Digest.ByKind["gate-not-run"], 0)
+		})
+	}
+	s := declaredStub(t, graph("plan0", unit("A")), nil)
+	s.Gates = statusAt(func(_, gate string) string {
+		if gate == "lint" {
+			return lsfrt.GateNotRun
+		}
+		return lsfrt.GateGreen
+	})
+	out := run(t, s)
+	eq(t, strings.Join(out.stopKinds(), ","), "gate-not-run")
+	st := out.stops()[0]
+	eq(t, st.Stage, "implement")
+	contains(t, st.Statement, "not run by the runtime on i: ruff check . (not-run at i)")
+	if has(s.Labels(), "critique-code:r1:A") {
+		t.Error("a runtime not-run reaches review")
+	}
+}
+
+// A code fix's commit is gated, and the next round reads those results; a
+// fix whose gates the runtime could not run stops.
+func TestDeclaredGatesAfterFix(t *testing.T) {
+	s := declaredStub(t, graph("plan0", unit("A")), Hs{"critique-code": criticalOnce(), "fix-code": fixCode(g("pytest -q", "red", "lies"))})
+	s.Gates = statusAt(func(commit, _ string) string {
+		if commit == "i" {
+			return lsfrt.GateRed
+		}
+		return lsfrt.GateGreen
+	})
+	out := run(t, s)
+	eq(t, out.Status, "complete", out.stopKinds())
+	eq(t, len(s.GateRuns), 2)
+	eq(t, s.GateRuns[1].Commit, "f")
+	match(t, s.Prompt("critique-code:r2:A"), "The runtime, on a clean checkout, ran the project's gates at this branch's HEAD:\n- `pytest -q` — green: green at f\n")
+	eq(t, out.Digest.ByKind["gate-misreported"], 3, "implement's two greens vs red, the fix's red vs green")
+	fix := s.Prompt("fix-code:r1:A")
+	contains(t, fix, "The runtime runs the project's declared gates")
+	notContains(t, fix, "every gate the implement stage ran")
+	text := input(t, s, "completion-report:A")["text"].(string)
+	match(t, text, "the gates below are the runtime's at the last fix")
+	match(t, text, "Gates at HEAD:\n\n- `pytest -q` — green: green at f")
+
+	s = declaredStub(t, graph("plan0", unit("A")), Hs{"critique-code": criticalOnce(), "fix-code": fixCode()})
+	s.Gates = statusAt(func(commit, _ string) string {
+		if commit == "f" {
+			return lsfrt.GateNotRun
+		}
+		return lsfrt.GateGreen
+	})
+	out = run(t, s)
+	eq(t, strings.Join(out.stopKinds(), ","), "gate-not-run")
+	eq(t, out.stops()[0].Stage, "fix")
+}
+
+// A design unit runs no unit-level gates, and its prompts are unchanged.
+func TestDeclaredGatesDesignUnit(t *testing.T) {
+	d := orchtest.Typed(unit("D"), "design")
+	s := declaredStub(t, graph("plan0", d), nil)
+	run(t, s)
+	eq(t, len(s.GateRuns), 0)
+	plain := stub(t, graph("plan0", d), nil, nil)
+	run(t, plain)
+	eq(t, s.Prompt("implement:D"), plain.Prompt("implement:D"))
 }

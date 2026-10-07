@@ -196,7 +196,12 @@ func (o *orch) runStep(ctx context.Context, label string, input any, fn stageFn)
 	if _, ok := o.seed[label]; ok {
 		o.rt.Log(label + ": args.seed ignored; code stage")
 	}
-	label = o.unique(label)
+	return o.runStepAs(ctx, o.unique(label), input, fn)
+}
+
+// runStepAs is runStep under label as given, for a step whose label the
+// caller keeps unique.
+func (o *orch) runStepAs(ctx context.Context, label string, input any, fn stageFn) (json.RawMessage, string, error) {
 	in, err := plan.MarshalJS(input, "")
 	if err != nil {
 		return nil, label, &stageErr{fmt.Sprintf("input: %v", err)}

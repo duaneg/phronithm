@@ -8,12 +8,15 @@ import (
 
 // reviewOutcome is the review gate's result as the completion report reads
 // it. gates is the last code fix's runs, set (fixedGates) only when a fix
-// re-ran them: they are then the gates at the unit's final HEAD.
+// re-ran them: they are then the gates at the unit's final HEAD. With
+// declared gates (declared, D27) gates is always the runtime's last run, and
+// fixedGates says a fix's tree was gated.
 type reviewOutcome struct {
 	rounds     int
 	findings   []plan.Finding
 	gates      []gateRun
 	fixedGates bool
+	declared   bool
 }
 
 // renderCompletionReport renders the unit's completion report from the
@@ -43,7 +46,7 @@ func renderCompletionReport(c *runCtx, u *plan.Unit, wave int, branch string, im
 	}
 	dc := impl.DoneCondition
 	headGates := impl.Gates
-	if review.fixedGates {
+	if review.fixedGates || review.declared {
 		headGates = review.gates
 	}
 
@@ -58,7 +61,10 @@ func renderCompletionReport(c *runCtx, u *plan.Unit, wave int, branch string, im
 	if !dc.Evaluable {
 		verdict += " (not evaluable as written)"
 	}
-	if review.fixedGates {
+	switch {
+	case review.fixedGates && review.declared:
+		verdict += ", as the implement stage evaluated it; the gates below are the runtime's at the last fix"
+	case review.fixedGates:
 		verdict += ", as the implement stage evaluated it; the gates below are the last fix's"
 	}
 	lines = append(lines, "## Done-condition verdict", "", strings.TrimRightFunc(verdict+". "+dc.Evidence, isJSSpace))
@@ -113,6 +119,7 @@ type unitResult struct {
 	completionPath string
 	signals        []*plan.Signal
 	aborted        string
+	gatedTree      string // the tree the runtime last gated, declared gates only (D27)
 }
 
 // mergedUnit is a unit merged this wave, with its merge commit.

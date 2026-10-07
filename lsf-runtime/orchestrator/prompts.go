@@ -82,12 +82,15 @@ const entrySemantics = "The entry's Scope line declares the files this unit writ
 const longGates = "A gate can outlast the Bash tool's time limit, which moves the command to the background; ending your turn while it runs returns this stage with the gate unrun. Run each gate detached unless you know it finishes well inside a minute, one at a time, numbering the gates 1, 2, … in the order you report them, with `<command>` the gate's full command line: `D=$(git rev-parse --absolute-git-dir); rm -f \"$D\"/lsf-gate-<n>.*; ( { <command>; } > \"$D/lsf-gate-<n>.log\" 2>&1; echo $? > \"$D/lsf-gate-<n>.rc\" ) </dev/null >/dev/null 2>&1 & echo $! > \"$D/lsf-gate-<n>.pid\"`. Then wait for it with the Bash tool's timeout set to 600000 ms: `D=$(git rev-parse --absolute-git-dir); P=$(cat \"$D/lsf-gate-<n>.pid\"); timeout 540 sh -c \"until [ -f '$D/lsf-gate-<n>.rc' ] || ! kill -0 $P 2>/dev/null; do sleep 15; done\"`. Exit status 124 means the gate is still running: make the same call again. Otherwise read `lsf-gate-<n>.rc`: 0 is `green`, any other value `red`, with the summary from the end of `lsf-gate-<n>.log`; no `.rc` file means the gate died, and it is `not-run`. Report a gate `not-run`, with why in its summary, only when it could not be completed; the run stops on a gate not run, and the requester decides."
 
 // fixTail is the fix stage's subject-specific instructions.
-func fixTail(u *plan.Unit, subject string, gates []gateRun) string {
+func fixTail(u *plan.Unit, subject string, gates []gateRun, decl *plan.Declaration) string {
 	if subject == "plan" {
 		return "The plan is docs/plans/" + u.ID + "-plan.md on this branch. Repair the findings; do not shorten the plan to length."
 	}
 	if u.Type == "design" {
 		return "Run the tests the fix touches as you go, then the project's gates once at the end; a fix that breaks a test is not applied."
+	}
+	if decl != nil {
+		return "Run the tests the fix touches as you go; a fix that breaks a test is not applied. " + declaredGatesClause(decl)
 	}
 	cmds := []string{}
 	for _, g := range gates {
@@ -95,6 +98,17 @@ func fixTail(u *plan.Unit, subject string, gates []gateRun) string {
 	}
 	return "Run the tests the fix touches as you go; a fix that breaks a test is not applied. Then run the project's gates once at your final HEAD — every gate the implement stage ran, below, with its command unchanged, not only those the fix touches:\n" +
 		strings.Join(cmds, "\n") + "\nand report each under `gates` with its command, status, and a one-line summary; the next review round reads these, not the implement stage's. " + longGates
+}
+
+// declaredGatesClause replaces a code stage's gate instructions when the
+// plan declares its gates (D27).
+func declaredGatesClause(decl *plan.Declaration) string {
+	cmds := []string{}
+	for _, g := range decl.Gates {
+		cmds = append(cmds, "- "+g.Name+": `"+g.Command+"`")
+	}
+	return "The runtime runs the project's declared gates on a clean checkout of the commit you return, so they see only what is committed, and the review stages read its results:\n" + strings.Join(cmds, "\n") +
+		"\nDo not run them as a final check (running tests while you work is your own business), and return `gates` as an empty array."
 }
 
 // gatesRun is the gate runs the reviewers read instead of re-running the
@@ -114,6 +128,13 @@ func renderGates(gates []gateRun) string {
 		line := "- `" + g.Command + "` — " + g.Status
 		if g.Summary != "" {
 			line += ": " + g.Summary
+		}
+		if g.Tail != "" {
+			fence := "```"
+			for strings.Contains(g.Tail, fence) {
+				fence += "`"
+			}
+			line += "\n\n  " + fence + "\n" + strings.TrimRight(g.Tail, "\n") + "\n  " + fence
 		}
 		out = append(out, line)
 	}
@@ -225,12 +246,16 @@ func planCritiquePrompt(c *runCtx, p planRef, u *plan.Unit, branch string, round
 	return header(c, p) + "\n\n" + unitBlock(p, u) + "\n\nCritique the implementation plan at docs/plans/" + u.ID + "-plan.md on branch " + branch + " (`git show " + branch + ":docs/plans/" + u.ID + "-plan.md`) with type critique-design. This is round " + itoa(round) + " of the critique gate. Pass bar: no Critical findings. Report Significant and Minor findings; they are recorded, not fixed. The plan's Readings section records how it read clauses that admitted more than one reading; a reading you judge wrong is a finding at the severity its consequence warrants, not a separate remark. Set `systemic` when the findings indicate a structural defect that iteration will not resolve. Continue through to completion — do not stop to wait for instruction.\n" + returnFields
 }
 
-func fixPrompt(c *runCtx, p planRef, u *plan.Unit, branch, subject string, criticals []critical, round int, gates []gateRun) string {
-	return header(c, p) + "\n" + worktree(branch) + "\n\n" + unitBlock(p, u) + "\n\nCritique gate round " + itoa(round) + " found these Critical findings against the " + subject + ":\n\n" + jsonIndent(criticals) + "\n\nFix each finding that is repairable within the " + subject + ", then commit. A finding you decline to fix — because the repair would change the unit entry, the architecture document, or the request record, or because you cannot repair it — goes under `notApplied` with the reason. The run stops on a declined finding and the requester decides, so decline only when the repair is genuinely outside the " + subject + ". " + fixTail(u, subject, gates) + "\n" + returnFields
+func fixPrompt(c *runCtx, p planRef, u *plan.Unit, branch, subject string, criticals []critical, round int, gates []gateRun, decl *plan.Declaration) string {
+	return header(c, p) + "\n" + worktree(branch) + "\n\n" + unitBlock(p, u) + "\n\nCritique gate round " + itoa(round) + " found these Critical findings against the " + subject + ":\n\n" + jsonIndent(criticals) + "\n\nFix each finding that is repairable within the " + subject + ", then commit. A finding you decline to fix — because the repair would change the unit entry, the architecture document, or the request record, or because you cannot repair it — goes under `notApplied` with the reason. The run stops on a declined finding and the requester decides, so decline only when the repair is genuinely outside the " + subject + ". " + fixTail(u, subject, gates, decl) + "\n" + returnFields
 }
 
-func implementPrompt(c *runCtx, p planRef, u *plan.Unit, planBranch string) string {
-	return header(c, p) + "\n" + worktree(planBranch) + "\n\n" + unitBlock(p, u) + "\n\nImplementation plan: docs/plans/" + u.ID + "-plan.md on this branch. Hold to its Readings section.\n\nFirst re-probe every external gate in the unit entry against its plan-time pin: probe environment gates mechanically (binaries and versions, fonts, services, accounts, data sets); organisational and release gates are already cleared per the decision log and need no probe. Report each under `gateProbe`. If any gate has drifted, implement nothing — return the probe results with every other `result` field empty, zero, or false, and stop.\n\nOtherwise execute the plan in full, single-shot, committing as you go with the project's commit discipline. There is no per-step critique here, and no implementation summary document: the completion report a later stage writes from your return is that record, so do not write `docs/plans/" + u.ID + "-implementation.md` even if the plan text mentions one. Run the project's gates — the test suite and whatever else the project's own instructions name (linters, type checks) — once at your final HEAD and report each under `gates` with its command, status, and a one-line summary; the review stages take this as the test result and do not re-run the suite. " + longGates + " Then evaluate the done condition exactly as written, under the plan's readings, and report whether it is evaluable in position and whether it is met, with evidence. Record as they arise: deviations from the unit entry's scope or publishes; the files you changed that the Scope line does not name, under `writesOutsideScope`; deferrals — work in scope deliberately not implemented, naming the unit it belongs to; discoveries — anything you learned that changes another unit's scope, dependencies, or done condition, or that the architecture document states otherwise, naming the unit or the section; the status of each standing obligation the unit carries. Report execution distress honestly: whether context is near exhaustion, how many design decisions you took mid-implementation, the deviation and deferral counts.\n" + returnFields
+func implementPrompt(c *runCtx, p planRef, u *plan.Unit, planBranch string, decl *plan.Declaration) string {
+	gates := "Run the project's gates — the test suite and whatever else the project's own instructions name (linters, type checks) — once at your final HEAD and report each under `gates` with its command, status, and a one-line summary; the review stages take this as the test result and do not re-run the suite. " + longGates
+	if decl != nil && u.Type != "design" {
+		gates = declaredGatesClause(decl)
+	}
+	return header(c, p) + "\n" + worktree(planBranch) + "\n\n" + unitBlock(p, u) + "\n\nImplementation plan: docs/plans/" + u.ID + "-plan.md on this branch. Hold to its Readings section.\n\nFirst re-probe every external gate in the unit entry against its plan-time pin: probe environment gates mechanically (binaries and versions, fonts, services, accounts, data sets); organisational and release gates are already cleared per the decision log and need no probe. Report each under `gateProbe`. If any gate has drifted, implement nothing — return the probe results with every other `result` field empty, zero, or false, and stop.\n\nOtherwise execute the plan in full, single-shot, committing as you go with the project's commit discipline. There is no per-step critique here, and no implementation summary document: the completion report a later stage writes from your return is that record, so do not write `docs/plans/" + u.ID + "-implementation.md` even if the plan text mentions one. " + gates + " Then evaluate the done condition exactly as written, under the plan's readings, and report whether it is evaluable in position and whether it is met, with evidence. Record as they arise: deviations from the unit entry's scope or publishes; the files you changed that the Scope line does not name, under `writesOutsideScope`; deferrals — work in scope deliberately not implemented, naming the unit it belongs to; discoveries — anything you learned that changes another unit's scope, dependencies, or done condition, or that the architecture document states otherwise, naming the unit or the section; the status of each standing obligation the unit carries. Report execution distress honestly: whether context is near exhaustion, how many design decisions you took mid-implementation, the deviation and deferral counts.\n" + returnFields
 }
 
 func gateResults(run gatesRun) string {

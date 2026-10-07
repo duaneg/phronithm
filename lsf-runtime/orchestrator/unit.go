@@ -50,13 +50,13 @@ type gateOutcome struct {
 // criticals) the fix stage's return. It appends signals as it goes. A
 // Critical the fix stage declines, a systemic verdict, or the round cap is a
 // structural stop. onFix may return stop signals for a fix whose return
-// cannot go to the next round (reason fix-stop).
+// cannot go to the next round (reason fix-stop); its error is a stop.
 func critiqueLoop(
 	at func(stage string) plan.At,
 	sigs *[]*plan.Signal,
 	round func(n int) ([]reviewer, error),
 	fix func(n int, criticals []critical) (*ret[fixResult], []*plan.Signal, error),
-	onFix func(fixed *ret[fixResult], n int) []*plan.Signal,
+	onFix func(fixed *ret[fixResult], n int) ([]*plan.Signal, error),
 ) (gateOutcome, error) {
 	unitID := at("").Unit
 	signal := func(stage, kind, source, statement, referent string) *plan.Signal {
@@ -134,7 +134,11 @@ func critiqueLoop(
 			}
 			return gateOutcome{reason: "declined", rounds: n, findings: findings}, nil
 		}
-		if stops := onFix(fixed, n); len(stops) > 0 {
+		stops, err := onFix(fixed, n)
+		if err != nil {
+			return gateOutcome{}, err
+		}
+		if len(stops) > 0 {
 			*sigs = append(*sigs, stops...)
 			return gateOutcome{reason: "fix-stop", rounds: n, findings: findings}, nil
 		}
@@ -415,10 +419,13 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 			return []reviewer{{"critique-plan", r, rs}}, err
 		},
 		func(n int, criticals []critical) (*ret[fixResult], []*plan.Signal, error) {
-			return o.fixCall(ctx, at("fix"), fixPrompt(c, pr, u, branch, "plan", criticals, n, nil),
+			return o.fixCall(ctx, at("fix"), fixPrompt(c, pr, u, branch, "plan", criticals, n, nil, o.decl),
 				o.unitOpts(u, fmt.Sprintf("fix-plan:r%d", n), "", lsfrt.Opts{Isolation: "worktree", Schema: fixSchema}))
 		},
-		func(fixed *ret[fixResult], n int) []*plan.Signal { branch = fixed.Result.Branch; return nil },
+		func(fixed *ret[fixResult], n int) ([]*plan.Signal, error) {
+			branch = fixed.Result.Branch
+			return nil, nil
+		},
 	)
 	if err != nil {
 		return nil, err
@@ -430,7 +437,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	}
 
 	// 3. implement
-	impl, cs, implCall, err := callBranch[implementResult](ctx, o, site{at: at("implement"), writer: true}, implementPrompt(c, pr, u, branch), o.unitOpts(u, "implement", "", lsfrt.Opts{Isolation: "worktree", Schema: implementSchema}))
+	impl, cs, implCall, err := callBranch[implementResult](ctx, o, site{at: at("implement"), writer: true}, implementPrompt(c, pr, u, branch, o.decl), o.unitOpts(u, "implement", "", lsfrt.Opts{Isolation: "worktree", Schema: implementSchema}))
 	if err != nil {
 		return nil, err
 	}
@@ -465,8 +472,21 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 		return abort("implement")
 	}
 	design := u.Type == "design"
+	gr := gatesRun{by: "The implement stage", gates: impl.Result.Gates}
 	// A design unit's review reads no gates.
-	if !design {
+	switch {
+	case design:
+	case o.decl != nil:
+		run, gsigs, stop, err := o.declaredGates(ctx, at("implement"), impl.Result.Sha, impl.Result.Gates)
+		if err != nil {
+			return nil, err
+		}
+		sigs = append(sigs, gsigs...)
+		if stop {
+			return abort("implement")
+		}
+		gr, res.gatedTree = run.gr, run.tree
+	default:
 		if gs := gateSignals(at("implement"), impl.Result.Gates, nil); len(gs) > 0 {
 			sigs = append(sigs, gs...)
 			return abort("implement")
@@ -482,7 +502,6 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	if !ok {
 		lenses = lensesByType["feature"]
 	}
-	gr := gatesRun{by: "The implement stage", gates: impl.Result.Gates}
 	fixedGates := false
 	reviewGate, err := critiqueLoop(at, &sigs,
 		func(n int) ([]reviewer, error) {
@@ -516,23 +535,35 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 			if design {
 				schema = fixSchema
 			}
-			return o.fixCall(ctx, at("fix"), fixPrompt(c, pr, u, branch, "code", criticals, n, impl.Result.Gates),
+			return o.fixCall(ctx, at("fix"), fixPrompt(c, pr, u, branch, "code", criticals, n, impl.Result.Gates, o.decl),
 				o.unitOpts(u, fmt.Sprintf("fix-code:r%d", n), "", lsfrt.Opts{Isolation: "worktree", Schema: schema}))
 		},
-		func(fixed *ret[fixResult], n int) []*plan.Signal {
+		func(fixed *ret[fixResult], n int) ([]*plan.Signal, error) {
 			branch = fixed.Result.Branch
 			if design {
-				return nil
+				return nil, nil
+			}
+			if o.decl != nil {
+				run, gsigs, stop, err := o.declaredGates(ctx, at("fix"), fixed.Result.Sha, fixed.Result.Gates)
+				if err != nil {
+					return nil, err
+				}
+				if stop {
+					return gsigs, nil
+				}
+				sigs = append(sigs, gsigs...)
+				gr, res.gatedTree, fixedGates = run.gr, run.tree, true
+				return nil, nil
 			}
 			// A gate the implement stage ran and the fix did not report is
 			// omitted: a dropped gate would otherwise leave the reviewers a
 			// shrunken result.
 			if gs := gateSignals(at("fix"), fixed.Result.Gates, impl.Result.Gates); len(gs) > 0 {
-				return gs
+				return gs, nil
 			}
 			gr = gatesRun{by: fmt.Sprintf("The round-%d fix stage", n), gates: fixed.Result.Gates}
 			fixedGates = true
-			return nil
+			return nil, nil
 		},
 	)
 	if err != nil {
@@ -545,8 +576,8 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	}
 
 	// 5. completion report: rendered here, committed by a code step
-	review := reviewOutcome{rounds: reviewGate.rounds, findings: reviewGate.findings, fixedGates: fixedGates}
-	if fixedGates {
+	review := reviewOutcome{rounds: reviewGate.rounds, findings: reviewGate.findings, fixedGates: fixedGates, declared: o.decl != nil && !design}
+	if fixedGates || review.declared {
 		review.gates = gr.gates
 	}
 	text := renderCompletionReport(c, u, wave, branch, &impl.Result, review)

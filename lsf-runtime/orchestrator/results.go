@@ -63,6 +63,7 @@ type gateRun struct {
 	Command string `json:"command"`
 	Status  string `json:"status"`
 	Summary string `json:"summary"`
+	Tail    string `json:"-"` // the runtime's output tail for a gate not green (D27)
 }
 
 type applied struct {

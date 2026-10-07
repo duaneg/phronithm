@@ -88,7 +88,7 @@ func TestRenderCompletionReport(t *testing.T) {
 	if strings.Contains(renderCompletionReport(c, u, 2, "impl-A", implOf(t, "A", M{"gates": []any{}}), reviewOutcome{rounds: 1}), "Gates at HEAD") {
 		t.Error("no gates, no section")
 	}
-	afterFix := renderCompletionReport(c, u, 1, "impl-A", impl, reviewOutcome{rounds: 2, gates: []gateRun{{"pytest -q", "green", "99 passed (fix)"}}, fixedGates: true})
+	afterFix := renderCompletionReport(c, u, 1, "impl-A", impl, reviewOutcome{rounds: 2, gates: []gateRun{{Command: "pytest -q", Status: "green", Summary: "99 passed (fix)"}}, fixedGates: true})
 	if !strings.Contains(afterFix, "Gates at HEAD:\n\n- `pytest -q` — green: 99 passed (fix)\n") || strings.Contains(afterFix, "412 passed") {
 		t.Error("after a fix, the fix's runs are the gates at HEAD:\n" + afterFix)
 	}
