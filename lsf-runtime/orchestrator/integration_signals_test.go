@@ -230,6 +230,7 @@ func TestCheckReturn(t *testing.T) {
 		kind, stmt                    string
 	}{
 		{"match", "integration", "integration", tip[:7], tip[:7], false, "", ""},
+		{"match but for whitespace: the runtime's branch is carried", "integration", " integration\n", tip[:7], tip[:7], false, "", ""},
 		{"match, SHA corrected against the runtime branch", "integration", "integration", "deadbee", tip, false, "sha-corrected", ""},
 		{"foreign branch", "integration", "work-A", tip, tip, true, "branch-mismatch", `reported branch "work-A"; the call's worktree branch is integration`},
 		{"runtime branch gone", "lsf/x/gone", "lsf/x/gone", "deadbee", "deadbee", true, "branch-mismatch", "branch lsf/x/gone does not resolve"},
@@ -237,8 +238,11 @@ func TestCheckReturn(t *testing.T) {
 		{"no runtime branch, reported checked", "", "integration", "deadbee", tip, false, "sha-corrected", ""},
 	} {
 		sigs := []*plan.Signal{}
-		sha := tc.sha
-		stop, err := o.checkReturn(ctx, at, tc.rt, tc.reported, &sha, &sigs)
+		sha, branch := tc.sha, tc.reported
+		stop, err := o.checkReturn(ctx, at, tc.rt, &branch, &sha, &sigs)
+		if wantBranch := map[bool]string{true: tc.rt, false: tc.reported}[tc.rt != ""]; !stop && branch != wantBranch {
+			t.Errorf("%s: carried branch %q, want %q", tc.name, branch, wantBranch)
+		}
 		kind, stmt := "", ""
 		if len(sigs) == 1 {
 			kind, stmt = sigs[0].Kind, sigs[0].Statement

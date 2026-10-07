@@ -221,11 +221,13 @@ func (o *orch) checkSha(ctx context.Context, at plan.At, branch, reported string
 // checkReturn checks a worktree writer's reported branch and SHA (D23).
 // With the runtime's branch for the call (rtBranch), a reported branch
 // that differs, or a branch that does not resolve, is a branch-mismatch
-// stop, and the SHA is checked against rtBranch. Without one (a stub, a
-// seed, a record journaled before the branch was), the SHA is checked
-// against the reported branch, and a branch that does not resolve leaves
-// it as reported with no signal. stop reports a branch-mismatch.
-func (o *orch) checkReturn(ctx context.Context, at plan.At, rtBranch, reported string, sha *string, sigs *[]*plan.Signal) (stop bool, err error) {
+// stop, and the SHA is checked against rtBranch, which replaces the
+// reported branch (the report may differ by whitespace). Without one (a
+// stub, a seed, a record journaled before the branch was), the SHA is
+// checked against the reported branch, and a branch that does not resolve
+// leaves it as reported with no signal. stop reports a branch-mismatch.
+func (o *orch) checkReturn(ctx context.Context, at plan.At, rtBranch string, branchField, sha *string, sigs *[]*plan.Signal) (stop bool, err error) {
+	reported := *branchField
 	branch := reported
 	if rtBranch != "" {
 		if jsTrim(reported) != rtBranch {
@@ -242,7 +244,7 @@ func (o *orch) checkReturn(ctx context.Context, at plan.At, rtBranch, reported s
 		*sigs = append(*sigs, plan.BranchMismatchSignal(at, reported, rtBranch, "does not resolve"))
 		return true, nil
 	}
-	*sha = fixed
+	*sha, *branchField = fixed, branch
 	if sig != nil {
 		*sigs = append(*sigs, sig)
 	}
@@ -270,7 +272,7 @@ func (o *orch) fixCall(ctx context.Context, at plan.At, prompt string, opts lsfr
 	if err != nil || r == nil {
 		return r, sigs, err
 	}
-	_, err = o.checkReturn(ctx, at, rtBranch, r.Result.Branch, &r.Result.Sha, &sigs)
+	_, err = o.checkReturn(ctx, at, rtBranch, &r.Result.Branch, &r.Result.Sha, &sigs)
 	return r, sigs, err
 }
 
@@ -302,7 +304,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 		sigs = append(sigs, plan.NullReturnSignal(at("plan")))
 		return abort("plan")
 	}
-	mismatch, err := o.checkReturn(ctx, at("plan"), rtBranch, planned.Result.Branch, &planned.Result.Sha, &sigs)
+	mismatch, err := o.checkReturn(ctx, at("plan"), rtBranch, &planned.Result.Branch, &planned.Result.Sha, &sigs)
 	if err != nil {
 		return nil, err
 	}
@@ -356,12 +358,14 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 				Statement: "gate " + g.Name + " pinned at " + g.Pin + ", observed " + g.Observed, Referent: g.Name}))
 		}
 	}
-	if drifted {
-		return abort("implement")
-	}
-	mismatch, err = o.checkReturn(ctx, at("implement"), rtBranch, impl.Result.Branch, &impl.Result.Sha, &sigs)
+	// The branch is checked first, so a drifted return on a foreign branch
+	// records both.
+	mismatch, err = o.checkReturn(ctx, at("implement"), rtBranch, &impl.Result.Branch, &impl.Result.Sha, &sigs)
 	if err != nil {
 		return nil, err
+	}
+	if drifted {
+		return abort("implement")
 	}
 	if !mismatch {
 		branch = impl.Result.Branch

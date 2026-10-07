@@ -110,6 +110,20 @@ func TestBranchMismatchStops(t *testing.T) {
 	}
 	wantSignal(t, res, "branch-mismatch", "fix", `"fixed-A"`)
 
+	rounds := 0
+	res = runA(t, branchOrch(t, r, map[string]orchtest.Handler{
+		"plan":      honest("plan"),
+		"implement": honest("implement"),
+		"critique-code": func(orchtest.Call, *orchtest.State) any {
+			rounds++
+			return critical1("src/a.go:1")
+		},
+	}))
+	if res.aborted != "review" || rounds != 1 {
+		t.Fatalf("fix-code: aborted at %q after %d review round(s): %v", res.aborted, rounds, kinds(res.signals))
+	}
+	wantSignal(t, res, "branch-mismatch", "fix", `"fixed-code-A"`)
+
 	res = runA(t, branchOrch(t, r, map[string]orchtest.Handler{"plan": honest("plan"), "implement": honest("implement")}))
 	if res.aborted != "" {
 		t.Fatalf("honest: aborted at %q: %v", res.aborted, kinds(res.signals))

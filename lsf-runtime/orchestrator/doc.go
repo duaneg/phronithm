@@ -143,14 +143,17 @@
 //     its statement; no scenario has both.
 //     declared-gates raises gate-omitted for a declared gate missing.
 //
-// D23 to D25 are merge and cleanup as code (unit code-merge-cleanup).
+// D23 is unit code-merge-cleanup's.
 //
 //   - D23. A worktree writer (plan, implement, a plan or code fix) that
 //     reports a branch other than the one the runtime gave its call
 //     (CallResult.Branch), or whose branch does not resolve, raises a
 //     branch-mismatch stop at its return; the unit aborts there and the
-//     wave's stop rule stops the run. Its SHA is checked against the
-//     runtime's branch (checkReturn). A fix's mismatch stops the critique
+//     wave's stop rule stops the run; the stage's own records from the
+//     rejected return (readings, deviations, distress, gate drift) are
+//     kept, as for every unit-stage stop (D21). Its SHA is checked against
+//     the runtime's branch (checkReturn), and the runtime's branch is the
+//     one carried forward. A fix's mismatch stops the critique
 //     loop before its branch is taken; its critical-fixed rows are already
 //     recorded. Without a runtime branch (a stub, a seed, a call journaled
 //     before the branch was) the SHA is checked against the reported
