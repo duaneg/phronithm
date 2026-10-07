@@ -16,8 +16,10 @@ import (
 // launch's children keep running and would race its successor (spike run 4).
 // A process whose arguments carry "--session-id <id>" for an id recorded in
 // children.json is a call; it leads its own process group, which gets SIGTERM
-// and, after KillGrace, SIGKILL. Matching the session id, not the pid, covers
-// a child recorded before Start and rules out a reused pid. If ps fails,
+// and, after KillGrace, SIGKILL. A gate process (RunGates) is recorded under
+// its marker, the "lsf-gate:" argument its shell carries as $0. Matching the
+// session id or marker, not the pid, covers a child recorded before Start
+// and rules out a reused pid. If ps fails,
 // children.json is kept for the next launch. In a dry run, orphans are
 // reported, not killed.
 func (rt *Runtime) reapOrphans() {
@@ -41,7 +43,7 @@ func (rt *Runtime) reapOrphans() {
 		}
 		for pid, args := range procs {
 			for session := range recorded {
-				if !strings.Contains(" "+args+" ", " --session-id "+session+" ") {
+				if !matchesChild(args, session) {
 					continue
 				}
 				if rt.cfg.DryRun {
@@ -64,6 +66,15 @@ func (rt *Runtime) reapOrphans() {
 		rt.saveChildrenLocked()
 		rt.childMu.Unlock()
 	}
+}
+
+// matchesChild reports whether a process's arguments are the recorded child's:
+// a call's --session-id, or a gate shell's marker.
+func matchesChild(args, session string) bool {
+	if strings.HasPrefix(session, gateMarkerPrefix) {
+		return strings.Contains(" "+args+" ", " "+session+" ")
+	}
+	return strings.Contains(" "+args+" ", " --session-id "+session+" ")
 }
 
 // carryForward keeps recorded calls in this launch's children.json, which

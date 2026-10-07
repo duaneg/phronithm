@@ -10,6 +10,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -40,7 +41,9 @@ type Runtime struct {
 	cost       float64 // summed total_cost_usd this launch
 	limitUntil time.Time
 
-	wtSem chan struct{} // one slot: serialises git worktree operations
+	wtSem   chan struct{} // one slot: serialises git worktree operations
+	gateSem chan struct{} // GateConcurrency slots: bounds concurrent RunGates
+	gateSeq atomic.Int64  // numbers gate processes for their orphan markers
 
 	seenMu sync.Mutex
 	seen   map[string]string // journal key → input hash, this launch
@@ -54,7 +57,7 @@ func Run(ctx context.Context, cfg Config, body func(ctx context.Context, rt *Run
 	if err := cfg.prepare(); err != nil {
 		return Summary{}, fmt.Errorf("lsf-runtime: config: %w", err)
 	}
-	for _, d := range []string{"", "journal", "calls", "wt"} {
+	for _, d := range []string{"", "journal", "calls", "wt", "gates/logs"} {
 		if err := os.MkdirAll(filepath.Join(cfg.StateDir, d), 0o755); err != nil {
 			return Summary{}, fmt.Errorf("lsf-runtime: state dir: %w", err)
 		}
@@ -76,6 +79,7 @@ func Run(ctx context.Context, cfg Config, body func(ctx context.Context, rt *Run
 		stopCh:   make(chan struct{}),
 		killCh:   make(chan struct{}),
 		wtSem:    make(chan struct{}, 1),
+		gateSem:  make(chan struct{}, cfg.GateConcurrency),
 	}
 	rt.launchID = fmt.Sprintf("%s-%d", rt.started.UTC().Format("20060102T150405"), os.Getpid())
 	open := func(name string) (*os.File, error) {

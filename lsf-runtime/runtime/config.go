@@ -33,6 +33,8 @@ type Config struct {
 	SessionLimitFallback Duration   `json:"sessionLimitFallback,omitempty"`
 	MaxSessionWaits      int        `json:"maxSessionWaits,omitempty"`
 	DryRun               bool       `json:"dryRun,omitempty"`
+	GateTimeout          Duration   `json:"gateTimeout,omitempty"`     // default 2h; a declared gate's own timeout overrides it
+	GateConcurrency      int        `json:"gateConcurrency,omitempty"` // default 1; bounds concurrent RunGates
 
 	roleRes  []*regexp.Regexp // compiled RoleRules[i].Label, nil when empty
 	skillRes []*regexp.Regexp // compiled Skills[i].Label
@@ -164,10 +166,10 @@ func (c *Config) prepare() error {
 		}
 		c.skillRes[i] = re
 	}
-	if c.Concurrency < 0 || c.MaxSessionWaits < 0 || c.Caps.MaxCalls < 0 || c.Caps.MaxCostUSD < 0 {
-		errs = append(errs, errors.New("concurrency, maxSessionWaits and caps must not be negative"))
+	if c.Concurrency < 0 || c.GateConcurrency < 0 || c.MaxSessionWaits < 0 || c.Caps.MaxCalls < 0 || c.Caps.MaxCostUSD < 0 {
+		errs = append(errs, errors.New("concurrency, gateConcurrency, maxSessionWaits and caps must not be negative"))
 	}
-	durations := []Duration{c.GuardTimeout, c.KillGrace, c.SessionLimitMargin, c.SessionLimitFallback, c.Caps.MaxWallClock}
+	durations := []Duration{c.GuardTimeout, c.KillGrace, c.SessionLimitMargin, c.SessionLimitFallback, c.Caps.MaxWallClock, c.GateTimeout}
 	durations = append(durations, c.Backoff...)
 	for _, d := range durations {
 		if d < 0 {
@@ -210,6 +212,12 @@ func (c *Config) prepare() error {
 	}
 	if c.SessionLimitFallback == 0 {
 		c.SessionLimitFallback = Duration(15 * time.Minute)
+	}
+	if c.GateTimeout == 0 {
+		c.GateTimeout = Duration(2 * time.Hour)
+	}
+	if c.GateConcurrency == 0 {
+		c.GateConcurrency = 1
 	}
 	if c.MaxSessionWaits == 0 {
 		c.MaxSessionWaits = 4

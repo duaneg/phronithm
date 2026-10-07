@@ -1,0 +1,296 @@
+package lsfrt
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+)
+
+// GateSpec is one declared gate. Timeout 0 is the config's gateTimeout.
+type GateSpec struct {
+	Name    string
+	Command string
+	Timeout time.Duration
+}
+
+// GateRun is one gate's result. Status is green (exit 0), red (any other
+// exit) or not-run (timed out, or setup failed). Summary is the last
+// non-blank output line, or why the gate did not run; Tail is the last 4 KB
+// of output for a gate that is not green. Log is the full output's path.
+type GateRun struct {
+	Name     string  `json:"name"`
+	Command  string  `json:"command"`
+	Status   string  `json:"status"`
+	ExitCode int     `json:"exitCode"`
+	Summary  string  `json:"summary"`
+	Tail     string  `json:"tail,omitempty"`
+	Log      string  `json:"log"`
+	Secs     float64 `json:"secs"`
+}
+
+const (
+	GateGreen  = "green"
+	GateRed    = "red"
+	GateNotRun = "not-run"
+
+	gateMarkerPrefix = "lsf-gate:"
+	gateTailBytes    = 4096
+	gateSummaryMax   = 300
+)
+
+// gateScript runs the command from the environment, so the shell's
+// arguments are fixed and carry the marker as $0. Two commands keep the
+// shell from exec-ing the gate command, which would drop the marker from
+// the process's arguments.
+const gateScript = `eval "$LSF_GATE_COMMAND"; exit $?`
+
+// RunGates runs a project's declared gates on a clean detached checkout of
+// commit at <stateDir>/gates/<key> (a leftover directory there is removed
+// first): setup, then each gate in order, each through sh in its own process
+// group with stdin /dev/null and its output in <stateDir>/gates/logs. A
+// failed setup makes every gate not-run. The checkout is removed afterwards.
+// A stop or cancellation kills the running group and is returned; no runs
+// are returned with it. A checkout failure is an error. Runs are bounded
+// by gateConcurrency, and are not journaled here.
+func (rt *Runtime) RunGates(ctx context.Context, label, commit, setup string, gates []GateSpec) ([]GateRun, error) {
+	if err := rt.boundary(ctx); err != nil {
+		return nil, err
+	}
+	if rt.cfg.DryRun {
+		rt.Log("dry run: gates " + label + " not run")
+		return nil, rt.setStop(StopDryRun, label)
+	}
+	select {
+	case rt.gateSem <- struct{}{}:
+	case <-rt.stopCh:
+		return nil, rt.stopErr()
+	case <-ctx.Done():
+		return nil, &StopError{Reason: StopCancelled}
+	}
+	defer func() { <-rt.gateSem }()
+
+	key := journalKey(label)
+	dir := filepath.Join(rt.cfg.StateDir, "gates", key)
+	if err := rt.gateCheckout(ctx, label, dir, commit); err != nil {
+		return nil, err
+	}
+	defer rt.gateRemove(ctx, label, dir)
+	rt.event("gates-start", map[string]any{"label": label, "commit": commit, "gates": len(gates)})
+	t0 := time.Now()
+	logBase := filepath.Join(rt.cfg.StateDir, "gates", "logs", key+"-"+rt.launchID)
+
+	runs := make([]GateRun, len(gates))
+	notRun := ""
+	if setup != "" {
+		r, err := rt.gateProcess(ctx, dir, logBase+"-setup.log", setup, rt.cfg.GateTimeout.D())
+		if err != nil {
+			return nil, err
+		}
+		switch r.Status {
+		case GateRed:
+			notRun = fmt.Sprintf("setup failed (exit %d): %s", r.ExitCode, r.Summary)
+		case GateNotRun:
+			notRun = "setup " + r.Summary
+		}
+	}
+	for i, g := range gates {
+		log := fmt.Sprintf("%s-%d-%s.log", logBase, i+1, unsafeChars.ReplaceAllString(g.Name, "_"))
+		if notRun != "" {
+			runs[i] = GateRun{Name: g.Name, Command: g.Command, Status: GateNotRun, ExitCode: -1, Summary: notRun, Log: log}
+			continue
+		}
+		timeout := g.Timeout
+		if timeout <= 0 {
+			timeout = rt.cfg.GateTimeout.D()
+		}
+		r, err := rt.gateProcess(ctx, dir, log, g.Command, timeout)
+		if err != nil {
+			return nil, err
+		}
+		r.Name, r.Command = g.Name, g.Command
+		runs[i] = r
+	}
+	statuses := make([]string, len(runs))
+	for i, r := range runs {
+		statuses[i] = r.Name + "=" + r.Status
+	}
+	rt.event("gates", map[string]any{"label": label, "commit": commit, "secs": time.Since(t0).Seconds(), "statuses": statuses})
+	return runs, nil
+}
+
+// gateCheckout makes a clean detached worktree of commit at dir.
+func (rt *Runtime) gateCheckout(ctx context.Context, label, dir, commit string) error {
+	if strings.HasPrefix(commit, "-") || commit == "" {
+		return fmt.Errorf("%s: %q is not a commit", label, commit)
+	}
+	if err := rt.withWorktreeLock(ctx); err != nil {
+		return err
+	}
+	defer func() { <-rt.wtSem }()
+	gctx, cancel := rt.gitContext(ctx)
+	defer cancel()
+	rt.removeGateDir(gctx, dir)
+	out, err := gitOut(gctx, rt.cfg.Repo, "worktree", "add", "--detach", dir, commit+"^{commit}")
+	if err != nil {
+		if s := rt.stopped(); s != nil {
+			return s
+		}
+		if ctx.Err() != nil {
+			return &StopError{Reason: StopCancelled}
+		}
+		return fmt.Errorf("%s: gate checkout of %s: %w: %s", label, commit, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// gateRemove removes the checkout. A failure is logged: the results stand,
+// and the next run at dir removes it first.
+func (rt *Runtime) gateRemove(ctx context.Context, label, dir string) {
+	// Removal runs after a stop too, so it waits on the lock without
+	// yielding to one; ctx without cancellation keeps git running.
+	rt.wtSem <- struct{}{}
+	defer func() { <-rt.wtSem }()
+	gctx, cancel := rt.gitContext(context.WithoutCancel(ctx))
+	defer cancel()
+	if err := rt.removeGateDir(gctx, dir); err != nil {
+		rt.Log(fmt.Sprintf("%s: gate checkout %s not removed: %v", label, dir, err))
+	}
+}
+
+// removeGateDir force-removes a gate worktree at dir, registered or not, and
+// prunes stale registrations. The caller holds wtSem.
+func (rt *Runtime) removeGateDir(ctx context.Context, dir string) error {
+	var err error
+	if _, statErr := os.Stat(dir); statErr == nil {
+		if gitRun(ctx, rt.cfg.Repo, "worktree", "remove", "--force", "--force", dir) != nil {
+			err = os.RemoveAll(dir)
+		}
+	}
+	gitRun(ctx, rt.cfg.Repo, "worktree", "prune")
+	return err
+}
+
+// withWorktreeLock takes wtSem, yielding to a stop or cancellation.
+func (rt *Runtime) withWorktreeLock(ctx context.Context) error {
+	select {
+	case rt.wtSem <- struct{}{}:
+	case <-rt.stopCh:
+		return rt.stopErr()
+	case <-ctx.Done():
+		return &StopError{Reason: StopCancelled}
+	}
+	if err := rt.boundary(ctx); err != nil {
+		<-rt.wtSem
+		return err
+	}
+	return nil
+}
+
+var errGateTimeout = errors.New("gate timeout")
+
+// gateProcess runs one command in dir. Its status is green, red, or not-run
+// for a timeout; a stop or cancellation is returned as the error. The group
+// is killed as spawn kills a call's: SIGTERM, KillGrace, SIGKILL to the
+// leader, then SIGKILL to the group, which also ends background processes a
+// command that finished left behind. The pid-reuse window spawn accepts is
+// accepted here too.
+func (rt *Runtime) gateProcess(ctx context.Context, dir, logPath, command string, timeout time.Duration) (GateRun, error) {
+	r := GateRun{Status: GateNotRun, ExitCode: -1, Log: logPath}
+	out, err := os.Create(logPath)
+	if err != nil {
+		return r, rt.setStop(StopRuntimeError, fmt.Sprintf("gate log %s: %v", logPath, err))
+	}
+	defer out.Close()
+	pctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	t := time.AfterFunc(timeout, func() { cancel(errGateTimeout) })
+	defer t.Stop()
+	go func() {
+		select {
+		case <-rt.stopCh:
+			cancel(rt.stopErr())
+		case <-rt.killCh:
+			cancel(errKilled)
+		case <-pctx.Done():
+		}
+	}()
+
+	marker := fmt.Sprintf("%s%s-%d", gateMarkerPrefix, rt.launchID, rt.gateSeq.Add(1))
+	cmd := exec.CommandContext(pctx, "sh", "-c", gateScript, marker)
+	cmd.Dir = dir
+	cmd.Env = append(scrubbedEnv(), "LSF_GATE_COMMAND="+command)
+	cmd.Stdout, cmd.Stderr = out, out
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
+	cmd.WaitDelay = rt.cfg.KillGrace.D()
+
+	rt.addChild(marker)
+	defer rt.removeChild(marker)
+	t0 := time.Now()
+	if err := cmd.Start(); err != nil {
+		if pctx.Err() == nil {
+			r.Summary = "did not start: " + err.Error()
+			return r, nil
+		}
+	} else {
+		pid := cmd.Process.Pid
+		rt.setChildPid(marker, pid)
+		cmd.Wait()
+		syscall.Kill(-pid, syscall.SIGKILL)
+	}
+	r.Secs = time.Since(t0).Seconds()
+	switch cause := context.Cause(pctx); {
+	case errors.Is(cause, errGateTimeout):
+		r.Summary = "timed out after " + timeout.String()
+	case pctx.Err() != nil:
+		if s := rt.stopped(); s != nil {
+			return r, s
+		}
+		return r, &StopError{Reason: StopCancelled}
+	default:
+		r.ExitCode = cmd.ProcessState.ExitCode()
+		r.Status = GateRed
+		if r.ExitCode == 0 {
+			r.Status = GateGreen
+		}
+	}
+	tail := fileTail(logPath, gateTailBytes)
+	if r.Summary == "" {
+		r.Summary = lastLine(tail)
+	}
+	if r.Status != GateGreen {
+		r.Tail = tail
+	}
+	return r, nil
+}
+
+// fileTail is the last n bytes of a file, "" when unreadable.
+func fileTail(path string, n int64) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err == nil && fi.Size() > n {
+		f.Seek(-n, io.SeekEnd)
+	}
+	b, _ := io.ReadAll(f)
+	return strings.ToValidUTF8(string(b), "�")
+}
+
+// lastLine is s's last non-blank line, bounded.
+func lastLine(s string) string {
+	lines := strings.Split(strings.TrimRight(s, " \t\r\n"), "\n")
+	l := strings.TrimSpace(lines[len(lines)-1])
+	if len(l) > gateSummaryMax {
+		l = strings.ToValidUTF8(l[:gateSummaryMax], "") + "…"
+	}
+	return l
+}
