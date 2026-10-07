@@ -116,9 +116,9 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 	conflicts := []plan.Merge{}
 	if len(order) > 0 {
 		in := mergeInput{Wave: wave, Name: c.name, IntegrationBranch: c.integrationBranch, PlanPath: l.plan.Path, ArchivePath: c.archivePath,
-			LedgerPath: c.ledgerPath, ArchitectureDoc: c.architectureDoc, PauseRef: c.pauseRef, Units: []mergeUnitIn{}}
+			LedgerPath: c.ledgerPath, ArchitectureDoc: c.architectureDoc, PauseRef: c.pauseRef, Units: []mergeUnitIn{}, Declared: l.decl != nil}
 		for _, r := range order {
-			in.Units = append(in.Units, mergeUnitIn{Unit: r.unit, Branch: r.branch, Sha: r.reportSha, Report: r.completionPath})
+			in.Units = append(in.Units, mergeUnitIn{Unit: r.unit, Branch: r.branch, Sha: r.reportSha, Report: r.completionPath, GatedTree: r.gatedTree})
 		}
 		label := "merge:w" + itoa(wave)
 		m, fault, err := step[mergeResult](ctx, l.orch, label, in, l.mergeStage(in))
@@ -143,7 +143,7 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 				waveSignals = append(waveSignals, stageFaultSignal(plan.At{Stage: "merge", Wave: plan.W(wave)}, "live read: "+err.Error()))
 			}
 			l.notePause(m.Result.PauseRequested, label)
-			waveSignals = append(waveSignals, plan.SignalsFromMerge(m.Result.MergeResult, plan.At{Wave: plan.W(wave)})...)
+			waveSignals = append(waveSignals, declaredMergeSignals(plan.SignalsFromMerge(m.Result.MergeResult, plan.At{Wave: plan.W(wave)}), m.Result, in.Declared)...)
 			for _, x := range m.Result.Merges {
 				if x.Status == "clean" || x.Status == "resolved" {
 					l.completed[x.Unit] = true

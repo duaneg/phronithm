@@ -134,7 +134,8 @@ func renderGates(gates []gateRun) string {
 			for strings.Contains(g.Tail, fence) {
 				fence += "`"
 			}
-			line += "\n\n  " + fence + "\n" + strings.TrimRight(g.Tail, "\n") + "\n  " + fence
+			tail := strings.ReplaceAll(strings.TrimRight(g.Tail, "\n"), "\n", "\n  ")
+			line += "\n\n  " + fence + "\n  " + tail + "\n  " + fence
 		}
 		out = append(out, line)
 	}

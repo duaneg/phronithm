@@ -146,6 +146,9 @@ type mergeResult struct {
 	// Signals are the conflict calls' driver events (D24), in the value so
 	// a replay keeps them. Go only.
 	Signals []*plan.Signal `json:"signals,omitempty"`
+	// GateNotRun are the units regressed because the runtime could not run
+	// a merge gate: their stop is gate-not-run (D27). Go only.
+	GateNotRun []string `json:"gateNotRun,omitempty"`
 }
 
 type amendment struct {

@@ -30,6 +30,10 @@ type mergeUnitIn struct {
 	Branch string `json:"branch"`
 	Sha    string `json:"sha"`
 	Report string `json:"report"`
+	// GatedTree is the tree the runtime last gated for the unit (declared
+	// gates only, D27): a merge that differs from it only at Report reuses
+	// that result.
+	GatedTree string `json:"gatedTree,omitempty"`
 }
 
 type mergeInput struct {
@@ -42,6 +46,9 @@ type mergeInput struct {
 	ArchitectureDoc   string        `json:"architectureDoc"`
 	PauseRef          string        `json:"pauseRef"`
 	Units             []mergeUnitIn `json:"units"`
+	// Declared: the runtime gates each merge's tree before it is committed
+	// (D27); a merge whose gates fail is regressed, with nothing committed.
+	Declared bool `json:"declared,omitempty"`
 }
 
 // Merge commit trailers.
@@ -561,7 +568,15 @@ func (o *orch) mergeStage(in mergeInput) stageFn {
 			if err != nil {
 				return nil, err
 			}
-			res.Merges = append(res.Merges, r)
+			if r.Status != "clean" && r.Status != "resolved" && !r.replayed {
+				if err := o.recordOutcome(ctx, label, u, r); err != nil {
+					return nil, err
+				}
+			}
+			if r.gateNotRun {
+				res.GateNotRun = append(res.GateNotRun, u.Unit)
+			}
+			res.Merges = append(res.Merges, r.Merge)
 			if r.Status == "clean" || r.Status == "resolved" {
 				merged = append(merged, bookUnit{Unit: u.Unit, Sha: r.Sha, Report: u.Report})
 			}
@@ -600,8 +615,8 @@ func (m mergeGit) bookTexts(ctx context.Context, rev string, in mergeInput) (pla
 
 // mergeOne merges one unit, or adopts its merge. A fault mid-merge aborts
 // the merge this step has in progress before it is returned.
-func (o *orch) mergeOne(ctx context.Context, m mergeGit, in mergeInput, label string, u mergeUnitIn, resume, mustAdopt bool, dryRun func() error, res *mergeResult) (plan.Merge, error) {
-	out := plan.Merge{Unit: u.Unit, Files: []string{}}
+func (o *orch) mergeOne(ctx context.Context, m mergeGit, in mergeInput, label string, u mergeUnitIn, resume, mustAdopt bool, dryRun func() error, res *mergeResult) (unitMerge, error) {
+	out := unitMerge{Merge: plan.Merge{Unit: u.Unit, Files: []string{}}}
 	if !resume {
 		sha, status, conflicts, err := m.adoptMerge(ctx, label, u)
 		if err != nil {
@@ -613,6 +628,11 @@ func (o *orch) mergeOne(ctx context.Context, m mergeGit, in mergeInput, label st
 			return out, nil
 		}
 		if mustAdopt {
+			// A unit this step did not merge (regressed, unresolvable,
+			// refused) has its outcome recorded.
+			if rec, ok, err := o.recordedOutcome(ctx, label, u); err != nil || ok {
+				return rec, err
+			}
 			return out, fmt.Errorf("unit %s comes before the merge in progress but has no merge of its own to adopt", u.Unit)
 		}
 		already, err := m.status(ctx, m.dir, "merge-base", "--is-ancestor", u.Sha, "HEAD")
@@ -639,8 +659,39 @@ func (o *orch) mergeOne(ctx context.Context, m mergeGit, in mergeInput, label st
 	if err != nil {
 		return out, err
 	}
-	fail := func(err error) (plan.Merge, error) {
+	fail := func(err error) (unitMerge, error) {
 		return out, errors.Join(err, m.abortOwn(ctx, pre, staged))
+	}
+	if !resume && in.Declared && len(conflicts) == 0 {
+		// Gate git's merge of pre and the unit before merging. The
+		// integration branch moving meanwhile is gated again, once.
+		for moves := 0; ; moves++ {
+			set, err := o.mergeGates(ctx, m, u, pre, tree, mergeMessage(in, label, u.Unit, "clean", nil))
+			if err != nil {
+				return out, err
+			}
+			now, err := m.head(ctx, m.dir)
+			if err != nil {
+				return out, err
+			}
+			if now == pre {
+				if len(set.failed()) > 0 {
+					return regressed(out, set), nil
+				}
+				break
+			}
+			if moves == 1 {
+				return out, fmt.Errorf("the integration branch moved during the gates of %s's merge, twice; relaunch", u.Unit)
+			}
+			o.rt.Log(fmt.Sprintf("%s: HEAD moved from %s to %s during the gates of %s's merge; gating the new merge", label, pre, now, u.Unit))
+			pre = now
+			if staged, conflicts, tree, err = m.expectedStaged(ctx, pre, u.Sha); err != nil {
+				return out, err
+			}
+			if len(conflicts) > 0 {
+				break // the resolution is gated before its commit
+			}
+		}
 	}
 	if !resume {
 		_, mergeErr := m.r.run(ctx, m.dir, "merge", "--no-ff", "--no-edit", "-m", mergeMessage(in, label, u.Unit, "clean", nil), u.Sha)
@@ -731,6 +782,25 @@ func (o *orch) mergeOne(ctx context.Context, m mergeGit, in mergeInput, label st
 			}
 			break
 		}
+		gated := ""
+		if in.Declared {
+			if gated, err = m.out(ctx, m.dir, "write-tree"); err != nil {
+				return fail(err)
+			}
+			set, err := o.mergeGates(ctx, m, u, pre, gated, mergeMessage(in, label, u.Unit, "resolved", conflicts))
+			if err != nil {
+				return fail(err)
+			}
+			if len(set.failed()) > 0 {
+				if err := m.abortOwn(ctx, pre, staged); err != nil {
+					return out, err
+				}
+				return regressed(out, set), nil
+			}
+			if again, err := m.out(ctx, m.dir, "write-tree"); err != nil || again != gated {
+				return fail(errors.Join(fmt.Errorf("the index of %s's merge changed during its gates", u.Unit), err))
+			}
+		}
 		if _, err := m.r.run(ctx, m.dir, "commit", "-q", "-m", mergeMessage(in, label, u.Unit, "resolved", conflicts)); err != nil {
 			if h, _ := m.head(context.WithoutCancel(ctx), m.dir); h == pre {
 				return fail(fmt.Errorf("commit of the merge of %s rejected: %w", u.Unit, err))
@@ -744,6 +814,11 @@ func (o *orch) mergeOne(ctx context.Context, m mergeGit, in mergeInput, label st
 		if err == nil {
 			err = m.leftStaged(ctx, u.Unit, head)
 		}
+		if err == nil && gated != "" {
+			if t, terr := m.out(ctx, m.dir, "rev-parse", head+"^{tree}"); terr != nil || t != gated {
+				err = errors.Join(fmt.Errorf("merge commit %s of %s is not the tree its gates ran on (%s; a hook changed it?)", head, u.Unit, gated), terr)
+			}
+		}
 		if err != nil {
 			return out, err
 		}
@@ -756,6 +831,101 @@ func (o *orch) mergeOne(ctx context.Context, m mergeGit, in mergeInput, label st
 	out.Status, out.Files = "unresolvable", conflicts
 	return out, nil
 }
+
+// unitMerge is mergeOne's result: the unit's merge, whether its gates were
+// not run (it is then regressed, and the orchestrator stops on gate-not-run),
+// and whether it is a recorded outcome replayed.
+type unitMerge struct {
+	plan.Merge
+	gateNotRun bool
+	replayed   bool
+}
+
+// regressed is out as a merge whose gates failed: nothing was committed.
+// Files are the gates that are not green.
+func regressed(out unitMerge, set gateSet) unitMerge {
+	out.Status, out.Files = "regressed", []string{}
+	for _, r := range set.failed() {
+		out.Files = append(out.Files, "`"+r.Name+"`: "+r.Status+" — "+r.Summary)
+		out.gateNotRun = out.gateNotRun || r.Status == lsfrt.GateNotRun
+	}
+	return out
+}
+
+// mergeGates gates tree, the merge of pre and u.Sha, before it is
+// committed. The unit's own gated tree is reused when the two differ only
+// at its completion report and this launch holds that result; otherwise a
+// dangling candidate commit of tree (parents pre and u.Sha, message msg)
+// is gated. A gate fault is the step's failure; err is that or a stop.
+func (o *orch) mergeGates(ctx context.Context, m mergeGit, u mergeUnitIn, pre, tree, msg string) (gateSet, error) {
+	if u.GatedTree != "" {
+		diff, err := m.nulList(ctx, "diff-tree", "-r", "-z", "--name-only", "--no-renames", u.GatedTree, tree)
+		if err == nil && (len(diff) == 0 || (len(diff) == 1 && diff[0] == u.Report)) {
+			if set, ok := o.gatedEarlier(ctx, u.GatedTree); ok {
+				o.rt.Log(fmt.Sprintf("merge of %s: its gates at %s stand (the merge differs only at %s)", u.Unit, u.GatedTree, u.Report))
+				return set, nil
+			}
+		}
+	}
+	cand, err := m.out(ctx, m.dir, "commit-tree", tree, "-p", pre, "-p", u.Sha, "-m", msg)
+	if err != nil {
+		return gateSet{}, fmt.Errorf("the merge of %s: commit-tree for its gates: %w", u.Unit, err)
+	}
+	set, fault, err := o.gates(ctx, cand)
+	if err != nil {
+		return gateSet{}, err
+	}
+	if fault != "" {
+		return gateSet{}, fmt.Errorf("the merge of %s: %s", u.Unit, fault)
+	}
+	return set, nil
+}
+
+// outcomeLabel is the step that records a unit this merge step did not
+// merge, so a resume past it does not wedge.
+func outcomeLabel(label string, u mergeUnitIn) string { return "merge-outcome:" + label + ":" + u.Unit }
+
+// recordOutcome journals a unit's non-merge outcome.
+func (o *orch) recordOutcome(ctx context.Context, label string, u mergeUnitIn, r unitMerge) error {
+	rec := outcomeRecord{Merge: r.Merge, GateNotRun: r.gateNotRun}
+	_, _, err := o.runStepAs(ctx, outcomeLabel(label, u), map[string]string{"unit": u.Unit, "sha": u.Sha}, func(context.Context, string, bool) (json.RawMessage, error) {
+		return plan.MarshalJS(rec, "")
+	})
+	var se *stageErr
+	if errors.As(err, &se) {
+		return errors.New(se.reason)
+	}
+	return err
+}
+
+// recordedOutcome replays a unit's recorded non-merge outcome; ok is false
+// when there is none.
+func (o *orch) recordedOutcome(ctx context.Context, label string, u mergeUnitIn) (unitMerge, bool, error) {
+	raw, _, err := o.runStepAs(ctx, outcomeLabel(label, u), map[string]string{"unit": u.Unit, "sha": u.Sha}, func(context.Context, string, bool) (json.RawMessage, error) {
+		return nil, errOutcomeNotRecorded
+	})
+	var se *stageErr
+	switch {
+	case errors.As(err, &se):
+		return unitMerge{}, false, nil
+	case err != nil:
+		return unitMerge{}, false, err
+	}
+	var rec outcomeRecord
+	if err := json.Unmarshal(raw, &rec); err != nil || rec.Unit != u.Unit {
+		return unitMerge{}, false, fmt.Errorf("unit %s: recorded merge outcome unreadable: %s", u.Unit, raw)
+	}
+	o.rt.Log(fmt.Sprintf("%s: %s was %s; outcome replayed", label, u.Unit, rec.Status))
+	return unitMerge{Merge: rec.Merge, gateNotRun: rec.GateNotRun, replayed: true}, true, nil
+}
+
+// outcomeRecord is a recorded non-merge outcome.
+type outcomeRecord struct {
+	plan.Merge
+	GateNotRun bool `json:"gateNotRun,omitempty"`
+}
+
+var errOutcomeNotRecorded = errors.New("no recorded outcome")
 
 // refusedOverLocal reports whether git refused a merge because it would
 // overwrite local changes or untracked files.

@@ -71,7 +71,7 @@ func ParseDeclaration(markdown string) (*Declaration, []Problem) {
 	if !ok || len(gates) == 0 {
 		return nil, append(problems, gatesProblem("`gates` must be a non-empty sequence", "gates"))
 	}
-	seen := map[string]bool{}
+	seen, commands := map[string]bool{}, map[string]bool{}
 	for idx, g := range gates {
 		name, _ := get(g, "name")
 		ref, hasName := nonEmptyString(name)
@@ -103,6 +103,10 @@ func ParseDeclaration(markdown string) (*Declaration, []Problem) {
 			problems = append(problems, gatesProblem(ref+": command must be a non-empty string", ref))
 		}
 		gate.Command = command
+		if isStr && commands[strings.TrimSpace(command)] {
+			problems = append(problems, gatesProblem(ref+": command repeats another gate's", ref))
+		}
+		commands[strings.TrimSpace(command)] = true
 		if v, present := gm.Get("timeout"); present {
 			s, _ := v.(string)
 			if dur, err := time.ParseDuration(s); err != nil || dur <= 0 {

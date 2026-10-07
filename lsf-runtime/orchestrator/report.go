@@ -76,7 +76,12 @@ func renderCompletionReport(c *runCtx, u *plan.Unit, wave int, branch string, im
 		lines = append(lines, "", "External gates re-verified: "+strings.Join(ps, "; ")+".")
 	}
 	if len(headGates) > 0 {
-		lines = append(lines, "", "Gates at HEAD:", "", renderGates(headGates))
+		// Output tails are for the reviewers, not the committed report.
+		short := make([]gateRun, len(headGates))
+		for i, g := range headGates {
+			short[i], short[i].Tail = g, ""
+		}
+		lines = append(lines, "", "Gates at HEAD:", "", renderGates(short))
 	}
 	lines = append(lines, "", "## Deviations and writes outside Scope", "")
 	lines = append(lines, items(impl.Deviations)...)

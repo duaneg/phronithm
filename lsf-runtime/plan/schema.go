@@ -21,7 +21,7 @@ var StopKinds = []string{
 	"merge-conflict-unresolvable",
 	"merge-regression",
 	"environment-gate-drift",
-	"gate-not-run", // implement or code-fix stage: a gate reported not-run (JS: or no gate reported; Go: gate-omitted)
+	"gate-not-run", // implement or code-fix stage: a gate reported not-run (JS: or no gate reported; Go: gate-omitted); declared gates (D27): the runtime could not run one, after a code stage or before a merge
 	"no-ready-unit",
 	"standing-obligation-undischarged",
 	"agent-null",

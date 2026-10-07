@@ -277,13 +277,15 @@ func TestDeclaredGatesSupersedeStage(t *testing.T) {
 	eq(t, s.GateRuns[0].Commit, "i")
 	eq(t, out.Digest.ByKind["gate-misreported"], 1)
 	for _, l := range []string{"critique-code:r1:A", "lens-review:r1:A"} {
-		match(t, s.Prompt(l), "The runtime, on a clean checkout, ran the project's gates at this branch's HEAD:\n- `pytest -q` — red: red at i\n\n  ```\nFAILED tests\n  ```\n- `ruff check \\.` — green: green at i\n", l)
+		match(t, s.Prompt(l), "The runtime, on a clean checkout, ran the project's gates at this branch's HEAD:\n- `pytest -q` — red: red at i\n\n  ```\n  FAILED tests\n  ```\n- `ruff check \\.` — green: green at i\n", l)
 	}
 	impl := s.Prompt("implement:A")
 	contains(t, impl, "The runtime runs the project's declared gates on a clean checkout of the commit you return")
 	contains(t, impl, "- tests: `pytest -q`\n- lint: `ruff check .`\nDo not run them as a final check")
 	notContains(t, impl, "Run each gate detached", "no long-gate recipe")
-	match(t, input(t, s, "completion-report:A")["text"].(string), "Gates at HEAD:\n\n- `pytest -q` — red: red at i")
+	text := input(t, s, "completion-report:A")["text"].(string)
+	match(t, text, "Gates at HEAD:\n\n- `pytest -q` — red: red at i\n- ")
+	notContains(t, text, "FAILED tests", "no tail in the committed report")
 }
 
 // S4: a stage that omits a declared gate, reports it not-run, or reports
@@ -364,4 +366,23 @@ func TestDeclaredGatesDesignUnit(t *testing.T) {
 	plain := stub(t, graph("plan0", d), nil, nil)
 	run(t, plain)
 	eq(t, s.Prompt("implement:D"), plain.Prompt("implement:D"))
+}
+
+// The wave hands the merge its declared mode and each unit's gated tree;
+// an undeclared merge input is as before.
+func TestDeclaredMergeInput(t *testing.T) {
+	s := declaredStub(t, graph("plan0", unit("A")), nil)
+	run(t, s)
+	in := input(t, s, "merge:w1")
+	eq(t, in["declared"], any(true))
+	eq(t, in["units"].([]any)[0].(map[string]any)["gatedTree"], any("i"))
+	plain := stub(t, graph("plan0", unit("A")), nil, nil)
+	run(t, plain)
+	in = input(t, plain, "merge:w1")
+	if _, ok := in["declared"]; ok {
+		t.Error("undeclared input has declared")
+	}
+	if _, ok := in["units"].([]any)[0].(map[string]any)["gatedTree"]; ok {
+		t.Error("undeclared input has gatedTree")
+	}
 }

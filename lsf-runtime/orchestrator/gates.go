@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -141,11 +142,11 @@ func (o *orch) gatedEarlier(ctx context.Context, tree string) (gateSet, bool) {
 
 // treeOf is commit's tree. With no repository the commit stands for it.
 func (o *orch) treeOf(ctx context.Context, commit string) (string, string, error) {
-	if o.git == nil {
-		return commit, "", nil
-	}
 	if commit == "" || strings.HasPrefix(commit, "-") {
 		return "", fmt.Sprintf("gates: %q is not a commit", commit), nil
+	}
+	if o.git == nil {
+		return commit, "", nil
 	}
 	tree, err := gitOps{o.git}.out(ctx, o.repo, "rev-parse", "--verify", "--quiet", commit+"^{tree}")
 	switch {
@@ -186,6 +187,9 @@ func (o *orch) gateStep(ctx context.Context, tree, commit string) (gateSet, stri
 		}
 		return plan.MarshalJS(set, "")
 	})
+	if isStop(err) {
+		return gateSet{}, "", err
+	}
 	if unjournaled != nil {
 		return *unjournaled, "", nil
 	}
@@ -261,4 +265,26 @@ func (o *orch) declaredGates(ctx context.Context, at plan.At, sha string, report
 		gates[i] = gateRun{Command: r.Command, Status: r.Status, Summary: r.Summary, Tail: r.Tail}
 	}
 	return declaredRun{gr: gatesRun{by: "The runtime, on a clean checkout,", gates: gates}, tree: set.Tree}, sigs, false, nil
+}
+
+// declaredMergeSignals rewrites the merge signals of a declared-gates merge
+// (D26): a regressed merge failed its gates before anything was committed,
+// and one whose gates the runtime could not run stops as gate-not-run.
+// plan.SignalsFromMerge keeps the JS statement for the JS's
+// commit-then-test merge, which undeclared Go never reports.
+func declaredMergeSignals(sigs []*plan.Signal, r mergeResult, declared bool) []*plan.Signal {
+	if !declared {
+		return sigs
+	}
+	for _, s := range sigs {
+		if s.Kind != "merge-regression" {
+			continue
+		}
+		s.Statement = "merge of " + s.Unit + " failed its gates (" + s.Referent + "); nothing committed"
+		if slices.Contains(r.GateNotRun, s.Unit) {
+			s.Kind = "gate-not-run"
+			s.Statement = "merge of " + s.Unit + ": the runtime could not run its gates (" + s.Referent + "); nothing committed"
+		}
+	}
+	return sigs
 }

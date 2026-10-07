@@ -67,6 +67,7 @@ func TestParseDeclarationProblems(t *testing.T) {
 		{"name with slash", "gates:\n  - name: a/b\n    command: x\n", `gates[0]: name must be a non-empty string without surrounding space, control characters or /; got "a/b"`},
 		{"name with space", "gates:\n  - name: \" a\"\n    command: x\n", "gates[0]: name must be"},
 		{"command not a string", "gates:\n  - name: a\n    command: true\n", "a: command must be a non-empty string"},
+		{"duplicate command", "gates:\n  - name: a\n    command: x\n  - name: b\n    command: \" x\"\n", "b: command repeats another gate's"},
 		{"empty block", "# nothing\n", "top level must be a mapping"},
 		{"timeout not a string", "gates:\n  - name: a\n    command: x\n    timeout: [1]\n", "a: timeout must be a positive duration"},
 	} {
