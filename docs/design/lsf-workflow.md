@@ -309,8 +309,9 @@ change the order of later waves; the merge stage never chooses.
 Cleanup runs beside the wave gate and removes the merged units'
 worktrees. In the Go runtime it is code: each merged unit's worktrees from
 this launch go with every untracked, ignored and uncommitted file in them,
-and its completion-report branch goes too; its other branches stay, since a
-resume reads the unit branch. The removed paths are listed in the run log
+and their branches go with them: the unit is complete. A resume that
+replays the unit reads the branch tips its checks journaled, not the
+branches. The removed paths are listed in the run log
 as each worktree goes, and in the step's value. A file a unit needs past its merge must be committed
 or declared under `Retains:` (`retained-artefacts-impl`); until then nothing
 is kept. A worktree whose branch is not merged, or that is not the

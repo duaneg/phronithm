@@ -215,7 +215,7 @@ func TestCheckSha(t *testing.T) {
 func TestCheckReturn(t *testing.T) {
 	r := newGitRepo(t)
 	tip := r.git("rev-parse", "integration")
-	o := &orch{git: execGit{}, repo: r.dir}
+	o := loadLaunch(t, r, nil, nil).orch // its steps run: the writer tip read is one
 	at := plan.At{Stage: "implement", Unit: "A", Wave: plan.W(1)}
 	ctx := context.Background()
 	for _, tc := range []struct {
@@ -233,7 +233,7 @@ func TestCheckReturn(t *testing.T) {
 	} {
 		sigs := []*plan.Signal{}
 		sha, branch := tc.sha, tc.reported
-		stop, err := o.checkReturn(ctx, at, tc.rt, &branch, &sha, &sigs)
+		stop, err := o.checkReturn(ctx, at, callMeta{tc.rt, "implement:A#" + tc.name}, &branch, &sha, &sigs)
 		if wantBranch := map[bool]string{true: tc.rt, false: tc.reported}[tc.rt != ""]; !stop && branch != wantBranch {
 			t.Errorf("%s: carried branch %q, want %q", tc.name, branch, wantBranch)
 		}

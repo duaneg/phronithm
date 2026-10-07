@@ -428,15 +428,12 @@ func TestOnRuntimeCodeStages(t *testing.T) {
 	match(t, r.git("show", reportSha+":docs/plans/A-completion.md"), `^# A — completion report\n`)
 
 	// Cleanup (D25): every worktree of A's stages is gone, the ignored file
-	// the implement stage left with it, listed; the completion-report
-	// branch is gone and the stage branches remain.
+	// the implement stage left with it, listed, and every branch: A is
+	// complete. The relaunch below replays A without them.
 	if ents, _ := os.ReadDir(filepath.Join(cfg.StateDir, "wt")); len(ents) != 0 {
 		t.Errorf("worktrees left: %v", ents)
 	}
-	branches := r.git("for-each-ref", "--format=%(refname:short)", "refs/heads/lsf/")
-	if strings.Contains(branches, "completion-report_A") || !strings.Contains(branches, "implement_A") {
-		t.Errorf("branches after cleanup: %s", branches)
-	}
+	eq(t, r.git("for-each-ref", "--format=%(refname:short)", "refs/heads/lsf/"), "", "branches after cleanup")
 	logText, _ := os.ReadFile(filepath.Join(cfg.StateDir, "log.txt"))
 	match(t, string(logText), `cleanup:w1: implement:A: removed .*build\.log`)
 	eq(t, r.git("log", "-1", "--format=%(trailers:key=Lsf-Unit,valueonly)", mergeSha), "A")

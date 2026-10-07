@@ -72,7 +72,7 @@ func TestCleanupStage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eqs(t, rt.calls, []string{"completion-report:A +branch @integration", "critique-code:r1:A @integration", "implement:A @integration", "plan:A @integration", "implement:B @integration"})
+	eqs(t, rt.calls, []string{"completion-report:A +branch @integration", "critique-code:r1:A +branch @integration", "implement:A +branch @integration", "plan:A +branch @integration", "implement:B +branch @integration"})
 	got := decode[cleanupResult](rt, "cleanup:w1", raw)
 	eq(t, int(got.Result.Removed), 3)
 	eqs(t, got.Result.Kept, []string{"implement:B: not merged into integration"})

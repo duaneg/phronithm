@@ -12,9 +12,9 @@ import (
 
 // Cleanup as code (D25): after a wave merges, each merged unit's worktrees
 // from this launch go (lsfrt.Runtime.RemoveWorktree), with every untracked,
-// ignored and uncommitted file in them, listed; its completion-report
-// branch goes too. Its other branches stay: a resume reads the unit
-// branch's tip.
+// ignored and uncommitted file in them, listed, and their branches with
+// them: the unit is complete, and a replay of it reads the tips its checks
+// journaled (D23), not the branches.
 
 type cleanupUnitIn struct {
 	Unit      string   `json:"unit"`
@@ -49,7 +49,7 @@ func (o *orch) cleanupStage(in cleanupInput) stageFn {
 		var errs []error
 		for _, u := range in.Units {
 			for _, wl := range u.Worktrees {
-				r, err := o.rt.RemoveWorktree(ctx, wl, in.IntegrationBranch, strings.HasPrefix(wl, "completion-report:"))
+				r, err := o.rt.RemoveWorktree(ctx, wl, in.IntegrationBranch, true)
 				// Logged as it happens: a later failure fails the step, and
 				// its value with the list would be lost.
 				if len(r.Paths) > 0 {

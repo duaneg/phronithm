@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -200,18 +202,87 @@ var shaHex = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 // error records that the SHA was not checked. With no repository there is
 // nothing to check; with ctx done the error is the cancellation's stop.
 func (o *orch) checkSha(ctx context.Context, at plan.At, branch, reported string) (sha string, sig *plan.Signal, unresolved bool, err error) {
-	if o.git == nil || branch == "" || strings.HasPrefix(branch, "-") || strings.ContainsAny(branch, "~^:@{\\ \t\n") || strings.Contains(branch, "..") {
-		return reported, nil, false, nil
-	}
+	return o.checkShaFrom(ctx, at, branch, reported, o.liveTip)
+}
+
+// branchTipRead is a branch's tip as read once: Unresolved for exit 1,
+// Error for another git error.
+type branchTipRead struct {
+	Tip        string `json:"tip,omitempty"`
+	Unresolved bool   `json:"unresolved,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+// liveTip reads branch's tip now; err is only the cancellation's stop.
+func (o *orch) liveTip(ctx context.Context, branch string) (branchTipRead, error) {
 	tip, err := gitOps{o.git}.out(ctx, o.repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
 	switch {
 	case err != nil && ctx.Err() != nil:
-		return reported, nil, false, &lsfrt.StopError{Reason: lsfrt.StopCancelled}
+		return branchTipRead{}, &lsfrt.StopError{Reason: lsfrt.StopCancelled}
 	case err != nil && exitCode(err) == 1:
-		return reported, nil, true, nil
+		return branchTipRead{Unresolved: true}, nil
 	case err != nil:
-		return reported, plan.ShaCorrectedSignal(at, branch, reported, "", err.Error()), false, nil
+		return branchTipRead{Error: err.Error()}, nil
 	}
+	return branchTipRead{Tip: tip}, nil
+}
+
+// journaledTip reads a writer call's branch tip as a code step,
+// branch-tip:<call label> (D23): a replay gets the tip the call returned
+// to, so the check, its correction and its ledger rows are the same
+// whether or not cleanup has since deleted the branch. The tip is kept for
+// the completion report's fallback (tipAt).
+func (o *orch) journaledTip(callLabel string) func(context.Context, string) (branchTipRead, error) {
+	return func(ctx context.Context, branch string) (branchTipRead, error) {
+		raw, _, err := o.runStep(ctx, "branch-tip:"+callLabel, map[string]string{"branch": branch}, func(ctx context.Context, _ string, _ bool) (json.RawMessage, error) {
+			r, err := o.liveTip(ctx, branch)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(r)
+		})
+		var se *stageErr
+		if errors.As(err, &se) {
+			return branchTipRead{Error: se.reason}, nil
+		}
+		if err != nil {
+			return branchTipRead{}, err
+		}
+		var r branchTipRead
+		if err := json.Unmarshal(raw, &r); err != nil {
+			return branchTipRead{Error: "journaled tip: " + err.Error()}, nil
+		}
+		if r.Tip != "" {
+			o.mu.Lock()
+			o.tips[branch] = r.Tip
+			o.mu.Unlock()
+		}
+		return r, nil
+	}
+}
+
+// tipAt is the tip a writer call's check read for branch this launch, ""
+// when none did.
+func (o *orch) tipAt(branch string) string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.tips[branch]
+}
+
+func (o *orch) checkShaFrom(ctx context.Context, at plan.At, branch, reported string, read func(context.Context, string) (branchTipRead, error)) (sha string, sig *plan.Signal, unresolved bool, err error) {
+	if o.git == nil || branch == "" || strings.HasPrefix(branch, "-") || strings.ContainsAny(branch, "~^:@{\\ \t\n") || strings.Contains(branch, "..") {
+		return reported, nil, false, nil
+	}
+	t, err := read(ctx, branch)
+	switch {
+	case err != nil:
+		return reported, nil, false, err
+	case t.Unresolved:
+		return reported, nil, true, nil
+	case t.Error != "":
+		return reported, plan.ShaCorrectedSignal(at, branch, reported, "", t.Error), false, nil
+	}
+	tip := t.Tip
 	if r := strings.ToLower(jsTrim(reported)); shaHex.MatchString(r) && strings.HasPrefix(tip, r) {
 		return r, nil, false, nil
 	}
@@ -226,17 +297,20 @@ func (o *orch) checkSha(ctx context.Context, at plan.At, branch, reported string
 // stub, a seed, a record journaled before the branch was), the SHA is
 // checked against the reported branch, and a branch that does not resolve
 // leaves it as reported with no signal. stop reports a branch-mismatch.
-func (o *orch) checkReturn(ctx context.Context, at plan.At, rtBranch string, branchField, sha *string, sigs *[]*plan.Signal) (stop bool, err error) {
+func (o *orch) checkReturn(ctx context.Context, at plan.At, call callMeta, branchField, sha *string, sigs *[]*plan.Signal) (stop bool, err error) {
+	rtBranch := call.branch
 	reported := *branchField
 	branch := reported
+	read := o.liveTip
 	if rtBranch != "" {
 		if jsTrim(reported) != rtBranch {
 			*sigs = append(*sigs, plan.BranchMismatchSignal(at, reported, rtBranch, ""))
 			return true, nil
 		}
 		branch = rtBranch
+		read = o.journaledTip(call.label)
 	}
-	fixed, sig, unresolved, err := o.checkSha(ctx, at, branch, *sha)
+	fixed, sig, unresolved, err := o.checkShaFrom(ctx, at, branch, *sha, read)
 	if err != nil {
 		return false, err
 	}
@@ -268,11 +342,11 @@ func (o *orch) unitOpts(u *plan.Unit, label, role string, opts lsfrt.Opts) lsfrt
 // (checkReturn). A branch-mismatch is among the signals, so the critique
 // loop stops before taking the fix's branch.
 func (o *orch) fixCall(ctx context.Context, at plan.At, prompt string, opts lsfrt.Opts) (*ret[fixResult], []*plan.Signal, error) {
-	r, sigs, rtBranch, err := callBranch[fixResult](ctx, o, site{at: at, writer: true}, prompt, opts)
+	r, sigs, call, err := callBranch[fixResult](ctx, o, site{at: at, writer: true}, prompt, opts)
 	if err != nil || r == nil {
 		return r, sigs, err
 	}
-	_, err = o.checkReturn(ctx, at, rtBranch, &r.Result.Branch, &r.Result.Sha, &sigs)
+	_, err = o.checkReturn(ctx, at, call, &r.Result.Branch, &r.Result.Sha, &sigs)
 	return r, sigs, err
 }
 
@@ -296,7 +370,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	}
 
 	// 1. plan
-	planned, cs, rtBranch, err := callBranch[unitPlanResult](ctx, o, site{at: at("plan"), writer: true}, unitPlanPrompt(c, pr, u), o.unitOpts(u, "plan", "planning", lsfrt.Opts{Isolation: "worktree", Schema: unitPlanSchema}))
+	planned, cs, planCall, err := callBranch[unitPlanResult](ctx, o, site{at: at("plan"), writer: true}, unitPlanPrompt(c, pr, u), o.unitOpts(u, "plan", "planning", lsfrt.Opts{Isolation: "worktree", Schema: unitPlanSchema}))
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +379,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 		sigs = append(sigs, plan.NullReturnSignal(at("plan")))
 		return abort("plan")
 	}
-	mismatch, err := o.checkReturn(ctx, at("plan"), rtBranch, &planned.Result.Branch, &planned.Result.Sha, &sigs)
+	mismatch, err := o.checkReturn(ctx, at("plan"), planCall, &planned.Result.Branch, &planned.Result.Sha, &sigs)
 	if err != nil {
 		return nil, err
 	}
@@ -342,7 +416,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	}
 
 	// 3. implement
-	impl, cs, rtBranch, err := callBranch[implementResult](ctx, o, site{at: at("implement"), writer: true}, implementPrompt(c, pr, u, branch), o.unitOpts(u, "implement", "", lsfrt.Opts{Isolation: "worktree", Schema: implementSchema}))
+	impl, cs, implCall, err := callBranch[implementResult](ctx, o, site{at: at("implement"), writer: true}, implementPrompt(c, pr, u, branch), o.unitOpts(u, "implement", "", lsfrt.Opts{Isolation: "worktree", Schema: implementSchema}))
 	if err != nil {
 		return nil, err
 	}
@@ -361,7 +435,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	}
 	// The branch is checked first, so a drifted return on a foreign branch
 	// records both.
-	mismatch, err = o.checkReturn(ctx, at("implement"), rtBranch, &impl.Result.Branch, &impl.Result.Sha, &sigs)
+	mismatch, err = o.checkReturn(ctx, at("implement"), implCall, &impl.Result.Branch, &impl.Result.Sha, &sigs)
 	if err != nil {
 		return nil, err
 	}
@@ -483,7 +557,11 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 		case err != nil && ctx.Err() != nil:
 			return nil, &lsfrt.StopError{Reason: lsfrt.StopCancelled}
 		case err != nil && exitCode(err) == 1:
-			return fault(fmt.Sprintf("unit branch %q does not resolve", branch))
+			// Cleanup deletes a merged unit's branches: a replay of it takes
+			// the tip its last writer's check journaled (D25).
+			if sha = o.tipAt(branch); sha == "" {
+				return fault(fmt.Sprintf("unit branch %q does not resolve", branch))
+			}
 		case err != nil:
 			return fault(fmt.Sprintf("unit branch %q: %v", branch, err))
 		}

@@ -155,14 +155,20 @@
 //     rejected return (readings, deviations, distress, gate drift) are
 //     kept, as for every unit-stage stop (D21). Its SHA is checked against
 //     the runtime's branch (checkReturn), and the runtime's branch is the
-//     one carried forward. A fix's mismatch stops the critique
+//     one carried forward. The tip it is checked against is read once, as
+//     a code step (branch-tip:<call label>), so a replay checks against the
+//     same tip, with the same correction and rows, after cleanup has
+//     deleted the branch (D25). A fix's mismatch stops the critique
 //     loop before its branch is taken; its critical-fixed rows are already
 //     recorded. Without a runtime branch (a stub, a seed, a call journaled
 //     before the branch was) the SHA is checked against the reported
 //     branch as before, and an unresolvable one is silent. The readers
 //     report no branch, and the main-checkout stages have none. The
 //     completion report's tip read faults with "does not resolve" on exit
-//     1 and with the git error otherwise. JS trusts the reported branch.
+//     1, unless its branch's tip was journaled by a writer's check this
+//     launch (a merged unit's replay after cleanup), and with the git error
+//     otherwise. A branch that resolves is read live, so a moved branch
+//     still reruns the report. JS trusts the reported branch.
 //   - D24. The merge is a journaled code step (merge.go), not an agent:
 //     it merges each unit's completion-report commit (the report step's
 //     journaled SHA, so a replay needs no branch) into the integration
@@ -211,9 +217,9 @@
 //     input is the same). Each worktree is removed with every
 //     untracked, ignored and uncommitted file in it
 //     (lsfrt.Runtime.RemoveWorktree, which keeps one whose branch is not
-//     merged or that is not the runtime's), and the completion-report
-//     branch is deleted; the stage branches stay, since a resume reads the
-//     unit branch's tip. The step logs each removal's paths and each kept
+//     merged or that is not the runtime's), and its branch is deleted: the
+//     unit is complete, and its replay reads the tips the checks journaled
+//     (D23), not the branches. The step logs each removal's paths and each kept
 //     worktree as it runs, a failed removal's included, and its value
 //     lists them for a replay. A failure is logged, not signalled. JS's cleanup agent matches worktree-wf_* branches the
 //     runtime never makes, and its denials and residue were ledger rows;

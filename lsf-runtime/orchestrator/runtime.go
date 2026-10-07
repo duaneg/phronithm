@@ -57,11 +57,12 @@ type orch struct {
 	// worktrees are the final labels of the worktree calls and steps each
 	// unit's stages ran this launch, in order (D25).
 	worktrees map[string][]string
+	tips      map[string]string // branch → tip its writer's check journaled (D23)
 }
 
 // newOrch is a launch's orch over rt.
 func newOrch(rt Runtime, c *runCtx, seed map[string]json.RawMessage) *orch {
-	o := &orch{rt: rt, ctx: c, seed: seed, uses: map[string]int{}, worktrees: map[string][]string{}, today: func() string { return time.Now().Format(time.DateOnly) }}
+	o := &orch{rt: rt, ctx: c, seed: seed, uses: map[string]int{}, worktrees: map[string][]string{}, tips: map[string]string{}, today: func() string { return time.Now().Format(time.DateOnly) }}
 	if repo := rt.Repo(); repo != "" {
 		o.git, o.repo = execGit{}, repo
 	}
@@ -299,15 +300,19 @@ func call[T any](ctx context.Context, o *orch, s site, prompt string, opts lsfrt
 	return r, sigs, err
 }
 
-// callBranch is call, also returning the worktree branch the runtime gave
-// the call ("" without isolation, for a seed, or from a stub).
-func callBranch[T any](ctx context.Context, o *orch, s site, prompt string, opts lsfrt.Opts) (*ret[T], []*plan.Signal, string, error) {
+// callMeta is what a writer's check needs of its call: the worktree branch
+// the runtime gave it ("" without isolation, for a seed, or from a stub)
+// and its final label.
+type callMeta struct{ branch, label string }
+
+// callBranch is call, also returning the call's callMeta.
+func callBranch[T any](ctx context.Context, o *orch, s site, prompt string, opts lsfrt.Opts) (*ret[T], []*plan.Signal, callMeta, error) {
 	cr, label, err := o.agent(ctx, prompt, opts)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, callMeta{}, err
 	}
 	v, sigs := o.callSigs(s, cr, label)
-	return decode[T](o.rt, label, v), sigs, cr.Branch, nil
+	return decode[T](o.rt, label, v), sigs, callMeta{cr.Branch, label}, nil
 }
 
 // step is runStep plus decode. fault is the stage's failure reason, "" when
