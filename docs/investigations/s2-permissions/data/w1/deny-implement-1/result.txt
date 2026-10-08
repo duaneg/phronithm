@@ -1,0 +1,1 @@
+I committed the work as `f6ca2d3` on `unit/add-mean`, and the done condition is met. At that HEAD, `node --test` passes (3 tests, 0 failures) and `node scripts/lint.js` reports 0 problems. `mean(xs)` is exported from `src/stats.js`, built on `sum`, and throws a `RangeError` for an empty array. `test/stats.test.js` covers both the normal cases and the empty-array error.

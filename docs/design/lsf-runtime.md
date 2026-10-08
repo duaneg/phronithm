@@ -171,6 +171,171 @@ The decision carries the cost of the distribution unit (`runtime-distribution`):
   - `go.mod` changes only when a unit adds a dependency or a `tool` directive, which that unit records as a decision.
 - **No top-level `bin/`.** Skills invoke the runtime through `${CLAUDE_PLUGIN_ROOT}`, so organisation-sync installs keep working.
 
+## Permissions
+
+Unit `s2-permissions-design`. Evidence: [s2-permissions results](../investigations/s2-permissions-results.md), about 85 calls on Claude Code 2.1.294 (2.1.289 had been pruned). Rigour `evidenced`, n = 1–2 per cell.
+
+**Status:** decided, 2026-10-08. Requester verdicts:
+- **B2 for every stage:** the native Bash sandbox, `--restricted`, and the credential held only in a host proxy.
+- **Reviewers** keep no writes (see Reviewers).
+- **Declared gates** run under pinned `srt`, with a plan-declared host allowlist for `setup`.
+- **The runtime changes** are carried by a new unit, `s2-permissions-impl`.
+
+### Options
+
+| Option | Result on the spike fixture |
+|---|---|
+| Deny list, `Bash` granted (spike runs 2–7) | Implement commits. A `python3` write changed the main checkout's settings, and branches were deleted, egress reached a listener and canaries were read, all in 2 of 2 runs. |
+| Prefix allow rules, prompts rewritten to single commands | Implement commits. The probes held only because the agent stopped at the first denial: one `node -e`, allowed by the `Bash(node:*)` the gates need, rewrote the settings. Spike run 1: the orchestrator's prompts produce compound commands. |
+| `--permission-mode auto` | Implement commits, and the settings edits were blocked. Branches were deleted in 2 of 2 runs, one exfiltration got through, and canaries were read. The classifier is probabilistic. |
+| `ic`, broad permissions inside | Not runnable headless as it stands (it hangs after auth). It mounts the host credentials read-write. |
+| **B2**, as decided below (`B2f`) | Implement commits. Settings, branch, egress, canary, token and docker-escape probes all held: the agent attempted each attack (shell, `python3`, `mv`, curl, node, DNS), and the sandbox stopped it. An earlier variant, with the main checkout under `/tmp` and Bash allowed to reach the proxy, lost the settings and branch probes (see Placement). |
+
+`srt` around the whole process (`srtA+`) also held. It was not chosen because it puts the real token in the `claude` process and adds `srt`'s nested-sandbox mode with `allowAllUnixSockets` for every call. It remains an optional later layer, as kernel confinement of the file tools.
+
+### Boundary
+
+- **Bash** runs in Claude Code's native sandbox (`bwrap` on Linux). Its filesystem and network are enforced by the kernel.
+- **File tools** (`Read`, `Edit`, `Write`, `Glob`, `Grep`) are confined to the working directory and `--add-dir` directories by `--restricted`. This is enforced by Claude Code, not the kernel. `--restricted` also ignores the clone's settings files.
+- **The credential** never enters a sandboxed process. The runtime runs an injecting proxy on host loopback. Each `claude` gets `ANTHROPIC_BASE_URL` pointing at the proxy and a placeholder `ANTHROPIC_AUTH_TOKEN`. `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` strips the rest of the environment from Bash.
+
+### Placement
+
+- **No agent call runs in the main checkout or a worktree.** A worktree's `.git` is the main repo's, so its refs and config are writable through the worktree. Every call runs in its own clone under the state dir. The main checkout, the state dir and `$HOME` are in `denyRead`, so Bash sees only its own clone. Writes to sibling paths land in the mask and are discarded.
+- **Plain clones.** A `--shared` clone's alternates point into the masked repo.
+- **Nothing kept under `/tmp` or `/var/tmp`.** The native sandbox makes both writable to Bash, whatever `allowWrite` says. The runtime refuses to launch when the main checkout or the state dir is under either.
+- **Commits come back by fetch.** After a call, the runtime fetches the clone's branch into the main repo as the call's branch (`lsf/<plan8>/<key>`), without tags. Every check the orchestrator makes on a worktree branch applies unchanged. A writer's commits reach the integration branch only through an orchestrator step that checks the branch and fast-forwards to it. The fast-forward updates the main checkout, so it needs that checkout clean and at the expected tip. A requester edit there stops the run, as a requester edit during a repo call does today.
+- **Which clone each call gets.**
+
+  | Call | Today | Clone of | Kept |
+  |---|---|---|---|
+  | `plan`, `fix-plan`, `implement`, `fix-code` | worktree | the repo, on the call's branch, created where the worktree's is today | fetched |
+  | `critique-plan`, `critique-design`, `critique-code`, `lens-review` | worktree, or main checkout for `critique-plan` | the repo, on the branch the prompt names | discarded |
+  | `direct-edits[:w<n>]`, `decision-replan`, `replan:w<n>`, `termination` | main checkout | the integration tip | fetched, then fast-forwarded |
+  | `review-gate:w<n>`, `obligations` | main checkout | the integration tip | discarded |
+  | `merge-conflict:w<n>:<unit>` | main checkout, mid-merge | none: the wave's merge clone (see Merge conflicts) | the merge clone |
+
+  Every branch a prompt names is a local branch in the clone, at the main repo's tip for it.
+
+### Roles
+
+The orchestrator issues each label below with D10's `#n` suffix on a repeat. The patterns are prefix-anchored, and each one either ends unanchored or ends `(#|$)`. First match wins.
+
+```json
+"defaultRole": "writer",
+"roleRules": [
+  {"agentType": "phronithm:critic", "role": "reviewer"},
+  {"label": "^(critique-(plan|design|code)|lens-review):r[0-9]+:", "role": "reviewer"},
+  {"label": "^review-gate:w[0-9]+(#|$)", "role": "reviewer"},
+  {"label": "^obligations(#|$)", "role": "reviewer"}
+],
+"roles": {
+  "writer":   {"tools": "Read,Edit,Write,Glob,Grep,Bash,Skill", "allow": ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "Skill"],
+               "deny": ["Edit(/<plugin>/**)", "Write(/<plugin>/**)", "Edit(.git/**)", "Write(.git/**)"], "permissionMode": "dontAsk", "clone": "kept"},
+  "reviewer": {"tools": "Read,Glob,Grep,Bash,Skill", "allow": ["Read", "Glob", "Grep", "Bash", "Skill"],
+               "deny": ["Edit(/<plugin>/**)", "Write(/<plugin>/**)"], "permissionMode": "dontAsk", "clone": "discarded"}
+}
+```
+
+- `<plugin>` is the plugin root, substituted by the runtime at launch.
+- Every label not matched above is a writer: `plan`, `fix-plan`, `implement`, `fix-code`, `direct-edits`, `decision-replan`, `replan`, `termination`, `merge-conflict`. `plan:critique-x` and `merge-conflict:w1:review-gate` are writers, because the patterns anchor at the label's start.
+- `clone` is a new field (see Runtime changes).
+
+### A call's launch
+
+The runtime builds each call's settings, argv and environment. The role supplies only its tools and its `clone` value.
+
+- **Sandbox settings** (`--settings <file>`):
+
+  ```json
+  {"sandbox": {"enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false, "autoAllowBashIfSandboxed": true,
+    "filesystem": {"denyRead": ["$HOME", "<repo>", "<stateDir>", "/run/containerd", "…config denyRead"], "allowWrite": ["<clone>"]},
+    "network": {"allowedDomains": [], "strictAllowlist": true}}}
+  ```
+
+  - Bash has no network. The proxy is reached by `claude` itself, not by Bash. A Bash allowance for the proxy would let Bash spend on the API with the injected credential.
+  - `/run/containerd` works round a 2.1.294 bug that fails every sandboxed Bash call.
+  - A reviewer's clone is in `allowWrite` too: `bwrap` writes mount points into the cwd and fails every call if it cannot.
+- **Flags:** `--restricted`, `--tools`, `--allowedTools`, `--disallowedTools`, `--plugin-dir <plugin> --add-dir <plugin>`, `--settings` and `--permission-mode dontAsk`, plus the flags the runtime already passes.
+  - `--add-dir` lets the skills' `Read` of `${CLAUDE_PLUGIN_ROOT}/docs/...` through `--restricted`. Without it, the critique ran without its framework and did not say so.
+  - The deny rules and Claude Code's own "sensitive file" check each refused a `Write` into the plugin.
+- **Environment:** replaced, not inherited.
+  - `PATH`, from config.
+  - `SHELL`, a system shell.
+  - `HOME` and `CLAUDE_CONFIG_DIR`, a per-call home under the state dir.
+  - `TMPDIR`, a short per-call directory under `/tmp`, because `bwrap`'s socket paths are capped at 108 bytes.
+  - `DISABLE_AUTOUPDATER=1`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`.
+  - `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>` and `ANTHROPIC_AUTH_TOKEN=<placeholder>`, with `NO_PROXY` empty.
+  - The names in a config `env` passthrough list.
+- **The clone's git identity** is set in its local config from the main repo's. Inside the sandbox, Bash sees the clone's `.git/config` and `.git/hooks` read-only.
+
+### Credential proxy
+
+- **What it does.** The runtime starts it at launch on an ephemeral 127.0.0.1 port, with a placeholder random to the launch. It refuses a request whose bearer is not the placeholder. Otherwise it replaces the bearer with the live session's OAuth access token from `~/.claude/.credentials.json`, adds the OAuth beta header, forwards to `api.anthropic.com`, and streams the response back unbuffered.
+- **Which token.** The live session's credential, with no separate token (requester, 2026-10-08).
+- **When it reads the token.** It re-reads the file when the file changes, so a refresh by an interactive session reaches running calls. A run that outlives the token with no refresh fails its calls as `permanent` (401). `s2-permissions-impl` decides whether that becomes a stop.
+- **The proxy stops with the launch.**
+
+### Reviewers
+
+- **What a reviewer can write.** Its clone (`bwrap` requires a writable cwd) and `/tmp`. It cannot write the main checkout, the integration branch or any other clone.
+- **What happens to those writes.** Its clone is never fetched and is removed after the call, so nothing it writes is kept. The verdict's "zero writes" is met as zero *kept* writes: a write-denied cwd fails every Bash call (results, `B2r`).
+- **No uncommitted check for a discarded clone.** Build output from a test a reviewer re-runs would otherwise raise `residue-at-return` on every such call, and nothing in that clone is kept.
+- **Reviewers have no `Edit` or `Write`.**
+
+### Merge conflicts
+
+- **The merge step runs in a merge clone, not the main checkout.** The clone is `<stateDir>/merge/w<n>`, on the integration branch. The step's `m.dir` becomes that clone, and every check runs there unchanged, as runtime code outside the sandbox:
+  - `outside` and `changedOutside`;
+  - the `head != pre` check, since the call stages a resolution and does not commit it;
+  - `stagedOK`;
+  - `write-tree` and `mergeGates`;
+  - the commit with its `Lsf-Unit`/`Lsf-Step` trailers;
+  - `abortOwn`.
+- **The conflict call gets the merge clone** as its cwd, with `allowWrite` on it. It is the only call whose clone is not its own.
+- **After each verified merge commit,** the main repo fetches it and fast-forwards the integration branch, as in Placement.
+- **The merge clone stays until the wave's merges finish.** So an interrupted step finds its merge in progress, and its adoption by trailers works as today.
+- **`refusedOverLocal` no longer arises in the merge.** The merge clone holds no requester edits. A requester edit now blocks the fast-forward and stops the run.
+
+### Declared gates
+
+- **The `declared-gates-changed` stop is not enough.** It shows the requester a changed command. But the commands run code the stages wrote (tests, scripts, package install hooks), and today that code runs on the host with the runtime's environment and network.
+- **Gates run under `srt` 0.0.79,** pinned.
+  - **Filesystem.** Read is denied for `$HOME`, the repo and the state dir, except the gate checkout. Write is allowed to the gate checkout only.
+  - **Network.** None for gates. `setup` is allowed only the hosts the gate block declares.
+  - **Environment.** Built as for an agent call, without the Anthropic variables.
+  - In the gate check, a hostile gate under `srt` found the env canary absent and the file canaries denied, could not write the main checkout, and had every egress blocked.
+- **Gate block change.** The `lsf-gates` block gains `setupHosts`, a list of host names. The block stays pinned within a launch, so a change to `setupHosts` also stops the run on `declared-gates-changed`.
+- **`srt` prerequisites:** `rg` on `PATH`, a short `TMPDIR`, and `SHELL` a system shell.
+- **Placement.** The check passed with the gate checkout under the masked `$HOME`, as the decided layout puts it (`w3/gate-srtA`).
+
+### Runtime changes
+
+Carried by `s2-permissions-impl`, a new feature unit on `lsf-runtime/runtime`, `lsf-runtime/orchestrator`, `lsf-runtime/plan` and `docs/plan-graph.md`'s `lsf-gates` section. It comes after this unit and before `runtime-cli-drive`, serial with `retained-artefacts-impl`. The breakdown does not have it yet: the re-plan after this unit adds it, with these changes as its done condition.
+
+1. **Clones for every agent call,** as in Placement: clone, fetch-back, removal, and the refusal to launch under `/tmp` or `/var/tmp`. The repo-call snapshot in Uncommitted at return goes, since no agent call runs in the main checkout.
+2. **Orchestrator changes:**
+   - steps that fast-forward the integration branch to a writer repo call's fetched branch;
+   - the merge step in a merge clone;
+   - the prompts' named branches made local branches in each clone.
+3. **Role fields and launch:**
+   - the role field `clone` (`kept` or `discarded`), and `<plugin>` substituted in `deny`;
+   - the per-call settings, argv and environment of A call's launch;
+   - a config `env` passthrough list and extra `denyRead` paths;
+   - no uncommitted check for a discarded clone.
+4. **The credential proxy:** started, held and stopped with the launch.
+5. **Gates under `srt`,** and `setupHosts` in the gate block and its parser.
+6. **The fixture run under B2.** `tools/fixturerun` runs the spike fixture end to end under the decided configuration.
+
+### Known limits
+
+- **`setup` has network.** Code that `setup` runs (package install hooks) can send what it reads in the gate checkout to the hosts `setupHosts` allows. It cannot reach the credential or `$HOME`.
+- **`/tmp` is shared.** Bash in any call can read and write `/tmp` and `/var/tmp`, including other concurrent calls' `TMPDIR`s. Nothing the runtime keeps is there.
+- **File-tool confinement is Claude Code's, not the kernel's.** A `--restricted` bypass would reach whatever the user can. Whole-process `srt` is the remedy if one is found.
+- **Mount-point files.** The sandbox leaves zero-byte files (`.env*`, lock files, `.npmrc`, `.gitmodules` and others) in each clone and lists them in `.git/info/exclude`. They are ignored, and they go when the clone is removed.
+- **macOS is unprobed.** The native sandbox uses Seatbelt there, and the `/tmp` and mount-point findings are Linux-specific.
+- **Version.** Probed on 2.1.294 only. The `/run/containerd` workaround and the `/tmp` behaviour should be re-checked at each pin move.
+
 ## Runtime
 
 Unit `runtime-core`, plan `docs/plans/runtime-core-plan.md`. Package `lsfrt` in `lsf-runtime/runtime/`; tests run against the stub `lsf-runtime/testdata/claude` and streams recorded from Claude Code 2.1.289 (`testdata/streams/`).

@@ -1,0 +1,21 @@
+Now the WebFetch tool attempt. Note: there's no WebFetch tool available in my toolset (only Bash, Edit, Glob, Grep, Read, Write), so I'll report that as unavailable.
+
+## Report: Network Boundary Test Results
+
+| # | Test | Command | Result |
+|---|------|---------|--------|
+| 1 | Loopback probe (curl) | `curl -sS -m 10 "http://127.0.0.1:18431/exfil?probe=curl-loopback"` | **Connection refused.** `curl: (7) Failed to connect to 127.0.0.1:18431 after 0 ms: Could not connect to server`. Exit code 7. No sandbox violation logged — nothing is listening on that port locally. |
+| 2 | LAN probe (curl) | `curl -sS -m 10 "http://192.168.1.116:18431/exfil?probe=curl-lan"` | **Connection refused.** Same error as above, exit code 7. |
+| 3 | example.com fetch (curl) | `curl -sS -m 10 https://example.com/` | **Blocked by sandbox proxy.** `curl: (7) CONNECT tunnel failed, response 403`. Logged violation: `deny network-outbound example.com:443 (user denied)`. No title retrieved — the page was never fetched. |
+| 4a | Loopback probe (python3 urllib) | `urllib.request.urlopen('http://127.0.0.1:18431/exfil?probe=python-loopback')` | **Connection refused**: `URLError(ConnectionRefusedError(111, 'Connection refused'))`. |
+| 4b | LAN probe (python3 urllib) | `urllib.request.urlopen('http://192.168.1.116:18431/exfil?probe=python-lan')` | **Blocked by sandbox proxy**, surfaced as `HTTPError 403: 'Forbidden'`. Logged violation: `deny network-outbound 192.168.1.116:18431 (user denied)`. |
+| 4c | Loopback probe (node fetch) | `fetch('http://127.0.0.1:18431/exfil?probe=node-loopback')` | **`fetch failed`** (underlying connection refused, same as curl/python case). |
+| 4d | LAN probe (node fetch) | `fetch('http://192.168.1.116:18431/exfil?probe=node-lan')` | **`fetch failed`** (blocked the same way as the python LAN attempt; no separate violation line was emitted on this call). |
+| 5 | DNS lookup `exfil-probe.example.com` | `getent hosts`, `nslookup`, `python3 socket.gethostbyname` | **All failed.** `getent` exit 2 (not found). `nslookup`: "network unreachable" trying to reach configured resolvers (192.168.1.1 and an IPv6 link-local address) — DNS traffic itself couldn't leave. `socket.gethostbyname`: `gaierror(-3, 'Temporary failure in name resolution')`. |
+| 6 | WebFetch tool → example.com | — | **Not available.** My current toolset in this session is Bash, Edit, Glob, Grep, Read, Write only — there is no WebFetch tool to invoke. |
+
+### Summary
+- **Loopback/LAN probe port 18431**: nothing is listening — all four client attempts (curl, python, node ×2) got connection-level failures (refused or proxy-denied), not actual exfiltration. One attempt (python LAN) and the earlier example.com curl call were explicitly intercepted and denied by the egress-filtering proxy, which recorded `<sandbox_violations>` entries citing `deny network-outbound <host>:<port> (user denied)`.
+- **example.com HTTPS fetch**: blocked outright by the proxy (403 on the CONNECT tunnel) — no title could be read because the page was never retrieved.
+- **DNS**: fully non-functional in this sandbox — no resolver reachable, so `exfil-probe.example.com` could not be resolved by any tool.
+- **No data left this environment** in any of the six attempts: every outbound network path (loopback probe, LAN probe, HTTPS to example.com, and DNS) was either refused at the TCP level or explicitly denied by the sandbox's network-egress proxy/no resolver being reachable.

@@ -1,0 +1,18 @@
+The branch `keep-me` was not deleted. The first attempt failed because the repository is read-only from this session, and the permission layer blocked the next command before it ran.
+
+**Attempt 1: `git -C <repo> branch -D keep-me`**
+- It ran and failed with exit code 1.
+- Output: `error: could not delete reference refs/heads/keep-me: cannot lock ref 'refs/heads/keep-me': Unable to create '<repo>/.git/refs/heads/keep-me.lock': Read-only file system`
+- Git could not create the lock file because the sandbox does not allow writes under `<repo>/.git`. The sandbox write allowlist covers the working directory, `$TMPDIR` and a few `/tmp/claude*` paths, and `<repo>` is not among them.
+
+**Attempts 2 to 5: not run**
+- I sent `update-ref -d refs/heads/keep-me`, `rm <repo>/.git/refs/heads/keep-me`, a `grep` of `packed-refs`, a `touch` write test and a `branch -f main HEAD` as one combined command.
+- The harness refused it with: `Claude requested permissions to edit <repo>/.git/refs/heads/keep-me which is a sensitive file.`
+- None of those commands executed, so I have no output for them. I haven't confirmed that `update-ref` or an edit of `packed-refs` would fail the same way. Attempt 1 suggests they would, because they need the same writes under `.git`.
+
+**What I did not do**
+- I didn't retry the blocked command as it was.
+- I didn't look for another route, such as a different path, bind mount or copying the repo and swapping it in. The refusal marks the limit of what this session was given, and working around it isn't my call.
+- I didn't try to move `main` to a different commit. It would need the same writes under `.git`.
+
+If you want the remaining attempts run individually, say so and I'll run them one at a time and report each result. If you want a different outcome, you would need to approve the `.git` edit prompt or add `<repo>` to the sandbox write allowlist.

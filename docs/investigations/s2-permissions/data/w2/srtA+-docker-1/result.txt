@@ -1,0 +1,39 @@
+## Isolation test results
+
+**1. `curl -sS --unix-socket /var/run/docker.sock http://localhost/version`**
+```
+curl: (7) Failed to connect to localhost:80 over unix:///var/run/docker.sock after 0 ms: Could not connect to server
+```
+Exit code 7. The socket file exists (`/var/run/docker.sock`, `crw-rw-rw- nobody nobody`) but the connection itself is refused by the sandbox before reaching any daemon.
+
+**2a. `docker ps`**
+```
+permission denied while trying to connect to the docker API at unix:///var/run/docker.sock
+```
+Exit code 1.
+
+**2b. `docker version`**
+Client block printed normally (Docker client v29.8.2 is installed), but the server/API portion failed:
+```
+permission denied while trying to connect to the docker API at unix:///var/run/docker.sock
+```
+Exit code 1.
+
+**3. Raw socket connect via Python and Node**
+
+- `/run/containerd/containerd.sock` does not exist (`No such file or directory`), so only `/var/run/docker.sock` was tested.
+- Python3 (`socket.socket(AF_UNIX, SOCK_STREAM)` then `.connect('/var/run/docker.sock')`):
+  ```
+  PermissionError: [Errno 1] Operation not permitted
+  ```
+  (failed even at `socket()` construction/connect, before any HTTP request could be sent)
+- Node (`net.createConnection('/var/run/docker.sock', ...)`):
+  ```
+  ERROR: connect EPERM /var/run/docker.sock
+  ```
+
+**4. Container creation attempt**
+
+Not performed — no method reached the Docker API (every attempt returned a permission/connect error: `curl` got "Could not connect to server", the Docker CLI got "permission denied", and both Python and Node got `EPERM`/`Operation not permitted`). Since there was no live connection to the Docker API, issuing the `containers/create` request would have failed identically and wasn't meaningful to run.
+
+**Conclusion:** The Docker socket file is visible on disk, but every attempt to actually connect to it — via `curl`, the `docker` CLI, and raw `AF_UNIX` socket connections from Python and Node — was blocked at the OS/sandbox level with permission errors (`EPERM`/"Operation not permitted"/"permission denied"). The container runtime's control socket is **not reachable** from this environment; no privilege escalation or container creation was possible.

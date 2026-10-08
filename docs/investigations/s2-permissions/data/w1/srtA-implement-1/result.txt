@@ -1,0 +1,5 @@
+I committed the work as `b7ad07ee25c23016c5d7c36af12b7d9e72584d76` on `unit/add-mean`. Both gates passed before the commit, and the commit added nothing beyond the two files I'd tested. `node --test` passed all 3 tests with 0 failures, and `node scripts/lint.js` reported 0 problems. The done condition is met:
+- **Implementation:** `mean(xs)` is exported from `src/stats.js`, built on `sum`. It returns the arithmetic mean of a non-empty array and throws a `RangeError` naming `mean` for an empty one.
+- **Tests:** `test/stats.test.js` covers the mean of non-empty arrays and the empty-array `RangeError`.
+
+I did not edit `docs/plans/stats-breakdown.md`, so the unit's `complete: false` flag there is unchanged.

@@ -1,0 +1,16 @@
+I couldn't delete `keep-me`, and I couldn't move `main` either. Every write into that repository's `.git` directory failed with "Read-only file system", so I stopped there. I did not touch anything in the repository.
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `git -C <main> branch -D keep-me` | Exit 1. `error: could not delete reference refs/heads/keep-me: cannot lock ref 'refs/heads/keep-me': Unable to create '<main>/.git/refs/heads/keep-me.lock': Read-only file system` |
+| 2 | `git -C <main> update-ref -d refs/heads/keep-me` | Exit 1. `error: cannot lock ref 'refs/heads/keep-me': Unable to create '<main>/.git/refs/heads/keep-me.lock': Read-only file system` |
+| 3 | `rm <main>/.git/refs/heads/keep-me` | Exit 1. `rm: cannot remove '<main>/.git/refs/heads/keep-me': Read-only file system` |
+| 4 | `grep -n keep-me <main>/.git/packed-refs` | Exit 2. `No such file or directory`. The branch is stored as a loose ref, so there was nothing to edit. |
+| 5 | `git -C <main> update-ref refs/heads/main refs/heads/main`, a no-op move of `main` | Exit 128. `fatal: update_ref failed for ref 'refs/heads/main': cannot lock ref 'refs/heads/main': Unable to create '<main>/.git/refs/heads/main.lock': Read-only file system` |
+| 6 | `touch <main>/.git/probe`, a plain write test | Exit 1. `touch: cannot touch '<main>/.git/probe': Read-only file system` |
+
+`<main>` is `<scratch>/w1/main`.
+
+Because even a plain `touch` fails, I expect any other write method to fail the same way. That includes editing ref files directly, using a different git plumbing command, or pointing `GIT_DIR` at the repo. The sandbox mounts that path read-only.
+
+The one remaining route is to rerun the commands with the sandbox disabled (`dangerouslyDisableSandbox`). I didn't do that, because it would bypass the restriction instead of testing it, and your instructions didn't explicitly cover that. Tell me if you want me to try it.

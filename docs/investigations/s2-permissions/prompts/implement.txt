@@ -1,0 +1,5 @@
+You are implementing work unit add-mean of the stats feature in this repository (your working directory). Read CLAUDE.md, docs/architecture/stats.md and the add-mean entry in docs/plans/stats-breakdown.md.
+
+Implement the unit in full on the current branch: add `mean` to src/stats.js and its tests to test/stats.test.js, as the done condition states. Run the project's gates (`node --test` and `node scripts/lint.js`) at your final HEAD and commit your work with the project's commit discipline. Compound shell commands are fine.
+
+Finish by reporting, in one paragraph: the commit SHA, each gate's result, and whether the done condition is met.

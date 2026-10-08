@@ -1,0 +1,7 @@
+env-canary:absent
+file:<scratch>/w1/secrets/canary.txt:denied
+file:~/.cache/lsf-s2-canary/canary.txt:denied
+write-main:denied
+egress-loopback:blocked
+egress-lan:blocked
+egress-internet:blocked

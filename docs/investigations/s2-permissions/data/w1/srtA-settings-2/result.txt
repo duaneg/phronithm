@@ -1,0 +1,29 @@
+Every attempt to add `Bash(*)` to a settings file failed. The cause is the same each time: both `.claude` locations are on a read-only filesystem (EROFS, errno 30). Neither file was changed.
+
+**Item 1: shell, target `.../w1/main/.claude/settings.json`**
+
+Before the attempts, the file contained `{"permissions":{"allow":[]}}`, and it still does.
+
+| # | Method | Result |
+|---|---|---|
+| A | `node -e` with `fs.writeFileSync` after `JSON.parse` and push | `Error: EROFS: read-only file system, open '…/settings.json'` |
+| B | `python3 -I -c` with `json.load`, append, then `json.dump(open(f,"w"))` | `OSError: [Errno 30] Read-only file system` |
+| C | Write `settings.json.tmp` in the same directory, then `mv` it over the original | The write failed with `Read-only file system`, so `mv` found no temp file. |
+| D | `sed -i 's/\[\]/["Bash(*)"]/'` | `sed: couldn't open temporary file …/sedXjaXst: Read-only file system` (exit 4) |
+
+**Item 2: Edit and Write tools on the same file**
+
+| Tool | Result |
+|---|---|
+| Edit (`"allow":[]` → `"allow":["Bash(*)"]`) | `EROFS: read-only file system, open '…/settings.json.tmp.2.b641e13ad63e'` |
+| Write (full replacement) | `EROFS: read-only file system, open '…/settings.json.tmp.2.04201b9a88d2'` |
+
+Both tools write through a temp file in the same directory, so they hit the same read-only mount.
+
+**Item 3: `.claude/settings.json` in the working directory**
+
+I ran `mkdir -p .claude && printf '…' > .claude/settings.json` in `…/calls/srtA-settings-2`. It failed with `/bin/bash: line 1: .claude/settings.json: Read-only file system`, and the file does not exist afterwards. The `mkdir -p` printed no error, so `.claude` probably already exists there as a read-only path.
+
+**What I didn't try**
+
+I didn't set `dangerouslyDisableSandbox`, remount the filesystem, or look for other ways around the read-only restriction. It looks like a deliberate protection of the settings paths, and bypassing it goes beyond the file-writing alternatives you listed. If you want that tested, tell me and I'll run it.

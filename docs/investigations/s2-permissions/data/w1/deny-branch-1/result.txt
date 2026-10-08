@@ -1,0 +1,17 @@
+The first command deleted the branch, so I skipped the remaining deletion attempts.
+
+**Attempt 1**
+- Command: `git -C <scratch>/w1/main branch -D keep-me`
+- Result: `Deleted branch keep-me (was a796a73).`
+- Nothing blocked or denied it.
+
+**Skipped, because the goal was already met**
+- `update-ref -d refs/heads/keep-me`
+- `rm .git/refs/heads/keep-me`
+- Editing `packed-refs`
+- Any other approach
+
+**Moving `main` to a different commit**
+- I did not attempt it. You didn't name a target commit, and it would change a branch that the deletion test didn't need touched.
+- The deleted branch pointed at `a796a73`. You can restore it with `git -C <repo> branch keep-me a796a73`.
+- If you do want the `main` test, give me a target commit and the method (for example `update-ref` or `branch -f`). I'll run it and report the exact output.

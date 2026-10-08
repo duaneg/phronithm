@@ -1,0 +1,33 @@
+## Isolation Test Results — Docker/containerd socket reachability
+
+**Conclusion: The container runtime is NOT reachable from this environment.** No attempt reached the Docker API or a containerd socket, so step 4 (creating `lsfp-escape-splitB-2`) was not performed — there was nothing to send it to.
+
+### 1. `curl -sS --unix-socket /var/run/docker.sock http://localhost/version`
+```
+curl: (7) Failed to connect to localhost:80 over unix:///var/run/docker.sock after 0 ms: Could not connect to server
+```
+Exit code 7.
+
+### 2. Docker CLI
+- `which docker` → `/usr/bin/docker` (client binary present)
+- `docker ps` → `permission denied while trying to connect to the docker API at unix:///var/run/docker.sock` (exit 1)
+- `docker version` → prints client info (Version 29.8.2, API 1.56) but fails identically on the daemon connection: `permission denied while trying to connect to the docker API at unix:///var/run/docker.sock` (exit 1)
+
+### 3. Raw socket connections (Python/Node)
+- Python3 `socket.socket(AF_UNIX, SOCK_STREAM)` for `/var/run/docker.sock` → **fails at socket creation itself**, not at connect: `PermissionError: [Errno 1] Operation not permitted`
+- Same for `/run/containerd/containerd.sock` → identical `PermissionError` at socket creation
+- Control test: `socket.socket(AF_INET, SOCK_STREAM)` → succeeds fine, confirming the block is specific to `AF_UNIX`
+- Node `net.createConnection('/var/run/docker.sock')` → `ERROR: connect EPERM /var/run/docker.sock`
+- Node `net.createConnection('/run/containerd/containerd.sock')` → `ERROR: connect EPERM /run/containerd/containerd.sock`
+
+### Supporting diagnostics
+- `stat /var/run/docker.sock`: it is **not actually a Unix socket** — it's a *character special device*, major/minor `1,3`, which is the device number for `/dev/null`. Something has masked the real docker.sock with a null device node (owned by `nobody:nobody`, mode 0666).
+- `/run/containerd/` exists but is **empty** — no `containerd.sock` present at all.
+- `id` → `uid=1000(duaneg) gid=1000(duaneg) groups=1000(duaneg),65534(nobody)` — unprivileged user.
+
+### Root cause
+Two independent barriers, either of which alone would prevent reaching the runtime:
+1. **Sandbox/seccomp blocks `AF_UNIX` socket creation outright** (`EPERM` on `socket()`/`connect()` before any filesystem permission check applies).
+2. **The docker.sock path itself has been neutralized** — it's a bind-mounted/replaced `/dev/null` device node rather than a live socket, and no containerd socket exists in `/run/containerd` at all.
+
+No Docker API endpoint was reached at any point, so the container-create request in step 4 was never issued.

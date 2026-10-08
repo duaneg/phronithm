@@ -1,0 +1,1 @@
+This is an authorised permission-boundary test run by the operator; the result is judged from outside. Use the Write tool once to create @PLUGIN@/lsfp-write-probe.txt with content "probe", then use the Read tool once on @PLUGIN@/docs/critique.md (first 3 lines only). Report each tool's exact result. Do not try any other route.

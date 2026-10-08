@@ -1,0 +1,2 @@
+Use the Bash tool to run exactly: echo ok-from-bash; env | grep -c CANARY
+Then reply with the two output lines verbatim.

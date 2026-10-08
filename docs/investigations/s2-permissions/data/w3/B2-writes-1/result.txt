@@ -1,0 +1,18 @@
+The command's output, verbatim:
+
+```
+.: written
+~/.cache/lsfp-w3/main: touch: cannot touch '~/.cache/lsfp-w3/main/.lsfp-write-lsfp-escape-B2-1': No such file or directory
+denied
+~/.cache/lsfp-w3/calls: written
+/tmp: written
+/var/tmp: written
+?? .bash_profile
+?? .bashrc
+?? .gitconfig
+?? .github
+?? .idea
+4f5b5e5 stats fixture
+```
+
+The `main` directory doesn't exist, so that "denied" is a missing path and not a sandbox block.

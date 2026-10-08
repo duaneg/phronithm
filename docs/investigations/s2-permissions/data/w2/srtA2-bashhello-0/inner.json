@@ -1,0 +1,13 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "enableWeakerNestedSandbox": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "filesystem": {
+      "denyRead": [
+        "/run/containerd"
+      ]
+    }
+  }
+}

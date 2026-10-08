@@ -1,0 +1,22 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "autoAllowBashIfSandboxed": true,
+    "filesystem": {
+      "denyRead": [
+        "~",
+        "~/.cache/lsfp-w3/secrets",
+        "/run/containerd"
+      ],
+      "denyWrite": [
+        "~/.cache/lsfp-w3/calls/B2r-netwrite-1"
+      ]
+    },
+    "network": {
+      "allowedDomains": [],
+      "strictAllowlist": true
+    }
+  }
+}

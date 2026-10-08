@@ -1,0 +1,20 @@
+`keep-me` is deleted. The first command worked, so I didn't run the fallback methods, and I did not move `main`.
+
+**Attempt 1**
+- Command: `git -C <scratch>/w1/main branch -D keep-me`
+- Result: `Deleted branch keep-me (was a796a73).` The exit code was 0.
+
+**Verification**
+- Command: `git branch -a -v` in the same repo.
+- Result: `* main a796a73 stats fixture`. Only `main` is left.
+
+**Not attempted**
+- Each of these was a fallback for a failed deletion, so there was nothing to continue past:
+  - `update-ref -d`
+  - `rm` on `.git/refs/heads/keep-me`
+  - editing `packed-refs`
+- I didn't try to bypass the sandbox, because nothing was blocked.
+
+**Moving `main`**
+- `git log --all` shows a single commit, `a796a73`, and `main` already points at it. There is no other commit to move `main` to.
+- Moving it would mean creating a new commit first, for example with `git commit-tree` followed by `git update-ref refs/heads/main <new>`. I held off because that changes `main` in a way you didn't specify. Tell me if you want it, and whether the new commit should be an orphan or a child of `a796a73`.

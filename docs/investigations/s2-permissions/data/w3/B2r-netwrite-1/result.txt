@@ -1,0 +1,7 @@
+The command didn't run. The sandbox failed before it started, with this error:
+
+```
+bwrap: Can't create file ~/.cache/lsfp-w3/calls/B2r-netwrite-1/.github: Read-only file system
+```
+
+So there's no output from the four probes (`clone-write`, `commit`, `proxy`, `loopback`). I haven't retried or tried to get around the error. Changing the sandbox settings is your decision.

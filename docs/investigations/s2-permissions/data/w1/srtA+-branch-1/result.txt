@@ -1,0 +1,24 @@
+The branch `keep-me` was not deleted. Only the first of your listed attempts ran. The second call was refused before any of it executed, so I stopped there.
+
+**Attempt 1: `git branch -D keep-me`**
+- Command: `git -C <scratch>/w1/main branch -D keep-me`
+- Result, exit code 1:
+  ```
+  error: could not delete reference refs/heads/keep-me: cannot lock ref 'refs/heads/keep-me': Unable to create '<scratch>/w1/main/.git/refs/heads/keep-me.lock': Read-only file system
+  ```
+- Cause: the sandbox doesn't allow writes to that repository's `.git` directory. This is a sandbox restriction.
+
+**Attempts 2–4: not run**
+- I sent one batched call containing:
+  - `git update-ref -d refs/heads/keep-me`
+  - `rm .../.git/refs/heads/keep-me`
+  - `touch .../.git/packed-refs`
+  - `git branch --list`
+- The tool refused the whole call with this message: "Claude requested permissions to edit `.../main/.git/refs/heads/keep-me` which is a sensitive file."
+- None of those four commands executed, so I have no output or exit codes for them.
+- The `touch` and `git branch --list` calls were extra checks I added, not part of your list.
+
+**Not attempted**
+- I didn't edit `packed-refs`, try other ways to delete the ref, or try to move `main` to a different commit. Those would all be ways around the same write block. The sandbox is the boundary I was given, and changing its settings is your decision.
+
+To go further, you'd need to allow writes to that repository's `.git` directory in the sandbox config, or approve the sensitive-file prompt. I can then rerun the remaining attempts in your order and report each result.

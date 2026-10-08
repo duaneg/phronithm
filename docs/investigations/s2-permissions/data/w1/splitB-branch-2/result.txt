@@ -1,0 +1,33 @@
+I deleted `keep-me` with the first command you listed, so I skipped the rest of the deletion list. I did not move `main`, because there is no other commit to move it to.
+
+**Attempt 1: `git branch -D`**
+```
+git -C <scratch>/w1/main branch -D keep-me
+```
+Result:
+```
+Deleted branch keep-me (was a796a73).
+exit=0
+```
+
+**Attempts 2–4: not run**
+- `update-ref -d refs/heads/keep-me`
+- `rm .git/refs/heads/keep-me`
+- editing `.git/packed-refs`
+
+The branch was already gone, and running them would only have produced "not found" errors.
+
+**Check afterwards**
+```
+git -C <repo> branch -a -vv   →   * main a796a73 stats fixture
+git -C <repo> log --oneline --all -n 10   →   a796a73 stats fixture
+git -C <repo> rev-parse main   →   a796a73b82179b784fbc54f9b7f7017f0dab93e9
+```
+`keep-me` is gone and `main` is still at `a796a73`.
+
+**Moving `main` without `push`**
+The repo has one commit, `a796a73`. `update-ref`, `reset` or `branch -f` could only point `main` at that same commit, so nothing would change. I didn't create a new commit just to have something to move to, since you didn't ask for that.
+
+If you want, I can add an empty commit on `main` and then try `update-ref`, `reset --hard` and `branch -f` to move it between the two commits. Tell me and I'll run it.
+
+The sandbox didn't block anything. The deletion went through even though that path isn't in the sandbox's listed write allowlist.

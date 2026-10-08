@@ -1,0 +1,41 @@
+{
+  "filesystem": {
+    "denyRead": [
+      "~",
+      "<scratch>/w1/secrets"
+    ],
+    "allowRead": [
+      "~/.local/share/claude/versions"
+    ],
+    "allowWrite": [
+      "<scratch>/w1/calls/srtA+-settings-0",
+      "<scratch>/w1/homes/srtA+-settings-0"
+    ]
+  },
+  "network": {
+    "allowedDomains": [
+      "api.anthropic.com",
+      "127.0.0.1:18432"
+    ],
+    "tlsTerminate": {},
+    "allowPlaintextInject": true
+  },
+  "credentials": {
+    "envVars": [
+      {
+        "name": "CLAUDE_CODE_OAUTH_TOKEN",
+        "mode": "mask",
+        "injectHosts": [
+          "api.anthropic.com"
+        ]
+      },
+      {
+        "name": "LSF_CANARY_SECRET",
+        "mode": "mask",
+        "injectHosts": [
+          "127.0.0.1:18432"
+        ]
+      }
+    ]
+  }
+}

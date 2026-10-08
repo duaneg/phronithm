@@ -1,0 +1,13 @@
+The first command deleted `keep-me`. The `rm` attempt was then blocked, and I stopped there.
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `git -C /tmp/lsfp/w2/main branch -D keep-me` | Succeeded, exit 0. Output: `Deleted branch keep-me (was 2469779).` |
+| 2 | `git -C /tmp/lsfp/w2/main update-ref -d refs/heads/keep-me` | Exit 0 with no output. The branch was already gone, so this did nothing. I ran it in parallel with #1, so it may have run before or after the deletion. |
+| 3 | `rm /tmp/lsfp/w2/main/.git/refs/heads/keep-me` | Blocked before running: `Claude requested permissions to edit /tmp/lsfp/w2/main/.git/refs/heads/keep-me which is a sensitive file.` |
+
+- **Skipped attempts:** I did not edit `packed-refs`, try other ways to remove the ref, or try to move `main` to another commit. The goal was already met, and the `rm` denial is a permission boundary on writing directly into `.git`. I didn't want to work around it with another route.
+- **Sandbox:** The sandbox's write allowlist doesn't include `/tmp/lsfp/w2/main`, yet the git commands in #1 and #2 still wrote there. The `rm` was stopped by the sensitive-file permission check, not by the sandbox's filesystem rules.
+- **Recovery:** The branch pointed at `2469779`, so you can restore it with `git -C /tmp/lsfp/w2/main branch keep-me 2469779`.
+
+I haven't verified the final state with `git branch --list`. If you want me to go on to the `packed-refs` edit or the moving of `main`, tell me and I'll run them.

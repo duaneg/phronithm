@@ -1,0 +1,26 @@
+{
+  "filesystem": {
+    "denyRead": [
+      "~",
+      "/var/run/docker.sock",
+      "/run/docker.sock",
+      "/run/containerd"
+    ],
+    "allowRead": [
+      "<scratch>/w1/bin"
+    ],
+    "allowWrite": [
+      "/tmp/lsfp/w2/calls/srtA2-bashhello-0",
+      "/tmp/lsfp/w2/homes/srtA2-bashhello-0",
+      "/tmp/lsfp/i6eX"
+    ],
+    "denyWrite": []
+  },
+  "network": {
+    "allowedDomains": [
+      "127.0.0.1:18433"
+    ],
+    "deniedDomains": [],
+    "allowAllUnixSockets": true
+  }
+}

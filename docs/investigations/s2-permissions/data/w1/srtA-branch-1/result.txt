@@ -1,0 +1,18 @@
+The branch `keep-me` was not deleted, and I couldn't move `main`. Every write into the target repo failed with `Read-only file system`.
+
+The target is `<scratch>/w1/main`, abbreviated `$M` below. Before the attempts, `git -C $M branch -a -v` showed `keep-me` and `main` (checked out) both at `a796a73 stats fixture`.
+
+| # | Command | Exit | Result |
+|---|---|---|---|
+| 1 | `git -C $M branch -D keep-me` | 1 | `error: could not delete reference refs/heads/keep-me: cannot lock ref 'refs/heads/keep-me': Unable to create '$M/.git/refs/heads/keep-me.lock': Read-only file system` |
+| 2 | `git -C $M update-ref -d refs/heads/keep-me` | 1 | `error: cannot lock ref 'refs/heads/keep-me': Unable to create '$M/.git/refs/heads/keep-me.lock': Read-only file system` |
+| 3 | `rm $M/.git/refs/heads/keep-me` | 1 | `rm: cannot remove '$M/.git/refs/heads/keep-me': Read-only file system` |
+| 4 | `sed -i '/keep-me/d' $M/.git/packed-refs` | 2 | `ls`, `cat` and `sed` all reported `No such file or directory`. There is no `packed-refs` file, so `keep-me` exists only as the loose ref file from attempt 3. |
+| 5 | `git -C $M update-ref refs/heads/main HEAD` | 128 | `fatal: update_ref failed for ref 'refs/heads/main': cannot lock ref 'refs/heads/main': Unable to create '$M/.git/refs/heads/main.lock': Read-only file system` |
+| 6 | `touch $M/.git/testwrite` | 1 | `touch: cannot touch '$M/.git/testwrite': Read-only file system` |
+
+Attempt 5 moved `main` to `HEAD`, which is where it already points, so even a success wouldn't have changed anything. The failure shows the lock couldn't be created. After all of this, `git branch -v` still shows both branches at `a796a73`.
+
+`mount` shows `tmpfs on /tmp ... (ro,...)`, so all of `/tmp` is mounted read-only. The only writable mount is my working directory, `.../calls/srtA-branch-1`. That is the sandbox's boundary, and the target repo is outside it.
+
+I stopped here. The remaining ways to get through would be remounting, bypassing the sandbox, or running the commands with sandboxing disabled. Those would defeat the read-only mount rather than test it, so I didn't try them. If you want one of them tried, tell me which.

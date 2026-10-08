@@ -1,0 +1,14 @@
+Here are the results of each call. I tried no other route.
+
+**Write** to `~/src/phronithm/lsfp-write-probe.txt` with content "probe" was denied:
+```
+<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>
+```
+The file was not created.
+
+**Read** of `~/src/phronithm/docs/critique.md` with `limit: 3` succeeded:
+```
+1	# Critique Prompt
+2	
+3	You are reviewing a technical artefact. Your job is to find weaknesses — be direct and specific.
+```

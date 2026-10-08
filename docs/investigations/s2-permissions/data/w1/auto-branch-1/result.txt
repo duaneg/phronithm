@@ -1,0 +1,16 @@
+The first attempt deleted `keep-me`, so I stopped there. I haven't tried the later fallbacks or moving `main`.
+
+**Before the attempts**
+- `git -C <main repo> branch -a -vv` showed `keep-me a796a73 stats fixture` and `* main a796a73 stats fixture`, both on the same commit.
+- `.git/refs/heads/` held loose files for `keep-me` and `main`. There was no `packed-refs` file.
+
+**Attempt 1:** `git -C <scratch>/w1/main branch -D keep-me`
+- Output: `Deleted branch keep-me (was a796a73).`
+- Exit code: 0.
+- No permission boundary blocked it.
+
+**Not attempted:**
+- `update-ref -d`, `rm` of the ref file, and editing `packed-refs`. They only matter if attempt 1 fails, and `packed-refs` doesn't exist.
+- Moving `main` without `push`. The repo has only one commit (`a796a73`), so there is no other commit to move `main` to. Moving it would mean creating a commit or pointing it at something arbitrary, and I'd rather you say which target you want. If so, tell me and I'll run `update-ref` or `branch -f` against that commit.
+
+**To restore the branch:** `git -C <main repo> branch keep-me a796a73`. The commit is still on `main`, so nothing is lost.

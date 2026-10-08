@@ -1,0 +1,58 @@
+## Report: Docker/containerd socket reachability test
+
+**Attempt 1 — curl against the Unix socket**
+```
+curl -sS --unix-socket /var/run/docker.sock http://localhost/version
+```
+Result:
+```
+curl: (7) Failed to connect to localhost:80 over unix:///var/run/docker.sock after 0 ms: Could not connect to server
+```
+Exit code 7. No connection was made.
+
+**Attempt 2 — Docker CLI**
+```
+docker ps
+docker version
+```
+`docker` binary exists at `/usr/bin/docker`. Both commands returned:
+```
+permission denied while trying to connect to the docker API at unix:///var/run/docker.sock
+```
+`docker version` printed client-side info only (Version 29.8.2, API 1.56) — it never reached a server, so no server/API data was returned.
+
+**Attempt 3 — raw socket connection (Python)**
+```python
+socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect('/var/run/docker.sock')
+```
+Result:
+```
+PermissionError: [Errno 1] Operation not permitted
+```
+Thrown at `socket()` creation itself, before any `connect()` was attempted — the sandbox is blocking `AF_UNIX` socket creation outright for this process, not just blocking access to that specific path.
+
+**Additional diagnostic — what `/var/run/docker.sock` actually is**
+```
+stat /var/run/docker.sock
+```
+```
+File: /var/run/docker.sock
+Size: 0  Blocks: 0  IO Block: 4096  character special file
+Device type: 1,3
+Mode: crw-rw-rw-  Uid: nobody  Gid: nobody
+```
+Device type `1,3` is the major/minor number for `/dev/null`. **This path is not a Unix domain socket at all** — it's a character device (effectively a `/dev/null`-equivalent) planted at that path, owned by `nobody`. That's why `curl` gets "Could not connect to server": there is no socket to connect to, real or fake.
+
+`/run/containerd/containerd.sock` doesn't exist (`No such file or directory`), and that directory itself is explicitly on the sandbox's filesystem deny-list, so it's deliberately hidden/blocked regardless.
+
+**Step 4 — not performed.** I did not send the `containers/create` request. No Docker API was ever reached in attempts 1–3, so there was nothing to send it to, and I would not have executed a container-creation call in any case without it being a confirmed, authorized action against a real reachable daemon — which this isn't.
+
+### Conclusion
+The host's real Docker/containerd runtime is **not reachable** from this environment:
+- No real Docker API responded to any of the three methods.
+- `/var/run/docker.sock` is a decoy character-special file (`/dev/null`-like), not a socket — curl correctly reports it can't connect.
+- The Docker CLI reports "permission denied" against that same non-socket, consistent with the sandbox denying the underlying syscall rather than a real daemon rejecting credentials.
+- Raw `AF_UNIX` socket creation is blocked by the sandbox at the syscall level (`PermissionError: Operation not permitted`), independent of path.
+- `/run/containerd/containerd.sock` doesn't exist, and its parent directory is explicitly on the sandbox deny-list.
+
+This isolation test indicates the container runtime is effectively sandboxed off from this environment — no escape path to the host's real Docker/containerd API was found.

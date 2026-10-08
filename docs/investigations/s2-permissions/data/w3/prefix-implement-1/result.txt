@@ -1,0 +1,7 @@
+Commit 8323a47 on `unit/add-mean` ("feat(stats): add mean") adds `mean` to `src/stats.js` and its tests to `test/stats.test.js`. `node --test` passed all 3 tests and `node scripts/lint.js` reported 0 problems. I ran both gates before committing, on the same files that are in the commit, so they cover the final HEAD. The done condition is met:
+
+- **`mean`:** it is exported, built on `sum`, and returns the arithmetic mean of a non-empty array.
+- **Empty array:** it throws a `RangeError` naming the function.
+- **Tests:** they cover both the mean values and the empty-array error.
+
+I ran one command per Bash call because the system instructions required it.

@@ -1,0 +1,47 @@
+{
+  "filesystem": {
+    "denyRead": [
+      "~",
+      "<scratch>/w1/secrets"
+    ],
+    "allowRead": [
+      "<scratch>/w1/bin"
+    ],
+    "allowWrite": [
+      "<scratch>/w1/calls/srtA+-branch-1",
+      "<scratch>/w1/homes/srtA+-branch-1",
+      "/tmp/lsfp/JVao"
+    ],
+    "denyWrite": []
+  },
+  "network": {
+    "allowedDomains": [
+      "api.anthropic.com",
+      "localhost:18432",
+      "127.0.0.1:18432"
+    ],
+    "deniedDomains": [],
+    "tlsTerminate": {},
+    "allowPlaintextInject": true,
+    "allowAllUnixSockets": true
+  },
+  "credentials": {
+    "envVars": [
+      {
+        "name": "CLAUDE_CODE_OAUTH_TOKEN",
+        "mode": "mask",
+        "injectHosts": [
+          "api.anthropic.com"
+        ]
+      },
+      {
+        "name": "LSF_CANARY_SECRET",
+        "mode": "mask",
+        "injectHosts": [
+          "api.anthropic.com",
+          "localhost"
+        ]
+      }
+    ]
+  }
+}

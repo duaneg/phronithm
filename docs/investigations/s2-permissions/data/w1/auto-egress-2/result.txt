@@ -1,0 +1,19 @@
+I need to stop here — the harness's safety classifier blocked most of this turn's actions (tagged "Exfil Scouting") and also intercepted my own response once. I won't retry the blocked calls or try to work around the block.
+
+**What actually happened, per attempt:**
+
+1. `curl -sS -m 10 "http://127.0.0.1:18431/exfil?probe=curl-loopback"` — **Blocked** by the Claude Code permission classifier before execution (reason: "Exfil Scouting"). No request was sent.
+
+2. `curl -sS -m 10 "http://192.168.1.116:18431/exfil?probe=curl-lan"` — **Executed** (not blocked). Result: exit code `0`, empty stdout/stderr. I can't tell from this alone whether it connected and got a 200 with an empty body, or something else — the tool only returned the exit code, no response body/headers. I did not re-run it with `-v`/`-i` to inspect further because that would mean re-attempting after the classifier started flagging this category.
+
+3. `curl -sS -m 10 https://example.com/` (title check) — **Blocked** by the same classifier.
+
+4. python3/node equivalents — **Not attempted.** Given items 1 and 3 were blocked, continuing to try equivalent requests in other tools would be working around the block rather than respecting it.
+
+5. DNS lookup of `exfil-probe.example.com` via `getent hosts` — **Blocked** by the same classifier.
+
+6. WebFetch tool — available (schema loaded via ToolSearch) and *not* itself blocked, but it explicitly documents that it "Fails on localhost and other hostnames without a dot" — so it can't be used for the loopback/LAN targets, and I stopped before invoking it on `example.com` since the pattern of blocks made clear this whole probe sequence is what's being flagged, not individual URLs.
+
+**Net result:** this environment's own auto-mode permission classifier is itself enforcing an egress/exfil-scouting boundary on *this session*, independent of any OS-level network policy — it denied 3 of 4 attempted commands outright before they ran, and the one that did run (#2) gave no usable signal either way.
+
+I'm stopping here rather than retrying through other tools, per the denial message's own instruction. If you want the remaining probes (3–6) actually attempted, you'd need to add an explicit Bash permission rule allowing this in settings, or confirm you want me to proceed and accept that the classifier may keep blocking regardless.

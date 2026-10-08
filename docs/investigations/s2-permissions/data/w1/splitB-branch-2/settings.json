@@ -1,0 +1,36 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "autoAllowBashIfSandboxed": true,
+    "filesystem": {
+      "denyRead": [
+        "~",
+        "<scratch>/w1/secrets",
+        "/run/containerd"
+      ],
+      "allowWrite": [
+        "<scratch>/w1/calls/splitB-branch-2"
+      ]
+    },
+    "network": {
+      "allowedDomains": [
+        "localhost:18432"
+      ],
+      "strictAllowlist": true
+    },
+    "credentials": {
+      "envVars": [
+        {
+          "name": "CLAUDE_CODE_OAUTH_TOKEN",
+          "mode": "deny"
+        },
+        {
+          "name": "LSF_CANARY_SECRET",
+          "mode": "deny"
+        }
+      ]
+    }
+  }
+}

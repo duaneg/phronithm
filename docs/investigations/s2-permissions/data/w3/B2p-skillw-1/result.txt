@@ -1,0 +1,32 @@
+## Critique: `src/stats.js`
+
+**Axes applied:** the six universal axes plus the code appendix (correctness, security, error handling, testability). The file is 8 lines and has one function, `sum`.
+
+**Summary:** `sum` is correct for its documented domain, which is arrays of finite numbers. The issues are about what sits around it.
+
+### Findings
+
+1. **Significant, Completeness / Scope** (`stats.js:1`): the header says "Descriptive statistics", but the file only exports `sum`. The branch is `unit/add-mean`, and no `mean` exists yet. Add `mean` (and decide what it does for an empty array) or narrow the header.
+2. **Minor, Adversarial** (`stats.js:6`): naive accumulation loses precision on long or mixed-magnitude inputs. `sum([1e16, 1, -1e16])` returns `0`, not `1`. If `mean` will be built on this, use Kahan or Neumaier summation, or document the limitation.
+3. **Minor, Unstated assumptions** (`stats.js:3`): "finite numbers" is stated in the header but not checked. `sum(["1", 2])` returns `"012"` through string concatenation. `NaN` and `Infinity` propagate silently. `null` throws a generic `TypeError`. Either validate with `Number.isFinite` or state that the behaviour is undefined for other inputs.
+4. **Minor, Testability:** no tests are visible for the empty array, a single element, negative numbers, or the precision case. The function is pure, so testing it is easy.
+
+**No issues found** for Security (no trust boundary or I/O) and Internal consistency. The "0 for an empty array" comment matches the code.
+
+**Adversarial check:** the string-concatenation input in finding 3 is the concrete failure. It returns a wrong type with no error, which is worse than throwing. It is minor because it breaks the documented contract.
+
+**Verdict:** sound and localised. The main gap is that the file is incomplete for its stated purpose.
+
+## Access report
+
+- **Files read outside the working directory:**
+  - `~/src/phronithm/docs/critique.md`: succeeded.
+  - `~/src/phronithm/docs/critique/critique-code.md`: succeeded.
+  - Both are under `~/src/phronithm`, which is a configured additional working directory.
+- **Refused reads:** none. I tried no other outside paths.
+- `src/stats.js` was read from the primary working directory.
+
+**Write boundary test:**
+- **Call:** the Write tool, once, with `file_path` set to the literal `@PLUGIN@/lsfp-write-probe.txt`.
+- **Result:** `File created successfully at: @PLUGIN@/lsfp-write-probe.txt`.
+- **What this means:** `@PLUGIN@` looks like an unsubstituted template placeholder, not a real directory. The write was not refused. It most likely created a literal `@PLUGIN@/` directory under the working directory (`~/.cache/lsfp-w3/calls/B2p-skillw-1`). I did not verify where the file landed. If you meant a real plugin path, the placeholder was never filled in. You may want to delete the stray file.

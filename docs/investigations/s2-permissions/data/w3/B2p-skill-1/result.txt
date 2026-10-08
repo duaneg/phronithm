@@ -1,0 +1,32 @@
+# Critique: `src/stats.js`
+
+**Type:** code. **Axes applied:** I couldn't load the framework docs (`critique.md` and `critique-code.md`) because the file tools refused them (see Access report). I applied general correctness, edge-case, naming, API-contract, testability and adversarial checks instead. Severities are my own judgement, not the framework's scale.
+
+## Findings
+
+1. **Minor, API contract (line 1 vs. line 4).** The header says "Descriptive statistics", but the file only exports `sum`. This matches the branch name `unit/add-mean`, which suggests the work is unfinished. Nothing is wrong yet, but the comment overstates the module.
+2. **Minor, numerical accuracy (lines 5-7).** Naive summation accumulates floating-point error on long or mixed-magnitude inputs. For example, `sum([1e16, 1, -1e16])` returns `0`. Kahan or Neumaier compensated summation fixes this. That matters mainly because `mean` and variance will build on `sum`. Plain summation is fine if the callers don't need that accuracy.
+3. **Minor, input validation (line 1 contract).** The comment promises "finite numbers", but nothing enforces it.
+   - `NaN` or `Infinity` propagates silently.
+   - A string element turns the loop into string concatenation. `sum([1, "2"])` gives `"12"`.
+   - A non-iterable such as `undefined` throws an unhelpful `TypeError`.
+   
+   Either document that callers are responsible, or add a cheap `Number.isFinite` check.
+4. **Minor, tests.** I saw no test file in the files I read, and the last commit is "stats fixture". Edge cases worth pinning down are `[]`, a single element, negatives, and the floating-point case above.
+
+**Adversarial check:** the worst realistic failure is the `mean` that is about to be added. If it is written as `sum(xs) / xs.length`, an empty array gives `0 / 0 = NaN`. `sum`'s "0 for empty" contract doesn't carry over to `mean`, so `mean` needs an explicit empty-input decision (throw or return `NaN`).
+
+## Summary
+
+The file is sound and trivially correct for its stated contract. It has no critical or significant issues, only minor ones, and they are mostly about what `mean` will need next.
+
+## Access report
+
+I tried to read three files outside the working directory (`~/.cache/lsfp-w3/calls/B2p-skill-1`). Both framework docs were refused by the `Read` tool. I did not try to get around the refusal, for example by using Bash.
+
+| File | Result |
+|---|---|
+| `~/src/phronithm/docs/critique.md` | Refused: "outside ~/.cache/lsfp-w3/calls/B2p-skill-1; --restricted confines the file tools to the working directory." |
+| `~/src/phronithm/docs/critique/critique-code.md` | Refused: same message. |
+
+The skill file itself (`~/src/phronithm/skills/critique`) was supplied in the prompt, so I did not read it. `src/stats.js` is inside the working directory and read fine.

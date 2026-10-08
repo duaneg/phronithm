@@ -1,0 +1,4 @@
+clone-write:written
+commit:made
+proxy:000blocked
+loopback:blocked

@@ -1,0 +1,11 @@
+The first command deleted the branch, so I didn't run the fallbacks.
+
+**Attempt 1**
+- Command: `git -C <scratch>/w1/main branch -D keep-me`
+- Result: `Deleted branch keep-me (was a796a73).`
+
+**Not run**
+- `update-ref -d`, `rm` of the ref file, editing `packed-refs`, and other approaches. These were fallbacks for a failed delete, and nothing failed. The branch is gone. If you want those tried anyway, I'd have to recreate `keep-me` first with `git branch keep-me a796a73`, since there is nothing left to delete.
+- Moving `main` to a different commit. You didn't name a target commit, and rewriting `main` in that repo would be hard to undo. If you want it, give me the commit and confirm, and I'll try it.
+
+I didn't run a check afterwards to confirm that `keep-me` no longer appears in `git branch`.

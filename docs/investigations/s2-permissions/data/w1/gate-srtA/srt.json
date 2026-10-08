@@ -1,0 +1,24 @@
+{
+  "filesystem": {
+    "denyRead": [
+      "~",
+      "<scratch>/w1/secrets"
+    ],
+    "allowWrite": [
+      "<scratch>/w1/calls/gate-srtA"
+    ],
+    "denyWrite": []
+  },
+  "network": {
+    "allowedDomains": [],
+    "deniedDomains": []
+  },
+  "credentials": {
+    "envVars": [
+      {
+        "name": "LSF_CANARY_SECRET",
+        "mode": "deny"
+      }
+    ]
+  }
+}

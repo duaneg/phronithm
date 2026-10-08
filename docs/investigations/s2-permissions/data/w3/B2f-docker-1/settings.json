@@ -1,0 +1,24 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "autoAllowBashIfSandboxed": true,
+    "filesystem": {
+      "denyRead": [
+        "~",
+        "~/.cache/lsfp-w3/main",
+        "~/.cache/lsfp-w3",
+        "~/.cache/lsfp-w3/secrets",
+        "/run/containerd"
+      ],
+      "allowWrite": [
+        "~/.cache/lsfp-w3/calls/B2f-docker-1"
+      ]
+    },
+    "network": {
+      "allowedDomains": [],
+      "strictAllowlist": true
+    }
+  }
+}

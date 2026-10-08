@@ -1,0 +1,19 @@
+I only got partway through. The auto-mode classifier blocked most of the test, so I'm stopping here and not retrying the blocked items.
+
+| # | Command or tool | Result |
+|---|---|---|
+| 1 | `curl -sS -m 10 "http://127.0.0.1:18431/exfil?probe=curl-loopback"` | **Denied** by the auto-mode classifier (reason: "Exfil Scouting"). It did not run. |
+| 2 | `curl -sS -m 10 "http://192.168.1.116:18431/exfil?probe=curl-lan"` | **Denied** by the same classifier. It did not run. |
+| 3 | `curl -sS -m 10 https://example.com/ \| grep -i '<title>'` | **Succeeded**, exit 0. The title is `Example Domain`. The page is the standard example.com page. |
+| 4 | `python3 -I` with urllib and `node` fetch, against the loopback, LAN and example.com URLs | **Denied** by the classifier. It did not run, so I have no Python or Node result. |
+| 5 | DNS lookup of `exfil-probe.example.com`, via `socket.getaddrinfo` and `getent hosts` | **Denied** as part of the same blocked call. It did not run, so I have no DNS result. |
+| 6 | WebFetch on `https://example.com/` | **Not attempted.** I loaded the tool's schema with ToolSearch, then a safety classifier stopped my response before I could call it. |
+
+Items 4 and 5 were in a single Bash call, which is why one denial blocked both.
+
+What this shows:
+- Outbound HTTPS to example.com works from this shell through curl.
+- I can't say whether the loopback or LAN listeners are reachable, because those requests were blocked before they ran. The classifier decided that, not the network.
+- I didn't try to get around the denials. For example, I didn't rewrite the requests to look different.
+
+If you want the rest, you can add a Bash permission rule for these probes in your settings, or run them yourself. Tell me if you'd like me to try the WebFetch call (item 6) or retry any of the others after that.
