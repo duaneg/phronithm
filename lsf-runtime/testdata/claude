@@ -5,7 +5,7 @@
 # STUB_SCRIPT   comma list of modes, one per invocation, the last repeating
 #               (STUB_MODE is the single-mode form; default ok).
 # STUB_STATE    directory for per-invocation records: count, argv.<n> (NUL-
-#               separated), stdin.<n>, started.<n> (unix seconds), pids.<n>
+#               separated), stdin.<n>, cwd.<n> (pwd -P), started.<n> (unix seconds), pids.<n>
 #               ("leader grandchild"), reset.<n> (session mode's resetsAt),
 #               and active/maxactive (concurrent invocations).
 # STUB_PIDFILE  also receives the grandchild pid of a hang mode.
@@ -16,6 +16,7 @@
 #        session | session-noreset | hang | hang-ignore-term |
 #        orphan-ignore-term | result-then-hang | fixture:<name> (cats streams/<name>.jsonl) |
 #        dirty:<path> (writes <path> in cwd, then ok) | modify:<path> (appends to it, then ok) |
+#        commit:<path> (writes <path>, commits it and tags the commit t-<path>, then ok) |
 #        dirty-transient:<path> (writes <path>, then a 529) |
 #        file:<path> (cats a stream file)
 set -u
@@ -47,6 +48,7 @@ if [ -n "$state" ]; then
   unlock
   printf '%s\0' "$@" > "$state/argv.$n"
   cat > "$state/stdin.$n"
+  pwd -P > "$state/cwd.$n"
   date +%s > "$state/started.$n"
 fi
 [ -z "$state" ] && cat > /dev/null
@@ -101,6 +103,9 @@ case "$mode" in
   orphan-ignore-term) hang default ignore ;;
   dirty:*)   echo x > "${mode#dirty:}"; result_ok '{"verdict":"pass","n":3}' ;;
   modify:*)  echo more >> "${mode#modify:}"; result_ok '{"verdict":"pass","n":3}' ;;
+  commit:*)  f=${mode#commit:}; echo "$n" > "$f"
+             if git add -- "$f" >&2 && git commit -q -m "$f" >&2 && git tag -f "t-$f" >&2; then result_ok '{"verdict":"pass","n":3}'
+             else echo "stub: commit failed in $(pwd)" >&2; code=2; fi ;;
   dirty-transient:*)
              echo x > "${mode#dirty-transient:}"
              echo '{"type":"result","subtype":"success","is_error":true,"api_error_status":529,"total_cost_usd":0}'; code=1 ;;

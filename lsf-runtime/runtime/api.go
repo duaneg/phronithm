@@ -15,6 +15,7 @@ type Opts struct {
 	Effort    string          `json:"effort,omitempty"`
 	AgentType string          `json:"agentType,omitempty"`
 	Isolation string          `json:"isolation,omitempty"`
+	Dir       string          `json:"dir,omitempty"` // an existing directory under <stateDir>/merge/ to run in, with no clone; not in the call's hash
 	Schema    json.RawMessage `json:"schema"`
 }
 
@@ -71,7 +72,9 @@ type CallResult struct {
 	Denials     []string // the last attempt's permission_denials, "tool: input" truncated
 	Uncommitted []string // paths the call left uncommitted (see uncommitted.go); re-checked on a replay
 	Violations  []string // a null after invalid returns: the last attempt's schema violations
-	Branch      string   // an isolated call's worktree branch, journaled; "" without isolation
+	Branch      string   // a kept clone's branch in the main repo, lsf/<plan8>/<key>, journaled; "" otherwise
+	Clone       string   // the clone the call ran in: CloneKept, CloneDiscarded, or "" (none: Dir, no repo, the main checkout, a seed)
+	CloneHead   string   // a kept clone's HEAD when the branch was fetched back, journaled
 	Attempts    int      // spawns for this call this launch; 0 when replayed
 	CostUSD     float64
 	Replayed    bool

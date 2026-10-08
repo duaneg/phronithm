@@ -15,10 +15,11 @@ import (
 )
 
 // A call's uncommitted changes (docs/design/lsf-runtime.md, "Uncommitted at
-// return"): an isolated call reports every path left modified or untracked
-// (not ignored) in its worktree; a repo call reports the paths whose status
-// or content changed between its first admitted attempt and its return.
-// Paths under the state dir are never reported.
+// return"): a call in a kept clone reports every path left modified or
+// untracked (not ignored) in it; a call in the main checkout reports the
+// paths whose status or content changed between its first admitted attempt
+// and its return. Paths under the state dir are never reported. A
+// discarded clone and an explicit Dir get no check.
 
 // FlagUncommittedUnchecked marks a call whose uncommitted check failed; the
 // record keeps Unchecked instead, so a replay checks afresh.
@@ -174,18 +175,39 @@ func changed(before, after snapshot) []string {
 	return out
 }
 
-// checkUncommitted sets res.Uncommitted, or the unchecked flag, for a call
-// that spawned in c.cwd. A repo call compares with its before-state.
-func (rt *Runtime) checkUncommitted(ctx context.Context, c *callState, res *CallResult) {
-	if c.cwd == "" || rt.cfg.Repo == "" {
-		return
+// afterCall is a returned call's bookkeeping (a value or a null; not a
+// stop): a kept clone's branch is fetched back and the clone checked; a
+// discarded clone is removed; a main-checkout call is checked against its
+// before-state. Only a failed fetch-back is an error, a stop.
+func (rt *Runtime) afterCall(ctx context.Context, c *callState, res *CallResult) error {
+	switch {
+	case !c.placed:
+	case c.place.kind == CloneKept:
+		if err := rt.fetchBack(ctx, c.o.Label, c.place, res); err != nil {
+			if ctx.Err() != nil {
+				return &StopError{Reason: StopCancelled}
+			}
+			return rt.setStop(StopRuntimeError, fmt.Sprintf("%s: %v; the clone is kept", c.o.Label, err))
+		}
+		rt.checkUncommitted(ctx, c, res)
+	case c.place.kind == CloneDiscarded:
+		rt.discard(c.o.Label, c.place)
+	case c.place.inRepo:
+		rt.checkUncommitted(ctx, c, res)
 	}
-	repo := c.o.Isolation == ""
+	return nil
+}
+
+// checkUncommitted sets res.Uncommitted, or the unchecked flag, for a call
+// that spawned in a kept clone or the main checkout. A main-checkout call
+// compares with its before-state.
+func (rt *Runtime) checkUncommitted(ctx context.Context, c *callState, res *CallResult) {
+	repo := c.place.inRepo
 	if repo && c.beforeErr != nil {
 		rt.uncheckedCall(ctx, c.o.Label, res, c.beforeErr)
 		return
 	}
-	after, err := rt.takeSnapshot(ctx, c.cwd, repo)
+	after, err := rt.takeSnapshot(ctx, c.place.dir, repo)
 	if err != nil {
 		rt.uncheckedCall(ctx, c.o.Label, res, err)
 		return
@@ -201,31 +223,53 @@ func (rt *Runtime) checkUncommitted(ctx context.Context, c *callState, res *Call
 }
 
 // recheckUncommitted is a replay's check, made when the record has paths
-// or its check failed (unchecked). An isolated call's worktree is checked
-// as it stands, when it still exists. A repo call keeps the journaled paths
-// that are still dirty; after a failed check, with no before-state to
-// compare, it reports every dirty path.
+// or its check failed (unchecked). A kept clone is checked as it stands,
+// when it still exists, after its branch is fetched back again, so a commit
+// the requester made there to clear the paths reaches the main repo; a
+// removed clone is clean. A worktree (a record from before clones) is
+// checked as it stands. A main-checkout call keeps the journaled paths that
+// are still dirty; after a failed check, with no before-state to compare,
+// it reports every dirty path.
 func (rt *Runtime) recheckUncommitted(ctx context.Context, o Opts, key string, unchecked bool, res *CallResult) {
 	journaled := res.Uncommitted
 	res.Uncommitted = nil
-	if (len(journaled) == 0 && !unchecked) || rt.cfg.Repo == "" {
+	if (len(journaled) == 0 && !unchecked) || rt.cfg.Repo == "" || res.Clone == CloneDiscarded || o.Dir != "" {
 		return
 	}
 	dir := rt.cfg.Repo
-	if o.Isolation != "" {
-		dir = filepath.Join(rt.cfg.StateDir, "wt", key)
-		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
-			return // the worktree is gone, and its dirt with it
+	if res.Clone == CloneKept || o.Isolation != "" {
+		sub := "wt"
+		if res.Clone == CloneKept {
+			sub = "clone"
 		}
-		// Only the call's own worktree: a bare directory left by a crash
-		// would resolve to the main checkout.
+		dir = filepath.Join(rt.cfg.StateDir, sub, key)
+		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+			return // the clone is gone, and its dirt with it
+		}
+		// Only the call's own clone or worktree: a bare directory left by a
+		// crash would resolve to the main checkout.
 		gctx, cancel := rt.gitContext(ctx)
 		top, err := gitStdout(gctx, dir, "rev-parse", "--show-toplevel")
 		cancel()
 		resolved, _ := filepath.EvalSymlinks(dir)
 		if err != nil || strings.TrimSpace(string(top)) != resolved {
-			rt.uncheckedCall(ctx, o.Label, res, fmt.Errorf("%s is not the call's worktree", dir))
+			rt.uncheckedCall(ctx, o.Label, res, fmt.Errorf("%s is not the call's own", dir))
 			return
+		}
+		if res.Clone == CloneKept {
+			args, err := rt.parseArgs()
+			if err != nil {
+				rt.uncheckedCall(ctx, o.Label, res, err)
+				return
+			}
+			p := placement{dir: dir, kind: CloneKept, dest: res.Branch, branch: args.IntegrationBranch}
+			if o.Isolation != "" {
+				p.branch = res.Branch
+			}
+			if err := rt.fetchBack(ctx, o.Label, p, res); err != nil {
+				rt.uncheckedCall(ctx, o.Label, res, err)
+				return
+			}
 		}
 	}
 	now, err := rt.takeSnapshot(ctx, dir, false)
@@ -233,7 +277,7 @@ func (rt *Runtime) recheckUncommitted(ctx context.Context, o Opts, key string, u
 		rt.uncheckedCall(ctx, o.Label, res, err)
 		return
 	}
-	if o.Isolation != "" || unchecked {
+	if dir != rt.cfg.Repo || unchecked {
 		res.Uncommitted = changed(nil, now)
 		return
 	}
@@ -295,11 +339,14 @@ func (rt *Runtime) priorDirt(key string) []string {
 // forgetDirt is called once the call is recorded.
 func (rt *Runtime) forgetDirt(key string) { os.Remove(rt.dirtPath(key)) }
 
-// checkNull is checkUncommitted for a null return: a repo call keeps its
+// checkNull is afterCall for a null return: a main-checkout call keeps its
 // paths for its re-run.
-func (rt *Runtime) checkNull(ctx context.Context, c *callState, res *CallResult) {
-	rt.checkUncommitted(ctx, c, res)
-	if c.o.Isolation == "" {
+func (rt *Runtime) checkNull(ctx context.Context, c *callState, res *CallResult) error {
+	if err := rt.afterCall(ctx, c, res); err != nil {
+		return err
+	}
+	if c.place.inRepo {
 		rt.keepDirt(c.key, res.Uncommitted)
 	}
+	return nil
 }

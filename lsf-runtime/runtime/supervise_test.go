@@ -345,6 +345,7 @@ func TestDryRunSpawnsNothing(t *testing.T) {
 	// A dry run still reports an isolated call's missing args.
 	cfg3, _ := testConfig(t)
 	cfg3.DryRun = true
+	cfg3.Args = nil
 	o := vOpts
 	o.Isolation = "worktree"
 	if s := launch(t, cfg3, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) { return rt.Agent(ctx, "x", o) }); s.StopReason != StopRuntimeError {

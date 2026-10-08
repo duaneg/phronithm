@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -201,6 +200,8 @@ func gitRepo(t *testing.T) string {
 	dir := t.TempDir()
 	for _, args := range [][]string{
 		{"init", "-q", "-b", "main"},
+		{"config", "user.name", "repo-local"}, // a clone takes it; a commit there is attributed to it
+		{"config", "user.email", "repo-local@x"},
 		{"-c", "user.email=t@x", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"},
 	} {
 		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
@@ -217,69 +218,6 @@ func git(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v: %v %s", args, err, out)
 	}
 	return strings.TrimSpace(string(out))
-}
-
-func TestWorktreeIsolation(t *testing.T) {
-	cfg, stub := testConfig(t)
-	cfg.Repo = gitRepo(t)
-	cfg.Args = json.RawMessage(`{"planSha":"0123456789ab","integrationBranch":"main"}`)
-	t.Setenv("STUB_SCRIPT", "ok")
-	o := vOpts
-	o.Isolation = "worktree"
-	key := journalKey(o.Label)
-	wt := filepath.Join(cfg.StateDir, "wt", key)
-	branch := "lsf/01234567/" + key
-
-	if r, err := call(t, cfg, o); err != nil || r.Value == nil {
-		t.Fatalf("%+v %v", r, err)
-	}
-	if git(t, wt, "rev-parse", "--abbrev-ref", "HEAD") != branch {
-		t.Fatalf("worktree not on %s", branch)
-	}
-	// The stub ran in the worktree: its argv record is ours, cwd is checked via git.
-	if stubCount(t, stub) != 1 {
-		t.Fatal("no spawn")
-	}
-	// Work on the branch, then lose the worktree directory: the next launch
-	// keeps the commit rather than resetting the branch.
-	git(t, wt, "commit", "-q", "--allow-empty", "-m", "unit work")
-	tip := git(t, wt, "rev-parse", "HEAD")
-	if err := os.RemoveAll(wt); err != nil {
-		t.Fatal(err)
-	}
-	o.Effort = "high" // a fresh call (no replay) for the same label
-	if _, err := call(t, cfg, o); err != nil {
-		t.Fatal(err)
-	}
-	if got := git(t, wt, "rev-parse", "HEAD"); got != tip {
-		t.Fatalf("branch reset: HEAD %s, want %s", got, tip)
-	}
-}
-
-func TestParallelWorktrees(t *testing.T) {
-	cfg, _ := testConfig(t)
-	cfg.Repo = gitRepo(t)
-	cfg.Args = json.RawMessage(`{"planSha":"0123456789ab","integrationBranch":"main"}`)
-	t.Setenv("STUB_SCRIPT", "ok")
-	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
-		var thunks []func(context.Context) (json.RawMessage, error)
-		for i := range 4 {
-			o := vOpts
-			o.Label = "critique-code:r1:u" + strconv.Itoa(i)
-			o.Isolation = "worktree"
-			thunks = append(thunks, func(ctx context.Context) (json.RawMessage, error) { return rt.Agent(ctx, "x", o) })
-		}
-		out, err := rt.Parallel(ctx, thunks)
-		for i, v := range out {
-			if v == nil {
-				t.Errorf("branch %d null", i)
-			}
-		}
-		return nil, err
-	})
-	if n := len(strings.Split(git(t, cfg.Repo, "worktree", "list"), "\n")); n != 5 {
-		t.Fatalf("%d worktrees, want 5", n)
-	}
 }
 
 func TestWorktreeNeedsArgs(t *testing.T) {
@@ -318,44 +256,6 @@ func TestLabelReuseWarns(t *testing.T) {
 	})
 	if countEvents(telemetry(t, cfg), "label-reused") != 1 {
 		t.Error("want one label-reused event")
-	}
-}
-
-func TestStaleWorktreeDirectoryStops(t *testing.T) {
-	cfg, stub := testConfig(t)
-	cfg.Repo = gitRepo(t)
-	cfg.Args = json.RawMessage(`{"planSha":"0123456789ab","integrationBranch":"main"}`)
-	o := vOpts
-	o.Isolation = "worktree"
-	if err := os.MkdirAll(filepath.Join(cfg.StateDir, "wt", journalKey(o.Label)), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	_, err := call(t, cfg, o)
-	if r, ok := IsStop(err); !ok || r != StopRuntimeError || stubCount(t, stub) != 0 {
-		t.Fatalf("err %v, spawns %d", err, stubCount(t, stub))
-	}
-}
-
-func TestWorktreeReusedOnResume(t *testing.T) {
-	cfg, _ := testConfig(t)
-	cfg.Repo = gitRepo(t)
-	cfg.Args = json.RawMessage(`{"planSha":"0123456789ab","integrationBranch":"main"}`)
-	t.Setenv("STUB_SCRIPT", "ok")
-	o := vOpts
-	o.Isolation = "worktree"
-	call(t, cfg, o)
-	wt := filepath.Join(cfg.StateDir, "wt", journalKey(o.Label))
-	git(t, wt, "commit", "-q", "--allow-empty", "-m", "unit work")
-	tip := git(t, wt, "rev-parse", "HEAD")
-	o.Effort = "high" // not a replay: the call runs again in the same worktree
-	if r, err := call(t, cfg, o); err != nil || r.Value == nil {
-		t.Fatalf("%+v %v", r, err)
-	}
-	if got := git(t, wt, "rev-parse", "HEAD"); got != tip {
-		t.Fatalf("HEAD %s, want %s", got, tip)
-	}
-	if n := countEvents(telemetry(t, cfg), "worktree"); n != 1 {
-		t.Errorf("%d worktree creations, want 1", n)
 	}
 }
 

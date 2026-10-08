@@ -27,7 +27,9 @@ type record struct {
 	Denials     []string        `json:"denials,omitempty"`
 	Uncommitted []string        `json:"uncommitted,omitempty"`
 	Unchecked   bool            `json:"unchecked,omitempty"` // the uncommitted check failed; a replay checks afresh
-	Branch      string          `json:"branch,omitempty"`    // an isolated call's worktree branch
+	Branch      string          `json:"branch,omitempty"`    // a kept clone's fetched branch
+	Clone       string          `json:"clone,omitempty"`     // CallResult.Clone
+	CloneHead   string          `json:"cloneHead,omitempty"` // CallResult.CloneHead
 	At          time.Time       `json:"at"`
 }
 
@@ -45,7 +47,8 @@ func journalKey(label string) string {
 }
 
 // callHash identifies a call's inputs: the prompt, the skill it is sent as,
-// the schema, model, effort and isolation. Role and permissions are left
+// the schema, model, effort and isolation. Dir is left out: a merge clone's
+// path follows from the wave and the state dir. Role and permissions are left
 // out, so a permission change does not invalidate completed work.
 func callHash(prompt, skill string, o Opts) string {
 	h := sha256.New()
@@ -127,7 +130,7 @@ func (rt *Runtime) replayCall(key, hash, label string, schema json.RawMessage) (
 	}
 	rt.event("cache-hit", map[string]any{"label": label, "flags": r.Flags})
 	rt.Log(label + ": replayed from the journal")
-	return CallResult{Value: r.Ret, Class: string(classOK), Flags: r.Flags, Denials: r.Denials, Uncommitted: r.Uncommitted, Branch: r.Branch, Replayed: true}, r.Unchecked, true
+	return CallResult{Value: r.Ret, Class: string(classOK), Flags: r.Flags, Denials: r.Denials, Uncommitted: r.Uncommitted, Branch: r.Branch, Clone: r.Clone, CloneHead: r.CloneHead, Replayed: true}, r.Unchecked, true
 }
 
 // recordCall journals a call's non-null return. A null is not recorded, so a
@@ -137,7 +140,7 @@ func (rt *Runtime) replayCall(key, hash, label string, schema json.RawMessage) (
 func (rt *Runtime) recordCall(key, hash, label string, res CallResult) {
 	flags := slices.DeleteFunc(slices.Clone(res.Flags), func(f string) bool { return f == FlagUncommittedUnchecked })
 	unchecked := len(flags) != len(res.Flags)
-	if err := rt.writeRecord(key, record{Label: label, Kind: "call", Hash: hash, Ret: res.Value, Flags: flags, Denials: res.Denials, Uncommitted: res.Uncommitted, Unchecked: unchecked, Branch: res.Branch}); err == nil {
+	if err := rt.writeRecord(key, record{Label: label, Kind: "call", Hash: hash, Ret: res.Value, Flags: flags, Denials: res.Denials, Uncommitted: res.Uncommitted, Unchecked: unchecked, Branch: res.Branch, Clone: res.Clone, CloneHead: res.CloneHead}); err == nil {
 		rt.forgetDirt(key)
 	} else {
 		rt.Log(fmt.Sprintf("%s: journal write failed, a resume will re-run the call: %v", label, err))

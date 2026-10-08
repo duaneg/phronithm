@@ -31,6 +31,7 @@ func testConfig(t *testing.T) (Config, string) {
 		StateDir:  t.TempDir(),
 		Repo:      gitRepo(t),
 		ClaudeBin: stubBin,
+		Args:      json.RawMessage(`{"planSha":"0123456789ab","integrationBranch":"main"}`),
 		Roles: map[string]Role{
 			"worker": {Tools: "default", Allow: []string{"Read", "Bash"}, Deny: []string{"Bash(git push*)"}, PermissionMode: "dontAsk", Clone: "kept"},
 			"critic": {Tools: "Read,Grep,Skill", Allow: []string{"Skill"}, Deny: []string{"Bash(git commit*)", "Edit(.git/**)"}, PermissionMode: "acceptEdits", Clone: "discarded"},

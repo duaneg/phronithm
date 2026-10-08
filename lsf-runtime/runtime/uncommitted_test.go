@@ -26,37 +26,39 @@ func commitFile(t *testing.T, dir, name, body string) {
 	git(t, dir, "commit", "-q", "-m", "add "+name)
 }
 
+// A writer's kept clone reports its tracked edit and untracked file, not
+// its ignored one. A resume replays the call and re-checks the clone as it
+// stands: cleaned, it is clean; removed, it is clean.
 func TestUncommittedIsolated(t *testing.T) {
 	cfg, _ := isolatedConfig(t)
 	commitFile(t, cfg.Repo, "tracked.txt", "a\n")
 	commitFile(t, cfg.Repo, ".gitignore", "ignored.txt\n")
-	// The stub runs in the worktree: a tracked edit, an untracked file and
-	// an ignored one.
-	t.Setenv("STUB_SCRIPT", "modify:tracked.txt")
+	t.Setenv("STUB_SCRIPT", "modify:tracked.txt,dirty:ignored.txt")
+	t.Setenv("STUB_DIRTY", "new.txt")
 	o := vOpts
 	o.Isolation = "worktree"
-	var res CallResult
-	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
-		wt, _, err := rt.Worktree(ctx, o.Label)
-		if err != nil {
-			t.Fatal(err)
-		}
-		os.WriteFile(filepath.Join(wt, "new.txt"), []byte("n"), 0o644)
-		os.WriteFile(filepath.Join(wt, "ignored.txt"), []byte("i"), 0o644)
-		res, err = rt.Call(ctx, "do the thing", o)
-		return nil, err
-	})
-	if !slices.Equal(res.Uncommitted, []string{"new.txt", "tracked.txt"}) || slices.Contains(res.Flags, FlagUncommittedUnchecked) {
-		t.Fatalf("%+v", res)
+	res, err := call(t, cfg, o)
+	if err != nil || !slices.Equal(res.Uncommitted, []string{"new.txt", "tracked.txt"}) || slices.Contains(res.Flags, FlagUncommittedUnchecked) {
+		t.Fatalf("%+v %v", res, err)
 	}
-
-	// A resume replays the call and re-checks its worktree: cleaned, it is clean.
-	wt := filepath.Join(cfg.StateDir, "wt", journalKey(o.Label))
-	git(t, wt, "checkout", "--", "tracked.txt")
-	os.Remove(filepath.Join(wt, "new.txt"))
+	clone := filepath.Join(cfg.StateDir, "clone", journalKey(o.Label))
+	git(t, clone, "checkout", "--", "tracked.txt")
+	os.Remove(filepath.Join(clone, "new.txt"))
 	again, _ := call(t, cfg, o)
 	if !again.Replayed || len(again.Uncommitted) != 0 {
 		t.Fatalf("replay after cleaning %+v", again)
+	}
+	// Dirty again, then the clone removed: the replay finds nothing.
+	os.WriteFile(filepath.Join(clone, "new.txt"), []byte("n"), 0o644)
+	o.Effort = "high"
+	t.Setenv("STUB_DIRTY", "")
+	t.Setenv("STUB_SCRIPT", "dirty:other.txt")
+	if r, _ := call(t, cfg, o); !slices.Equal(r.Uncommitted, []string{"new.txt", "other.txt"}) {
+		t.Fatalf("second run %+v", r)
+	}
+	os.RemoveAll(clone)
+	if r, _ := call(t, cfg, o); !r.Replayed || len(r.Uncommitted) != 0 {
+		t.Fatalf("replay after removal %+v", r)
 	}
 }
 
@@ -147,14 +149,17 @@ func TestUncommittedSkipsStateDir(t *testing.T) {
 
 func TestUncommittedUncheckedNotJournaled(t *testing.T) {
 	cfg, _ := testConfig(t)
-	cfg.Repo = t.TempDir() // not a repository: the check fails
-	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(cfg.Repo))
+	// The stub corrupts its clone's index: the check fails, the fetch-back
+	// (refs and objects only) does not.
+	t.Setenv("STUB_DIRTY", ".git/index")
 	t.Setenv("STUB_SCRIPT", "ok")
-	res, _ := call(t, cfg, vOpts)
-	if !slices.Contains(res.Flags, FlagUncommittedUnchecked) || len(res.Uncommitted) != 0 {
-		t.Fatalf("%+v", res)
+	o := vOpts
+	o.Isolation = "worktree"
+	res, err := call(t, cfg, o)
+	if err != nil || !slices.Contains(res.Flags, FlagUncommittedUnchecked) || len(res.Uncommitted) != 0 || res.Branch == "" {
+		t.Fatalf("%+v %v", res, err)
 	}
-	b, err := os.ReadFile(filepath.Join(cfg.StateDir, "journal", journalKey(vOpts.Label)+".json"))
+	b, err := os.ReadFile(filepath.Join(cfg.StateDir, "journal", journalKey(o.Label)+".json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,8 +167,8 @@ func TestUncommittedUncheckedNotJournaled(t *testing.T) {
 	if err := json.Unmarshal(b, &r); err != nil || slices.Contains(r.Flags, FlagUncommittedUnchecked) || !r.Unchecked {
 		t.Fatalf("record %s", b)
 	}
-	// A replay checks afresh: still not a repository, still unchecked.
-	again, _ := call(t, cfg, vOpts)
+	// A replay checks afresh: still corrupt, still unchecked.
+	again, _ := call(t, cfg, o)
 	if !again.Replayed || !slices.Contains(again.Flags, FlagUncommittedUnchecked) {
 		t.Fatalf("replay %+v", again)
 	}

@@ -16,20 +16,12 @@ import (
 // Repo is the main checkout.
 func (rt *Runtime) Repo() string { return rt.cfg.Repo }
 
-// Worktree is a code step's own worktree and branch: the ones an agent call
-// with this label and isolation "worktree" gets.
+// Worktree is a code step's own worktree wt/<key> on lsf/<plan8>/<key>,
+// created from the integration branch and reused on resume, with its
+// branch. Code steps are runtime code, so a worktree serves; agent calls
+// get clones (clone.go). A failure is a runtime-error stop.
 func (rt *Runtime) Worktree(ctx context.Context, label string) (path, branch string, err error) {
-	return rt.cwdFor(ctx, Opts{Label: label, Isolation: "worktree"}, journalKey(label))
-}
-
-// cwdFor is a call's working directory: the repo, or for isolation
-// "worktree" the call's own worktree on lsf/<plan8>/<key>, created from the
-// integration branch and reused on resume, with its branch. A failure is a
-// runtime-error stop, never a silent fallback to the repo.
-func (rt *Runtime) cwdFor(ctx context.Context, o Opts, key string) (path, branch string, err error) {
-	if o.Isolation == "" {
-		return rt.cfg.Repo, "", nil
-	}
+	o, key := Opts{Label: label, Isolation: "worktree"}, journalKey(label)
 	args, err := rt.isolationArgs(o)
 	if err != nil {
 		return "", "", err
@@ -93,8 +85,8 @@ func branchName(args worktreeArgs, key string) string {
 	return "lsf/" + args.PlanSha[:8] + "/" + refSafe(key)
 }
 
-// WorktreeRemoval is what RemoveWorktree did with one label's worktree.
-// Paths are what the removal deleted, relative to the worktree: untracked
+// WorktreeRemoval is what RemoveWorktree did with one label's clone or
+// worktree. Paths are what the removal deleted, relative to it: untracked
 // and ignored files (a wholly untracked directory as one "dir/" entry) and
 // tracked files with uncommitted changes. Kept says why nothing was removed.
 type WorktreeRemoval struct {
@@ -106,17 +98,24 @@ type WorktreeRemoval struct {
 	Kept    string   `json:"kept,omitempty"`
 }
 
-// RemoveWorktree removes label's worktree when its branch is merged into
+// RemoveWorktree removes label's kept clone (clone/<key>), or a code step's
+// worktree (wt/<key>), when its branch in the main repo is merged into
 // integration, the branch the caller merged into (its tip an ancestor of
 // that branch), with every untracked, ignored and uncommitted file in it,
-// and, with deleteBranch, the branch. A directory that is not a worktree on
-// the label's branch, a branch not merged, and a directory whose branch is
-// gone are kept. The ancestor check is about commits: it does not protect
-// uncommitted work, so the caller must name only labels with no live call
-// and whose uncommitted work may go. A stop or cancellation before the
-// removal starts is returned; once it starts, one 5-minute bound covers
-// the sequence. A git failure is an error, not a stop; after a partial
-// removal the result still says what went, and the event is emitted.
+// and, with deleteBranch, the branch. Kept, with the reason:
+//   - both a clone and a worktree for the label;
+//   - a directory that is not a worktree on the label's branch, or not a
+//     clone on it or on integration (a repo call's clone);
+//   - a clone whose HEAD is not the main repo's branch tip: commits not
+//     fetched, which only a listing could show;
+//   - a branch not merged, and a directory whose branch is gone.
+//
+// The ancestor check is about commits: it does not protect uncommitted
+// work, so the caller must name only labels with no live call and whose
+// uncommitted work may go. A stop or cancellation before the removal starts
+// is returned; once it starts, one 5-minute bound covers the sequence. A git
+// failure is an error, not a stop; after a partial removal the result still
+// says what went, and the event is emitted.
 func (rt *Runtime) RemoveWorktree(ctx context.Context, label, integration string, deleteBranch bool) (out WorktreeRemoval, err error) {
 	o := Opts{Label: label, Isolation: "worktree"}
 	key := journalKey(label)
@@ -141,16 +140,25 @@ func (rt *Runtime) RemoveWorktree(ctx context.Context, label, integration string
 	}
 	gctx, cancel := rt.gitContext(ctx)
 	defer cancel()
-	out.Path = filepath.Join(rt.cfg.StateDir, "wt", key)
+	isDir := func(p string) bool { fi, err := os.Stat(p); return err == nil && fi.IsDir() }
+	wtPath, clonePath := filepath.Join(rt.cfg.StateDir, "wt", key), filepath.Join(rt.cfg.StateDir, "clone", key)
+	isClone := isDir(clonePath)
+	out.Path = wtPath
+	if isClone {
+		out.Path = clonePath
+	}
 	out.Branch = branchName(args, key)
+	if isClone && isDir(wtPath) {
+		out.Kept = "both a clone and a worktree"
+		return out, nil
+	}
 	ref := "refs/heads/" + out.Branch
 	tipB, err := gitStdout(gctx, rt.cfg.Repo, "rev-parse", "--verify", "--quiet", ref)
 	tip := strings.TrimSpace(string(tipB))
 	if err != nil && exitStatus(err) != 1 {
 		return out, fmt.Errorf("%s: rev-parse %s: %w", label, ref, err)
 	}
-	fi, statErr := os.Stat(out.Path)
-	dirExists := statErr == nil && fi.IsDir()
+	dirExists := isDir(out.Path)
 	switch {
 	case !dirExists && tip == "":
 		out.Kept = "absent"
@@ -172,7 +180,7 @@ func (rt *Runtime) RemoveWorktree(ctx context.Context, label, integration string
 	}
 	defer func() {
 		if out.Removed {
-			ev := map[string]any{"label": label, "path": out.Path, "branch": out.Branch, "paths": len(out.Paths)}
+			ev := map[string]any{"label": label, "path": out.Path, "branch": out.Branch, "paths": len(out.Paths), "clone": isClone}
 			if err != nil {
 				ev["error"] = err.Error()
 			}
@@ -180,7 +188,17 @@ func (rt *Runtime) RemoveWorktree(ctx context.Context, label, integration string
 		}
 	}()
 	if dirExists {
-		if !isWorktreeOn(gctx, out.Path, out.Branch) {
+		if isClone {
+			if isCloneOn(gctx, out.Path, out.Branch) != nil && isCloneOn(gctx, out.Path, integration) != nil {
+				out.Kept = "not a clone on " + out.Branch
+				return out, nil
+			}
+			head, err := gitStdout(gctx, out.Path, "rev-parse", "-q", "--verify", "HEAD")
+			if err != nil || strings.TrimSpace(string(head)) != tip {
+				out.Kept = "clone has commits not fetched"
+				return out, nil
+			}
+		} else if !isWorktreeOn(gctx, out.Path, out.Branch) {
 			out.Kept = "not a worktree on " + out.Branch
 			return out, nil
 		}
@@ -197,7 +215,11 @@ func (rt *Runtime) RemoveWorktree(ctx context.Context, label, integration string
 				out.Paths = append(out.Paths, p)
 			}
 		}
-		if b, err := gitOut(gctx, rt.cfg.Repo, "worktree", "remove", "--force", out.Path); err != nil {
+		if isClone {
+			if err := os.RemoveAll(out.Path); err != nil {
+				return out, fmt.Errorf("%s: remove clone: %w", label, err)
+			}
+		} else if b, err := gitOut(gctx, rt.cfg.Repo, "worktree", "remove", "--force", out.Path); err != nil {
 			return out, fmt.Errorf("%s: worktree remove: %w: %s", label, err, strings.TrimSpace(string(b)))
 		}
 		out.Removed = true

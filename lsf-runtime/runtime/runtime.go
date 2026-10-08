@@ -43,7 +43,7 @@ type Runtime struct {
 	cost       float64 // summed total_cost_usd this launch
 	limitUntil time.Time
 
-	wtSem   chan struct{} // one slot: serialises git worktree operations
+	wtSem   chan struct{} // one slot: serialises git worktree and clone operations
 	gateSem chan struct{} // GateConcurrency slots: bounds concurrent RunGates
 	gateSeq atomic.Int64  // numbers gate processes for their orphan markers
 
@@ -64,7 +64,12 @@ func Run(ctx context.Context, cfg Config, body func(ctx context.Context, rt *Run
 			return Summary{}, fmt.Errorf("lsf-runtime: %s %s is under /tmp or /var/tmp, which the Bash sandbox leaves writable; move it", d.name, d.path)
 		}
 	}
-	for _, d := range []string{"", "journal", "calls", "wt", "gates/logs"} {
+	if cfg.Repo != "" {
+		if err := checkRepo(cfg); err != nil {
+			return Summary{}, fmt.Errorf("lsf-runtime: %w", err)
+		}
+	}
+	for _, d := range []string{"", "journal", "calls", "wt", "clone", "scratch", "merge", "gates/logs"} {
 		if err := os.MkdirAll(filepath.Join(cfg.StateDir, d), 0o755); err != nil {
 			return Summary{}, fmt.Errorf("lsf-runtime: state dir: %w", err)
 		}
@@ -104,6 +109,7 @@ func Run(ctx context.Context, cfg Config, body func(ctx context.Context, rt *Run
 	stopSignals := rt.watchSignals()
 	defer stopSignals()
 	rt.reapOrphans()
+	rt.wipeScratch()
 
 	rt.Log(fmt.Sprintf("launch %s: state dir %s", rt.launchID, cfg.StateDir))
 	rt.event("launch", map[string]any{"launch": rt.launchID, "pid": os.Getpid(), "dryRun": cfg.DryRun})

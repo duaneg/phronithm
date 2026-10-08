@@ -29,14 +29,12 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 		return CallResult{}, rt.setStop(StopRuntimeError, o.Label+": opts.schema is not a JSON object")
 	}
 	c := &callState{o: o, key: key, skill: skill, sent: withSkill(skill, prompt)}
-	if o.Isolation != "" {
-		args, err := rt.isolationArgs(o)
-		if err != nil {
+	c.roleName, c.role = rt.cfg.roleFor(o)
+	if o.Isolation != "" || rt.usesClone(o, c.role) { // a dry run checks args too
+		if _, err := rt.cloneArgs(o); err != nil {
 			return CallResult{}, err
 		}
-		c.res.Branch = branchName(args, key)
 	}
-	c.roleName, c.role = rt.cfg.roleFor(o)
 	if rt.cfg.DryRun {
 		argv := buildArgv(o, c.role, rt.cfg.PluginDir, "<session-id>")
 		rt.event("dry-run", map[string]any{"label": o.Label, "role": c.roleName, "argv": argv, "stdin": truncateRunes(c.sent, 200)})
@@ -73,14 +71,16 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 				res.Flags = append(res.Flags, FlagGuardKilledAfterResult)
 				rt.Log(o.Label + ": the guard timeout killed the call after its result; the result stands")
 			}
-			rt.checkUncommitted(ctx, c, res)
+			if err := rt.afterCall(ctx, c, res); err != nil {
+				return *res, err
+			}
 			rt.recordCall(key, hash, o.Label, *res)
 			return *res, nil
 		case classStopped:
 			return *res, rt.stopErr()
 		case classTimeout, classPermanent, classSpawnError:
-			rt.checkNull(ctx, c, res)
-			return *res, nil
+			err := rt.checkNull(ctx, c, res)
+			return *res, err
 		case classInvalid:
 			if retried == 0 {
 				retried++
@@ -88,8 +88,8 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 			}
 			rt.Log(fmt.Sprintf("%s: no valid return after %d attempt(s) (%s); null", o.Label, res.Attempts, firstOr(v.errors, "invalid")))
 			res.Violations = v.errors
-			rt.checkNull(ctx, c, res)
-			return *res, nil
+			err := rt.checkNull(ctx, c, res)
+			return *res, err
 		case classTransient:
 			if transient < len(rt.cfg.Backoff) {
 				d := rt.cfg.Backoff[transient].D()
@@ -101,16 +101,16 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 				continue
 			}
 			rt.Log(fmt.Sprintf("%s: transient failure persisted over %d attempt(s); null", o.Label, res.Attempts))
-			rt.checkNull(ctx, c, res)
-			return *res, nil
+			err := rt.checkNull(ctx, c, res)
+			return *res, err
 		case classSessionLimit:
 			if waits < rt.cfg.MaxSessionWaits {
 				waits++
 				continue
 			}
 			rt.Log(fmt.Sprintf("%s: session limit persisted over %d wait(s); null", o.Label, waits))
-			rt.checkNull(ctx, c, res)
-			return *res, nil
+			err := rt.checkNull(ctx, c, res)
+			return *res, err
 		}
 		panic("unreachable: class " + v.class)
 	}
@@ -123,15 +123,16 @@ type callState struct {
 	sent       string // the prompt as sent
 	roleName   string
 	role       Role
-	cwd        string // resolved at the first admitted attempt
+	place      placement // resolved at the first admitted attempt
+	placed     bool
 	res        CallResult
-	before     snapshot // a repo call's work tree at its first admitted attempt
+	before     snapshot // a main-checkout call's work tree at its first admitted attempt
 	beforeErr  error
 }
 
 // attempt takes a concurrency slot, admits, spawns and classifies one
 // attempt, holding the slot throughout; the deferred release survives a
-// panic. The worktree is created at the first admitted attempt, so a call
+// panic. The clone is made at the first admitted attempt, so a call
 // refused by a cap or stop leaves none. A session limit moves the gate before
 // the slot frees, so a call queued for the slot cannot spawn into it.
 func (rt *Runtime) attempt(ctx context.Context, c *callState) (*attempt, verdict, error) {
@@ -142,14 +143,15 @@ func (rt *Runtime) attempt(ctx context.Context, c *callState) (*attempt, verdict
 	if err := rt.admit(ctx); err != nil {
 		return nil, verdict{}, err
 	}
-	if c.cwd == "" {
-		cwd, _, err := rt.cwdFor(ctx, c.o, c.key)
+	if !c.placed {
+		p, err := rt.placeCall(ctx, c.o, c.key, c.role)
 		if err != nil {
 			return nil, verdict{}, err
 		}
-		c.cwd = cwd
-		if c.o.Isolation == "" && rt.cfg.Repo != "" {
-			c.before, c.beforeErr = rt.takeSnapshot(ctx, cwd, true)
+		c.place, c.placed = p, true
+		c.res.Clone = p.kind
+		if p.inRepo {
+			c.before, c.beforeErr = rt.takeSnapshot(ctx, p.dir, true)
 			for _, p := range rt.priorDirt(c.key) { // left by an earlier null of this call
 				delete(c.before, p)
 			}
@@ -161,7 +163,7 @@ func (rt *Runtime) attempt(ctx context.Context, c *callState) (*attempt, verdict
 		prompt:     c.sent,
 		argv:       buildArgv(c.o, c.role, rt.cfg.PluginDir, sid),
 		sessionID:  sid,
-		cwd:        c.cwd,
+		cwd:        c.place.dir,
 		transcript: filepath.Join(rt.cfg.StateDir, "calls", fmt.Sprintf("%s.%s.a%d.%s.jsonl", c.key, rt.launchID, c.res.Attempts, sid[:8])),
 	})
 	c.res.Attempts++
