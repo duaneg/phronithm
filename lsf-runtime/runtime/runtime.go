@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/duaneg/phronithm/lsf-runtime/internal/tmproot"
 )
 
 // Runtime is one launch's host runtime: the orchestrator's agent, parallel,
@@ -58,7 +60,7 @@ func Run(ctx context.Context, cfg Config, body func(ctx context.Context, rt *Run
 		return Summary{}, fmt.Errorf("lsf-runtime: config: %w", err)
 	}
 	for _, d := range []struct{ name, path string }{{"repo", cfg.Repo}, {"stateDir", cfg.StateDir}} {
-		if d.path != "" && underTempRoot(d.path) {
+		if d.path != "" && tmproot.Under(d.path) {
 			return Summary{}, fmt.Errorf("lsf-runtime: %s %s is under /tmp or /var/tmp, which the Bash sandbox leaves writable; move it", d.name, d.path)
 		}
 	}

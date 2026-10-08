@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -17,7 +19,8 @@ type Config struct {
 	StateDir  string          `json:"stateDir"`
 	Repo      string          `json:"repo"`
 	ClaudeBin string          `json:"claudeBin,omitempty"` // default "claude"; env LSF_CLAUDE_BIN overrides
-	Args      json.RawMessage `json:"args,omitempty"`      // passed through; worktrees read planSha, integrationBranch
+	Args      json.RawMessage `json:"args,omitempty"`      // passed through; clones read planSha, integrationBranch
+	PluginDir string          `json:"pluginDir,omitempty"` // the plugin root; replaces <plugin> in roles' deny
 
 	Concurrency int             `json:"concurrency,omitempty"` // default 4; bounds concurrent spawns
 	Roles       map[string]Role `json:"roles"`
@@ -47,7 +50,17 @@ type Role struct {
 	Allow          []string `json:"allow,omitempty"` // --allowedTools
 	Deny           []string `json:"deny,omitempty"`  // --disallowedTools
 	PermissionMode string   `json:"permissionMode"`  // --permission-mode
+	Clone          string   `json:"clone"`           // "kept" (fetched back) or "discarded" (removed after the call)
 }
+
+// Role.Clone values.
+const (
+	CloneKept      = "kept"
+	CloneDiscarded = "discarded"
+)
+
+// pluginToken in a role's deny entry is replaced by Config.PluginDir.
+const pluginToken = "<plugin>"
 
 // RoleRule matches when every non-empty matcher matches (AND); at least one is
 // set. Express OR as two rules. Label is an RE2 regex, unanchored: anchor it
@@ -132,6 +145,12 @@ func (c *Config) prepare() error {
 		if r.Tools == "" {
 			errs = append(errs, fmt.Errorf("roles.%s: tools is required", name))
 		}
+		if r.Clone != CloneKept && r.Clone != CloneDiscarded {
+			errs = append(errs, fmt.Errorf("roles.%s: clone must be %q or %q, not %q", name, CloneKept, CloneDiscarded, r.Clone))
+		}
+		if c.PluginDir == "" && slices.ContainsFunc(r.Deny, func(d string) bool { return strings.Contains(d, pluginToken) }) {
+			errs = append(errs, fmt.Errorf("roles.%s: deny names %s but pluginDir is not set", name, pluginToken))
+		}
 	}
 	if _, ok := c.Roles[c.DefaultRole]; !ok {
 		errs = append(errs, fmt.Errorf("defaultRole %q names no role", c.DefaultRole))
@@ -180,7 +199,7 @@ func (c *Config) prepare() error {
 	if c.Backoff != nil && len(c.Backoff) == 0 {
 		errs = append(errs, errors.New("backoff: omit it for the default; an empty list would retry transient errors never"))
 	}
-	for _, p := range []*string{&c.StateDir, &c.Repo} {
+	for _, p := range []*string{&c.StateDir, &c.Repo, &c.PluginDir} {
 		if *p != "" {
 			abs, err := filepath.Abs(*p)
 			if err != nil {

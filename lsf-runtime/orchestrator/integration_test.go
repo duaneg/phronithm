@@ -253,7 +253,7 @@ func TestOnRuntimeLabelsUniqueAndReplay(t *testing.T) {
 		Repo:        repo,
 		ClaudeBin:   os.Args[0],
 		Args:        s.ArgsJSON,
-		Roles:       map[string]lsfrt.Role{"worker": {Tools: "default", PermissionMode: "dontAsk"}},
+		Roles:       map[string]lsfrt.Role{"worker": {Tools: "default", PermissionMode: "dontAsk", Clone: "kept"}},
 		DefaultRole: "worker",
 	}
 	launch := func() lsfrt.Summary {
@@ -395,7 +395,7 @@ func TestOnRuntimeCodeStages(t *testing.T) {
 		"decisions": []M{{"id": "d1", "question": "q", "decision": "yes"}}}, "")
 	cfg := lsfrt.Config{
 		StateDir: filepath.Join(dir, "state"), Repo: r.dir, ClaudeBin: os.Args[0], Args: args,
-		Roles: map[string]lsfrt.Role{"worker": {Tools: "default", PermissionMode: "dontAsk"}}, DefaultRole: "worker",
+		Roles: map[string]lsfrt.Role{"worker": {Tools: "default", PermissionMode: "dontAsk", Clone: "kept"}}, DefaultRole: "worker",
 	}
 	launch := func() lsfrt.Summary {
 		t.Helper()

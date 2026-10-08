@@ -14,13 +14,13 @@ func TestMain(m *testing.M) { os.Exit(testenv.Main(m)) }
 
 // The config keeps the example's roles and skill rules and tightens the caps.
 func TestConfig(t *testing.T) {
-	c, err := config(filepath.Join("..", "..", "testdata", "config.example.json"), "/w", "/bin/claude", "abc12345", false)
+	c, err := config(filepath.Join("..", "..", "testdata", "config.example.json"), "/p", "/w", "/bin/claude", "abc12345", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var args map[string]string
 	json.Unmarshal(c.Args, &args)
-	if c.StateDir != "/w/state" || c.Repo != "/w/repo" || c.ClaudeBin != "/bin/claude" || args["planSha"] != "abc12345" || args["integrationBranch"] != "main" {
+	if c.StateDir != "/w/state" || c.Repo != "/w/repo" || c.ClaudeBin != "/bin/claude" || c.PluginDir != "/p" || args["planSha"] != "abc12345" || args["integrationBranch"] != "main" {
 		t.Errorf("%+v %v", c, args)
 	}
 	if c.Caps.MaxCalls != 40 || c.Caps.MaxCostUSD != 25 || len(c.Roles) == 0 || len(c.Skills) == 0 || c.DefaultRole == "" {

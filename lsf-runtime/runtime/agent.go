@@ -38,7 +38,7 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 	}
 	c.roleName, c.role = rt.cfg.roleFor(o)
 	if rt.cfg.DryRun {
-		argv := buildArgv(o, c.role, "<session-id>")
+		argv := buildArgv(o, c.role, rt.cfg.PluginDir, "<session-id>")
 		rt.event("dry-run", map[string]any{"label": o.Label, "role": c.roleName, "argv": argv, "stdin": truncateRunes(c.sent, 200)})
 		rt.Log(fmt.Sprintf("dry run: %s would run %s %q", o.Label, rt.cfg.ClaudeBin, argv))
 		return CallResult{}, rt.setStop(StopDryRun, o.Label)
@@ -159,7 +159,7 @@ func (rt *Runtime) attempt(ctx context.Context, c *callState) (*attempt, verdict
 	t0 := time.Now()
 	a := rt.spawn(ctx, spawnSpec{
 		prompt:     c.sent,
-		argv:       buildArgv(c.o, c.role, sid),
+		argv:       buildArgv(c.o, c.role, rt.cfg.PluginDir, sid),
 		sessionID:  sid,
 		cwd:        c.cwd,
 		transcript: filepath.Join(rt.cfg.StateDir, "calls", fmt.Sprintf("%s.%s.a%d.%s.jsonl", c.key, rt.launchID, c.res.Attempts, sid[:8])),

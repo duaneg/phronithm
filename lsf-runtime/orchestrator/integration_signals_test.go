@@ -81,7 +81,7 @@ func realRun(t *testing.T, over ...answer) (view, string, string, *gitRepo) {
 	args, _ := plan.MarshalJS(M{"name": "f", "planSha": planSha, "architectureDoc": "docs/architecture/f.md", "integrationBranch": "integration"}, "")
 	cfg := lsfrt.Config{
 		StateDir: filepath.Join(dir, "state"), Repo: r.dir, ClaudeBin: os.Args[0], Args: args,
-		Roles:       map[string]lsfrt.Role{"worker": {Tools: "default", PermissionMode: "dontAsk"}},
+		Roles:       map[string]lsfrt.Role{"worker": {Tools: "default", PermissionMode: "dontAsk", Clone: "kept"}},
 		DefaultRole: "worker",
 		Backoff:     []lsfrt.Duration{lsfrt.Duration(10 * time.Millisecond)},
 	}

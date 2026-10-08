@@ -15,7 +15,7 @@ import (
 
 // buildArgv is a headless call's arguments. The prompt goes on stdin, so it
 // is bounded by neither MAX_ARG_STRLEN nor a variadic flag swallowing it.
-func buildArgv(o Opts, role Role, sessionID string) []string {
+func buildArgv(o Opts, role Role, pluginDir, sessionID string) []string {
 	a := []string{"-p", "--output-format", "stream-json", "--verbose", "--session-id", sessionID}
 	if o.Model != "" {
 		a = append(a, "--model", o.Model)
@@ -28,7 +28,10 @@ func buildArgv(o Opts, role Role, sessionID string) []string {
 		a = append(append(a, "--allowedTools"), role.Allow...)
 	}
 	if len(role.Deny) > 0 {
-		a = append(append(a, "--disallowedTools"), role.Deny...)
+		a = append(a, "--disallowedTools")
+		for _, d := range role.Deny {
+			a = append(a, strings.ReplaceAll(d, pluginToken, pluginDir))
+		}
 	}
 	return append(a, "--json-schema", string(o.Schema))
 }

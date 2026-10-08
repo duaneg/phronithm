@@ -1,29 +1,31 @@
 {
   "stateDir": "/path/to/state",
   "repo": "/path/to/repo",
+  "pluginDir": "/path/to/phronithm",
   "args": {"name": "example", "planSha": "0123456789abcdef", "integrationBranch": "main", "architectureDoc": "docs/architecture/example.md"},
   "concurrency": 4,
-  "defaultRole": "worker",
+  "defaultRole": "writer",
   "roles": {
-    "worker": {
-      "tools": "default",
-      "allow": ["Read", "Edit", "Write", "Glob", "Grep", "Skill", "Bash"],
-      "deny": ["Bash(git push*)", "Bash(git worktree *)", "Bash(git branch -D*)", "Bash(git branch -d*)", "Bash(git config*)", "Bash(git update-ref*)", "Bash(rm -rf*)",
-               "Edit(.git/**)", "Write(.git/**)", "Edit(.claude/**)", "Write(.claude/**)"],
-      "permissionMode": "dontAsk"
+    "writer": {
+      "tools": "Read,Edit,Write,Glob,Grep,Bash,Skill",
+      "allow": ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "Skill"],
+      "deny": ["Edit(/<plugin>/**)", "Write(/<plugin>/**)", "Edit(.git/**)", "Write(.git/**)"],
+      "permissionMode": "dontAsk",
+      "clone": "kept"
     },
-    "critique": {
-      "tools": "Read,Grep,Glob,Skill,Bash",
-      "allow": ["Skill", "Read", "Grep", "Glob", "Bash"],
-      "deny": ["Bash(git push*)", "Bash(git worktree *)", "Bash(git branch -D*)", "Bash(git branch -d*)", "Bash(git config*)", "Bash(git update-ref*)", "Bash(rm -rf*)",
-               "Edit(.git/**)", "Write(.git/**)", "Edit(.claude/**)", "Write(.claude/**)",
-               "Bash(git commit*)", "Bash(git merge*)", "Bash(git rebase*)"],
-      "permissionMode": "dontAsk"
+    "reviewer": {
+      "tools": "Read,Glob,Grep,Bash,Skill",
+      "allow": ["Read", "Glob", "Grep", "Bash", "Skill"],
+      "deny": ["Edit(/<plugin>/**)", "Write(/<plugin>/**)"],
+      "permissionMode": "dontAsk",
+      "clone": "discarded"
     }
   },
   "roleRules": [
-    {"agentType": "phronithm:critic", "role": "critique"},
-    {"label": "^(critique-|lens-review|review-gate)", "role": "critique"}
+    {"agentType": "phronithm:critic", "role": "reviewer"},
+    {"label": "^(critique-(plan|design|code)|lens-review):r[0-9]+:", "role": "reviewer"},
+    {"label": "^review-gate:w[0-9]+(#|$)", "role": "reviewer"},
+    {"label": "^obligations(#|$)", "role": "reviewer"}
   ],
   "skills": [
     {"label": "^(critique-plan|critique-code|critique-design)", "skill": "phronithm:critique"},

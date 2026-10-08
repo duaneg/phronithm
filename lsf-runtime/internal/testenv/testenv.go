@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+
+	"github.com/duaneg/phronithm/lsf-runtime/internal/tmproot"
 )
 
-// Main runs m with TMPDIR pointing at a fresh directory, removed afterwards,
+// Main runs m with TMPDIR, whatever it was, pointing at a fresh directory,
+// removed afterwards (a killed test binary leaves it behind),
 // under the user's cache directory, or under the module's .testtmp when that
 // is unavailable or itself under a temp root. A package's TestMain calls it.
 func Main(m *testing.M) int {
@@ -39,7 +41,7 @@ func tempBase() (string, error) {
 		bases = append(bases, filepath.Join(root, ".testtmp"))
 	}
 	for _, b := range bases {
-		if UnderTempRoot(b) {
+		if tmproot.Under(b) {
 			continue
 		}
 		if err := os.MkdirAll(b, 0o755); err != nil {
@@ -49,7 +51,7 @@ func tempBase() (string, error) {
 		if err != nil {
 			continue
 		}
-		if UnderTempRoot(d) { // a symlink into a temp root
+		if tmproot.Under(d) { // a symlink into a temp root
 			os.RemoveAll(d)
 			continue
 		}
@@ -73,27 +75,4 @@ func moduleRoot() (string, error) {
 		}
 		d = p
 	}
-}
-
-// UnderTempRoot mirrors the runtime's launch check, for the test base.
-func UnderTempRoot(p string) bool {
-	check := func(p string) bool {
-		for _, r := range []string{"/tmp", "/var/tmp", "/private/tmp", "/private/var/tmp"} {
-			if p == r || strings.HasPrefix(p, r+"/") {
-				return true
-			}
-		}
-		return false
-	}
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		return true
-	}
-	if check(abs) {
-		return true
-	}
-	if r, err := filepath.EvalSymlinks(abs); err == nil && check(r) {
-		return true
-	}
-	return false
 }

@@ -31,9 +31,9 @@ import (
 const pin = "2.1.289"
 
 // config is the launch config: the example's roles and skill rules, this
-// fixture's repo, state dir and args, and caps sized for one unit (about
+// fixture's repo, state dir and args, the plugin at root, and caps sized for one unit (about
 // fourteen calls).
-func config(examplePath, dir, claude, planSha string, dryRun bool) (lsfrt.Config, error) {
+func config(examplePath, root, dir, claude, planSha string, dryRun bool) (lsfrt.Config, error) {
 	b, err := os.ReadFile(examplePath)
 	if err != nil {
 		return lsfrt.Config{}, err
@@ -45,6 +45,7 @@ func config(examplePath, dir, claude, planSha string, dryRun bool) (lsfrt.Config
 	c.StateDir = filepath.Join(dir, "state")
 	c.Repo = filepath.Join(dir, "repo")
 	c.ClaudeBin = claude
+	c.PluginDir = root
 	c.Args, _ = json.Marshal(map[string]string{
 		"name": "stats", "planSha": planSha, "architectureDoc": "docs/architecture/stats.md", "integrationBranch": "main",
 	})
@@ -111,7 +112,7 @@ func main() {
 	home, _ := os.UserHomeDir()
 	root := flag.String("repo", "..", "phronithm repository root")
 	claude := flag.String("claude", filepath.Join(home, ".local", "share", "claude", "versions", pin), "claude binary (the pinned version)")
-	dirFlag := flag.String("dir", "", "work dir (default: a new temp dir, kept)")
+	dirFlag := flag.String("dir", "", "work dir (default: a new dir under the user cache dir, kept; never under /tmp)")
 	example := flag.String("config", filepath.Join("testdata", "config.example.json"), "config whose roles and skill rules the launch uses")
 	dryRun := flag.Bool("dry-run", false, "stop at the first call without spawning")
 	flag.Parse()
@@ -127,7 +128,15 @@ func run(root, claude, dir, example string, dryRun bool) error {
 		return err
 	}
 	if dir == "" {
-		if dir, err = os.MkdirTemp("", "lsf-fixturerun-"); err != nil {
+		// Not os.TempDir: the runtime refuses a launch under /tmp.
+		cache, err := os.UserCacheDir()
+		if err != nil {
+			return fmt.Errorf("no default work dir (%v): pass -dir", err)
+		}
+		if err := os.MkdirAll(filepath.Join(cache, "lsf-fixturerun"), 0o755); err != nil {
+			return err
+		}
+		if dir, err = os.MkdirTemp(filepath.Join(cache, "lsf-fixturerun"), "run-"); err != nil {
 			return err
 		}
 	}
@@ -149,7 +158,7 @@ func run(root, claude, dir, example string, dryRun bool) error {
 	if err != nil {
 		return err
 	}
-	cfg, err := config(example, dir, claude, planSha, dryRun)
+	cfg, err := config(example, root, dir, claude, planSha, dryRun)
 	if err != nil {
 		return err
 	}

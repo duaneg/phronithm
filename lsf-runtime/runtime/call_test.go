@@ -19,7 +19,7 @@ func spawnOnce(t *testing.T, ctx context.Context, rt *Runtime, prompt string, o 
 	sid := newUUID()
 	return rt.spawn(ctx, spawnSpec{
 		prompt:     withSkill(rt.cfg.skillFor(o.Label), prompt),
-		argv:       buildArgv(o, role, sid),
+		argv:       buildArgv(o, role, "", sid),
 		sessionID:  sid,
 		cwd:        rt.cfg.Repo,
 		transcript: filepath.Join(rt.cfg.StateDir, "calls", sid+".jsonl"),

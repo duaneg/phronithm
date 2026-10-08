@@ -32,8 +32,8 @@ func testConfig(t *testing.T) (Config, string) {
 		Repo:      gitRepo(t),
 		ClaudeBin: stubBin,
 		Roles: map[string]Role{
-			"worker": {Tools: "default", Allow: []string{"Read", "Bash"}, Deny: []string{"Bash(git push*)"}, PermissionMode: "dontAsk"},
-			"critic": {Tools: "Read,Grep,Skill", Allow: []string{"Skill"}, Deny: []string{"Bash(git commit*)", "Edit(.git/**)"}, PermissionMode: "acceptEdits"},
+			"worker": {Tools: "default", Allow: []string{"Read", "Bash"}, Deny: []string{"Bash(git push*)"}, PermissionMode: "dontAsk", Clone: "kept"},
+			"critic": {Tools: "Read,Grep,Skill", Allow: []string{"Skill"}, Deny: []string{"Bash(git commit*)", "Edit(.git/**)"}, PermissionMode: "acceptEdits", Clone: "discarded"},
 		},
 		DefaultRole: "worker",
 		RoleRules:   []RoleRule{{Label: "^critique-", Role: "critic"}},
