@@ -102,7 +102,7 @@ func TestAgreementDisagreements(t *testing.T) {
 			[]string{"docs-pass: entries: docs-pass Depends on lists base, parser in its entry but not in the block"}},
 		{"depends on unbalanced",
 			[]string{"- **Depends on**: base (logical, the lexer types)", "- **Depends on**: base (logical, the lexer types"},
-			[]string{"parser: entries: parser Depends on: unbalanced parentheses"}},
+			[]string{"parser: entries: parser Depends on: unbalanced parentheses or backticks"}},
 		{"scope",
 			[]string{"- **Scope**: `docs/design.md`", "- **Scope**: `docs/design.txt`"},
 			[]string{
@@ -148,6 +148,27 @@ func TestAgreementDisagreements(t *testing.T) {
 		{"execution order rationale mention",
 			[]string{"2. `docs-pass`, `parser`.", "2. `docs-pass`, which `wire-up` needs, then `parser`."},
 			[]string{"execution-order: entries: Execution Order section mentions wire-up at position 2 among incomplete units, where the block has parser"}},
+		{"fields in another syntax",
+			[]string{"- **Type**: design\n- **Scope**: `docs/design.md`\n- **Depends on**: none\n- **External gates**: none\n- **Done condition**: The design is written.\n", "- **Type:** design\n"},
+			[]string{"docs-pass: entries: docs-pass has text but no `- **Name**: value` field lines"}},
+		{"gate segment unreadable, name kept out of the comparison",
+			[]string{"`verdict` (organisational)", "`verdict` organisational"},
+			[]string{"parser: entries: parser External gates: cannot read \"`verdict` organisational\" as `name` (kind, pin)"}},
+		{"gate trailing separator",
+			[]string{"`verdict` (organisational)", "`verdict` (organisational);"},
+			nil},
+		{"gate without kind",
+			[]string{"`verdict` (organisational)", "`verdict`"},
+			[]string{`parser/verdict: entries: parser gate verdict has kind "" in its entry, "organisational" in the block`}},
+		{"gate repeated",
+			[]string{"`verdict` (organisational)", "`verdict` (organisational); `verdict` (organisational)"},
+			[]string{"parser: entries: parser External gates repeats verdict in its entry"}},
+		{"scope unbalanced",
+			[]string{"- **Scope**: `docs/design.md`", "- **Scope**: `docs/design.md` (the design"},
+			[]string{"docs-pass: entries: docs-pass Scope: unbalanced parentheses or backticks"}},
+		{"gates unbalanced",
+			[]string{"`verdict` (organisational)", "`verdict (organisational)"},
+			[]string{"parser: entries: parser External gates: unbalanced parentheses or backticks"}},
 		{"no work units",
 			[]string{"## Work Units", "## Units"},
 			[]string{"work-units: entries: no ## Work Units section"}},
@@ -181,6 +202,13 @@ func TestAgreementOrdering(t *testing.T) {
 	}
 	if got := agreement(t, doc); !slices.Equal(got, want) {
 		t.Errorf("\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestAgreementNilPlan(t *testing.T) {
+	got := Agreement("", nil)
+	if len(got) != 1 || got[0].Referent != "lsf-plan" {
+		t.Errorf("%v", got)
 	}
 }
 

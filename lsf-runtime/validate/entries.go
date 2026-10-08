@@ -12,14 +12,15 @@ import (
 
 // entry is one `### <id>` heading under Work Units. Fields holds each
 // `- **<Name>**: <value>` field with its value's whitespace collapsed; an
-// entry with no field lines is a stub.
+// entry with no lines under its heading is a stub.
 type entry struct {
 	ID         string
 	Fields     map[string]string
 	Duplicates []string // field names given more than once, first value kept
+	Body       bool     // a non-blank line follows the heading
 }
 
-func (e *entry) stub() bool { return len(e.Fields) == 0 }
+func (e *entry) stub() bool { return len(e.Fields) == 0 && !e.Body }
 
 // document is the parsed prose. A nil section means the heading is absent.
 type document struct {
@@ -139,6 +140,9 @@ func parseEntries(lines []line) []*entry {
 		name, value = "", nil
 	}
 	for i, l := range lines {
+		if cur != nil && strings.TrimSpace(l.text) != "" && headingLevel(l.text) == 0 {
+			cur.Body = true
+		}
 		if l.fence {
 			continue
 		}

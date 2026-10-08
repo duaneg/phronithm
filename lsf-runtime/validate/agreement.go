@@ -27,6 +27,9 @@ func disagree(referent, format string, args ...any) plan.Problem {
 // with no block unit, then the execution order.
 func Agreement(markdown string, p *plan.Plan) []plan.Problem {
 	problems := []plan.Problem{}
+	if p == nil {
+		return append(problems, disagree("lsf-plan", "no plan block to compare"))
+	}
 	doc := parseDocument(markdown)
 	if !doc.WorkUnits {
 		problems = append(problems, disagree("work-units", "no ## Work Units section"))
@@ -78,10 +81,14 @@ var requiredFields = []string{"Type", "Scope", "Depends on", "External gates"}
 func compareUnit(e *entry, u *plan.Unit) []plan.Problem {
 	var problems []plan.Problem
 	add := func(format string, args ...any) { problems = append(problems, disagree(u.ID, format, args...)) }
-	if e.stub() {
+	switch {
+	case e.stub():
 		if !u.Complete {
 			add("%s has a one-line stub but is not complete: true in the block", u.ID)
 		}
+		return problems
+	case len(e.Fields) == 0:
+		add("%s has text but no `- **Name**: value` field lines", u.ID)
 		return problems
 	}
 	for _, name := range e.Duplicates {
@@ -134,7 +141,7 @@ func parseDepends(v string) (ids []string, err string) {
 	}
 	groups, ok := splitTop(v, ';')
 	if !ok {
-		return nil, "unbalanced parentheses"
+		return nil, "unbalanced parentheses or backticks"
 	}
 	for _, g := range groups {
 		bare, _ := stripParens(g) // balanced, since the whole value is
@@ -155,7 +162,7 @@ func parseScope(v string) (keys []string, err string) {
 	}
 	bare, ok := stripParens(v)
 	if !ok {
-		return nil, "unbalanced parentheses"
+		return nil, "unbalanced parentheses or backticks"
 	}
 	tokens, residue := backticked(bare)
 	for _, w := range strings.Fields(strings.ReplaceAll(residue, ",", " ")) {
@@ -253,15 +260,22 @@ func parseGate(seg string) (entryGate, bool) {
 func gateProblems(u *plan.Unit, v string) []plan.Problem {
 	var problems []plan.Problem
 	var gates []entryGate
+	var unread []string // names of unreadable segments, left out of the name comparison
 	if !isNone(v) {
 		segs, ok := splitTop(v, ';')
 		if !ok {
-			return []plan.Problem{disagree(u.ID, "%s External gates: unbalanced parentheses", u.ID)}
+			return []plan.Problem{disagree(u.ID, "%s External gates: unbalanced parentheses or backticks", u.ID)}
 		}
 		for _, s := range segs {
+			if strings.TrimSpace(s) == "" {
+				continue
+			}
 			g, ok := parseGate(s)
 			if !ok {
 				problems = append(problems, disagree(u.ID, "%s External gates: cannot read %q as `name` (kind, pin)", u.ID, strings.TrimSpace(s)))
+				if tokens, _ := backticked(s); len(tokens) > 0 {
+					unread = append(unread, tokens[0])
+				}
 				continue
 			}
 			gates = append(gates, g)
@@ -271,9 +285,11 @@ func gateProblems(u *plan.Unit, v string) []plan.Problem {
 	for i, g := range gates {
 		names[i] = g.name
 	}
-	blockNames := make([]string, len(u.Gates))
-	for i, g := range u.Gates {
-		blockNames[i] = g.Name
+	var blockNames []string
+	for _, g := range u.Gates {
+		if !slices.Contains(unread, g.Name) {
+			blockNames = append(blockNames, g.Name)
+		}
 	}
 	problems = append(problems, setProblems(u.ID, "External gates", names, blockNames)...)
 	for _, b := range u.Gates {
