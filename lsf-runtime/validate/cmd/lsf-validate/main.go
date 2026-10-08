@@ -4,7 +4,8 @@
 //	lsf-validate [-decisions PATH] PLAN
 //
 // Without -decisions, a PLAN named <name>-breakdown.md reads the sibling
-// <name>-decisions.md when it exists. Each problem is printed on stdout as
+// <name>-decisions.md unless it does not exist; one that exists but cannot
+// be read is an error. Each problem is printed on stdout as
 // "<kind> [<referent>]: <statement>". Exit status: 0 with no problems, 1
 // with problems, 2 on a usage or I/O error.
 package main

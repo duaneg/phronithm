@@ -130,7 +130,16 @@ func compareUnit(e *entry, u *plan.Unit) []plan.Problem {
 	return problems
 }
 
-func isNone(v string) bool { return strings.EqualFold(strings.TrimSpace(v), "none") }
+// isNone reports a value of `none`, optionally followed by a parenthesised
+// reason and a full stop.
+func isNone(v string) bool {
+	v = strings.TrimSpace(v)
+	if len(v) < 4 || !strings.EqualFold(v[:4], "none") {
+		return false
+	}
+	rest := strings.TrimSuffix(strings.TrimSpace(v[4:]), ".")
+	return rest == "" || (rest[0] == '(' && rest[len(rest)-1] == ')')
+}
 
 // parseDepends reads a Depends-on value: `none`, or `;`-separated groups
 // of comma-separated unit ids, each group optionally followed by a
@@ -165,6 +174,7 @@ func parseScope(v string) (keys []string, err string) {
 		return nil, "unbalanced parentheses or backticks"
 	}
 	tokens, residue := backticked(bare)
+	residue = strings.TrimSuffix(strings.TrimSpace(residue), ".")
 	for _, w := range strings.Fields(strings.ReplaceAll(residue, ",", " ")) {
 		if w != "and" {
 			return nil, fmt.Sprintf("%q is outside backticks", w)

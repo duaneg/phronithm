@@ -178,9 +178,11 @@ func parseEntries(lines []line) []*entry {
 	return entries
 }
 
+// firstToken returns a heading's unit id: its first word, without
+// backticks or a trailing colon.
 func firstToken(s string) string {
 	if f := strings.Fields(s); len(f) > 0 {
-		return f[0]
+		return strings.Trim(strings.TrimSuffix(f[0], ":"), "`")
 	}
 	return ""
 }
