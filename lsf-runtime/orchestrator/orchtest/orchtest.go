@@ -321,6 +321,14 @@ func (s *Stub) RemoveWorktree(ctx context.Context, label, integration string, de
 	return lsfrt.WorktreeRemoval{Label: label, Kept: "absent"}, nil
 }
 
+// MergeClone fails: the stub has no repository.
+func (s *Stub) MergeClone(ctx context.Context, name string) (string, error) {
+	return "", fmt.Errorf("orchtest: no merge clone for %s", name)
+}
+
+// RemoveMergeClone has nothing to remove.
+func (s *Stub) RemoveMergeClone(ctx context.Context, name string) error { return nil }
+
 // Parallel runs the thunks in order, or on goroutines when Concurrent. A
 // branch's panic or non-stop error leaves its slot nil; a panic is a
 // harness failure unless ExpectPanic. The first stop is returned after all

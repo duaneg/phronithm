@@ -42,6 +42,13 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 		return CallResult{}, rt.setStop(StopDryRun, o.Label)
 	}
 
+	// A discarded clone goes whatever the call's end; afterCall removes it
+	// on a return, this on a stop.
+	defer func() {
+		if c.placed && c.place.kind == CloneDiscarded {
+			rt.discard(o.Label, c.place)
+		}
+	}()
 	res := &c.res
 	var retried, transient, waits int // shared invalid/skill-missing retry; transient retries; session-limit waits
 	for {

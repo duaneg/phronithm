@@ -23,8 +23,9 @@ import (
 // returns the first stop after every branch finishes. Step journals a code
 // step (lsfrt.Runtime.Step). Repo is the main checkout ("" when there is
 // none); Worktree is a code step's own worktree and its branch;
-// RemoveWorktree removes a label's merged worktree; RunGates runs declared
-// gates on a clean checkout (lsfrt.Runtime).
+// RemoveWorktree removes a label's merged clone or worktree; MergeClone is
+// a wave's merge clone, made or reused, and RemoveMergeClone removes it;
+// RunGates runs declared gates on a clean checkout (lsfrt.Runtime).
 type Runtime interface {
 	Call(ctx context.Context, prompt string, o lsfrt.Opts) (lsfrt.CallResult, error)
 	Parallel(ctx context.Context, thunks []func(context.Context) (json.RawMessage, error)) ([]json.RawMessage, error)
@@ -32,6 +33,8 @@ type Runtime interface {
 	Repo() string
 	Worktree(ctx context.Context, label string) (path, branch string, err error)
 	RemoveWorktree(ctx context.Context, label, integration string, deleteBranch bool) (lsfrt.WorktreeRemoval, error)
+	MergeClone(ctx context.Context, name string) (string, error)
+	RemoveMergeClone(ctx context.Context, name string) error
 	RunGates(ctx context.Context, label, commit, setup string, gates []lsfrt.GateSpec) ([]lsfrt.GateRun, error)
 	Log(msg string)
 	Args() json.RawMessage

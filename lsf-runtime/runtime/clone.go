@@ -40,10 +40,10 @@ type placement struct {
 }
 
 // configCopied are the config keys a clone takes from the main repo's
-// effective config (local or global): the identity, so a commit made in the
-// clone is attributed as one made in the main checkout, and the line-ending
-// normalisation, so the work tree matches.
-var configCopied = []string{"user.name", "user.email", "core.autocrlf", "core.eol", "core.safecrlf"}
+// effective config (local or global): the identity and signing, so a commit
+// made in the clone is attributed and signed as one made in the main
+// checkout, and the line-ending normalisation, so the work tree matches.
+var configCopied = []string{"user.name", "user.email", "core.autocrlf", "core.eol", "core.safecrlf", "commit.gpgsign", "tag.gpgsign", "user.signingkey", "gpg.format"}
 
 // usesClone reports whether a call with these options and role runs in a
 // clone the runtime makes.
@@ -138,6 +138,13 @@ func (rt *Runtime) reuseClone(ctx context.Context, label string, p placement, in
 		case err == nil:
 		case exitStatus(err) == 1:
 			head, _ := gitStdout(ctx, p.dir, "rev-parse", "HEAD")
+			// Only a clone whose HEAD came back, with nothing uncommitted,
+			// may go: a failed fetch-back or a null's dirt would be lost.
+			fetched, _ := gitStdout(ctx, rt.cfg.Repo, "rev-parse", "-q", "--verify", "refs/heads/"+p.dest)
+			dirt, derr := gitStdout(ctx, p.dir, "status", "--porcelain", "--untracked-files=normal")
+			if strings.TrimSpace(string(head)) != strings.TrimSpace(string(fetched)) || derr != nil || len(dirt) > 0 {
+				return false, fmt.Errorf("%s is stale (%s moved since) but holds commits not fetched to %s or uncommitted changes; recover them, remove it and relaunch", p.dir, integration, p.dest)
+			}
 			rt.Log(fmt.Sprintf("%s: clone %s is stale (%s moved since); recreated, abandoning its HEAD %s", label, p.dir, integration, strings.TrimSpace(string(head))))
 			rt.event("clone-stale", map[string]any{"label": label, "path": p.dir, "head": strings.TrimSpace(string(head))})
 			return true, os.RemoveAll(p.dir)
@@ -268,7 +275,9 @@ func (rt *Runtime) copyRepoSetup(ctx context.Context, dir string) error {
 	return nil
 }
 
-// copyHooks copies src's hooks, not the *.sample files, keeping their modes.
+// copyHooks copies src's hooks recursively (a hook may source a sibling
+// in a subdirectory, as husky's do), not the *.sample files, keeping
+// modes. Symlinks are followed.
 func copyHooks(src, dst string) error {
 	entries, err := os.ReadDir(src)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -284,11 +293,17 @@ func copyHooks(src, dst string) error {
 		if strings.HasSuffix(e.Name(), ".sample") {
 			continue
 		}
-		fi, err := os.Stat(filepath.Join(src, e.Name()))
-		if err != nil || !fi.Mode().IsRegular() {
+		s, d := filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())
+		fi, err := os.Stat(s)
+		switch {
+		case err != nil:
 			continue
+		case fi.IsDir():
+			err = copyHooks(s, d)
+		case fi.Mode().IsRegular():
+			err = copyFile(s, d, fi.Mode().Perm())
 		}
-		if err := copyFile(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()), fi.Mode().Perm()); err != nil {
+		if err != nil {
 			return err
 		}
 	}

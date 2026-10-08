@@ -304,7 +304,9 @@ func gitRun(ctx context.Context, dir string, args ...string) error {
 }
 
 func gitCmd(ctx context.Context, dir string, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "git", args...)
+	// An agent can write its clone's config: no fsmonitor command runs
+	// under the runtime's git.
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-c", "core.fsmonitor=false"}, args...)...)
 	cmd.Dir = dir
 	cmd.Env = append(scrubbedEnv(), "GIT_TERMINAL_PROMPT=0")
 	return cmd

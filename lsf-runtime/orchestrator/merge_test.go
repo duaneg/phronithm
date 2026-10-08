@@ -29,12 +29,27 @@ type mergeFixture struct {
 	r    *gitRepo
 	shas map[string]string
 	arch string
+	wt   string // the gitRT root every launch over the fixture shares
+}
+
+// mc is the wave's merge clone, made by the step (or makeClone); its
+// directory may not exist.
+func (f *mergeFixture) mc() *gitRepo { return &gitRepo{f.r.t, filepath.Join(f.wt, "merge", "w1")} }
+
+// makeClone makes the merge clone as the step would, for a test that
+// builds the state a killed step leaves in it.
+func (f *mergeFixture) makeClone() *gitRepo {
+	f.r.t.Helper()
+	if err := mergeCloneAt(f.r.dir, f.mc().dir); err != nil {
+		f.r.t.Fatal(err)
+	}
+	return f.mc()
 }
 
 func newMergeFixture(t *testing.T, files map[string]map[string]string, ids ...string) *mergeFixture {
 	t.Helper()
 	r := newGitRepo(t)
-	f := &mergeFixture{r: r, shas: map[string]string{}}
+	f := &mergeFixture{r: r, shas: map[string]string{}, wt: t.TempDir()}
 	f.arch = r.commit(mArch, "# Architecture\n", "architecture")
 	units := []*plan.Unit{}
 	for _, id := range ids {
@@ -67,7 +82,7 @@ func (f *mergeFixture) in(ids ...string) mergeInput {
 func mergeOrch(t *testing.T, f *mergeFixture, g gitRunner, h map[string]orchtest.Handler) *orch {
 	t.Helper()
 	s := orchtest.New(t, orchtest.TwoWaves(), h, nil)
-	o := newOrch(gitRT{s, f.r.dir, nil, t.TempDir()}, runCtxFor(t, nil), nil)
+	o := newOrch(gitRT{s, f.r.dir, nil, f.wt}, runCtxFor(t, nil), nil)
 	if g != nil {
 		o.git = g
 	}
@@ -147,8 +162,8 @@ func TestMergeConflictResolved(t *testing.T) {
 	var prompt string
 	o := mergeOrch(t, f, nil, map[string]orchtest.Handler{"merge-conflict": func(c orchtest.Call, _ *orchtest.State) any {
 		prompt = c.Prompt
-		f.r.write("shared.txt", "from A\nfrom B\n")
-		f.r.git("add", "shared.txt")
+		f.mc().write("shared.txt", "from A\nfrom B\n")
+		f.mc().git("add", "shared.txt")
 		return R(M{"status": "resolved", "files": []string{"shared.txt"}, "statement": "both lines kept"})
 	}})
 	res, err := runMerge(t, o, f.in("A", "B"), false)
@@ -187,8 +202,8 @@ func TestMergeConflictNotAccepted(t *testing.T) {
 			f := newMergeFixture(t, conflicting, "A", "B", "C")
 			resolve := func(extra func()) orchtest.Handler {
 				return func(orchtest.Call, *orchtest.State) any {
-					f.r.write("shared.txt", "from A\nfrom B\n")
-					f.r.git("add", "shared.txt")
+					f.mc().write("shared.txt", "from A\nfrom B\n")
+					f.mc().git("add", "shared.txt")
 					extra()
 					return R(M{"status": "resolved", "files": []string{"shared.txt"}, "statement": "s"})
 				}
@@ -196,12 +211,12 @@ func TestMergeConflictNotAccepted(t *testing.T) {
 			switch name {
 			case "markers staged":
 				h = func(orchtest.Call, *orchtest.State) any {
-					f.r.git("add", "shared.txt")
+					f.mc().git("add", "shared.txt")
 					return R(M{"status": "resolved", "files": []string{"shared.txt"}, "statement": "s"})
 				}
 			case "a clean path rewritten":
 				// src/b2.go merged clean; the call stages other content.
-				h = resolve(func() { f.r.write("src/b2.go", "tampered\n"); f.r.git("add", "src/b2.go") })
+				h = resolve(func() { f.mc().write("src/b2.go", "tampered\n"); f.mc().git("add", "src/b2.go") })
 			}
 			f.r.write("notes.txt", "requester's\n")
 			res, err := runMerge(t, mergeOrch(t, f, nil, map[string]orchtest.Handler{"merge-conflict": h}), f.in("A", "B", "C"), false)
@@ -224,8 +239,8 @@ func TestMergeConflictCallCommits(t *testing.T) {
 	both := map[string]map[string]string{"A": {"shared.txt": "from A\n"}, "B": {"shared.txt": "from B\n"}}
 	f := newMergeFixture(t, both, "A", "B")
 	o := mergeOrch(t, f, nil, map[string]orchtest.Handler{"merge-conflict": func(orchtest.Call, *orchtest.State) any {
-		f.r.write("shared.txt", "x\n")
-		f.r.git("commit", "-q", "-am", "agent's own commit")
+		f.mc().write("shared.txt", "x\n")
+		f.mc().git("commit", "-q", "-am", "agent's own commit")
 		return R(M{"status": "resolved", "files": []string{"shared.txt"}, "statement": "s"})
 	}})
 	_, err := runMerge(t, o, f.in("A", "B"), false)
@@ -235,18 +250,56 @@ func TestMergeConflictCallCommits(t *testing.T) {
 	}
 }
 
-// A merge git refuses over the requester's untracked file is unresolvable,
-// the file untouched.
-func TestMergeRefusedOverLocalChanges(t *testing.T) {
+// The requester's untracked file in a merge's way in the main checkout: the
+// merge is made in the merge clone, and git refuses the fast-forward over
+// the file, a fault; the file is untouched, the integration branch
+// unmoved, and the merge waits in the clone for the relaunch to adopt.
+func TestMergeRequesterFileAtFastForward(t *testing.T) {
 	f := newMergeFixture(t, distinct, "A", "B")
+	pre := f.r.head()
 	f.r.write("src/a.go", "requester's draft\n")
-	res, err := runMerge(t, mergeOrch(t, f, nil, nil), f.in("A", "B"), false)
+	o := mergeOrch(t, f, nil, nil)
+	_, err := runMerge(t, o, f.in("A", "B"), false)
+	errMatch(t, err, `(?s)git refused to fast-forward integration to [0-9a-f]{40}.*\tsrc/a\.go`)
+	eq(t, f.r.read("src/a.go"), "requester's draft\n")
+	eq(t, f.r.head(), pre, "nothing fast-forwarded")
+	merged := f.mc().head()
+	os.Remove(filepath.Join(f.r.dir, "src/a.go"))
+	res, err := runMerge(t, o, f.in("A", "B"), true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	eq(t, statuses(res), "A=unresolvable B=clean")
-	eqs(t, res.Merges[0].Files, []string{"src/a.go"})
-	eq(t, f.r.read("src/a.go"), "requester's draft\n")
+	eq(t, statuses(res), "A=clean B=clean")
+	eq(t, res.Merges[0].Sha, merged, "the clone's merge adopted")
+}
+
+// A requester's tracked edit in the main checkout stops the step before
+// the first merge; one made while the step runs (here, during a conflict
+// call) stops it at the next fast-forward, with the merge kept in the
+// clone.
+func TestMergeRequesterEditInMain(t *testing.T) {
+	f := newMergeFixture(t, distinct, "A")
+	f.r.write("README.md", "requester's edit\n")
+	_, err := runMerge(t, mergeOrch(t, f, nil, nil), f.in("A"), false)
+	errMatch(t, err, `the main checkout has uncommitted changes to \["README\.md"\]`)
+	if _, statErr := os.Stat(f.mc().dir); statErr == nil {
+		t.Error("a merge clone was made")
+	}
+
+	both := map[string]map[string]string{"A": {"shared.txt": "from A\n"}, "B": {"shared.txt": "from B\n"}}
+	g := newMergeFixture(t, both, "A", "B")
+	o := mergeOrch(t, g, nil, map[string]orchtest.Handler{"merge-conflict": func(orchtest.Call, *orchtest.State) any {
+		g.r.write("README.md", "edited meanwhile\n")
+		g.mc().write("shared.txt", "from A\nfrom B\n")
+		g.mc().git("add", "shared.txt")
+		return R(M{"status": "resolved", "files": []string{"shared.txt"}, "statement": "s"})
+	}})
+	afterA := ""
+	_, err = runMerge(t, o, g.in("A", "B"), false)
+	errMatch(t, err, `the main checkout has uncommitted changes to \["README\.md"\]`)
+	afterA = g.r.head()
+	eq(t, g.r.git("log", "-1", "--format=%(trailers:key=Lsf-Unit,valueonly)", afterA), "A", "A fast-forwarded before the edit")
+	eq(t, g.mc().git("log", "-1", "--format=%(trailers:key=Lsf-Unit,valueonly)"), "B", "B's merge kept in the clone")
 }
 
 // Faults before anything merges: staged changes, a merge in progress the
@@ -258,7 +311,7 @@ func TestMergeFaultsBeforeMerging(t *testing.T) {
 		setup func(f *mergeFixture)
 		want  string
 	}{
-		{"staged", func(f *mergeFixture) { f.r.write("README.md", "x\n"); f.r.git("add", "README.md") }, `README\.md is staged in the main checkout`},
+		{"staged", func(f *mergeFixture) { f.r.write("README.md", "x\n"); f.r.git("add", "README.md") }, `the main checkout has uncommitted changes to \["README\.md"\]`},
 		{"foreign merge in progress", func(f *mergeFixture) {
 			f.r.git("checkout", "-q", "-b", "other", "integration~1")
 			f.r.commit(mPlan, "other\n", "other")
@@ -266,7 +319,15 @@ func TestMergeFaultsBeforeMerging(t *testing.T) {
 			cmd := exec.Command("git", "merge", "other")
 			cmd.Dir = f.r.dir
 			cmd.Run()
-		}, `a merge is in progress in the main checkout that this stage did not start`},
+		}, `the main checkout has uncommitted changes`},
+		{"foreign merge in progress in the merge clone", func(f *mergeFixture) {
+			f.r.git("checkout", "-q", "-b", "other", "integration~1")
+			f.r.commit(mPlan, "other\n", "other")
+			f.r.git("checkout", "-q", "integration")
+			cmd := exec.Command("git", "merge", "other")
+			cmd.Dir = f.makeClone().dir
+			cmd.Run()
+		}, `a merge is in progress in the merge clone .* that this stage did not start`},
 		{"already in integration", func(f *mergeFixture) { f.r.git("merge", "-q", "--no-ff", "-m", "by hand", "report-A") }, `is already in HEAD, merged outside this stage`},
 		{"merged before under another commit", func(f *mergeFixture) {
 			f.r.git("merge", "-q", "--no-ff", "-m", "merge(f): A\n\nLsf-Step: merge:w1\nLsf-Unit: A\nLsf-Merge: clean", "report-B")
@@ -304,7 +365,7 @@ func TestMergeHookStaging(t *testing.T) {
 	g.r.write("README.md", "altered\n")
 	g.r.git("add", "README.md")
 	g.r.git("commit", "-q", "-m", mergeMessage(g.in("A"), "merge:w1", "A", "clean", nil))
-	_, _, err = mergeGit{gitOps{execGit{}}, g.r.dir}.verifyMerge(context.Background(), g.r.head(), pre, g.shas["A"], "merge:w1", "A")
+	_, _, err = mergeGit{gitOps: gitOps{execGit{}}, dir: g.r.dir}.verifyMerge(context.Background(), g.r.head(), pre, g.shas["A"], "merge:w1", "A")
 	errMatch(t, err, `fails verification: its tree is not git's merge`)
 }
 
@@ -342,6 +403,31 @@ func TestMergeBookkeepingInjections(t *testing.T) {
 	eq(t, f.r.git("rev-list", "--count", merged+"..HEAD"), "1", "one bookkeeping commit")
 }
 
+// A commit in the merge clone past the main repo's tip that the step did
+// not make (here, one a conflict call might have made) is a fault naming
+// it, before anything merges; one behind is reset.
+func TestMergeCloneSync(t *testing.T) {
+	f := newMergeFixture(t, distinct, "A")
+	c := f.makeClone()
+	c.commit("stray.txt", "x\n", "not the step's")
+	stray := c.head()
+	_, err := runMerge(t, mergeOrch(t, f, nil, nil), f.in("A"), true)
+	errMatch(t, err, `holds `+stray+`, which is not this step's merge or bookkeeping; remove .* and relaunch`)
+
+	g := newMergeFixture(t, distinct, "A")
+	g.makeClone()
+	g.r.commit("README.md", "moved\n", "requester's commit") // main ahead of the clone
+	res, err := runMerge(t, mergeOrch(t, g, nil, nil), g.in("A"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, statuses(res), "A=clean")
+	eq(t, g.r.git("show", res.Merges[0].Sha+":README.md"), "moved", "merged onto main's tip")
+}
+
+// isMerge matches the step's own merge in the clone, not a fast-forward.
+func isMerge(a []string) bool { return len(a) > 1 && a[0] == "merge" && a[1] == "--no-ff" }
+
 // failNth fails the nth git command match accepts, without running it, as
 // a kill would leave it.
 type failNth struct {
@@ -376,7 +462,7 @@ func argIs(i int, v string) func([]string) bool {
 func TestMergeResume(t *testing.T) {
 	t.Run("second merge killed", func(t *testing.T) {
 		f := newMergeFixture(t, distinct, "A", "B")
-		_, err := runMerge(t, mergeOrch(t, f, &failNth{inner: execGit{}, match: argIs(0, "merge"), n: 2}, nil), f.in("A", "B"), false)
+		_, err := runMerge(t, mergeOrch(t, f, &failNth{inner: execGit{}, match: isMerge, n: 2}, nil), f.in("A", "B"), false)
 		errMatch(t, err, `killed`)
 		first := f.r.head()
 		res, err := runMerge(t, mergeOrch(t, f, nil, nil), f.in("A", "B"), true)
@@ -409,7 +495,7 @@ func TestMergeResume(t *testing.T) {
 		// (none before it); failing it is the step dying after the commit.
 		_, err := runMerge(t, mergeOrch(t, f, &failNth{inner: execGit{}, match: argIs(0, "reset"), n: 1}, nil), f.in("A"), false)
 		errMatch(t, err, `killed`)
-		head := f.r.head()
+		head := f.mc().head() // the commit is in the clone, not yet fast-forwarded
 		res, err := runMerge(t, mergeOrch(t, f, nil, nil), f.in("A"), true)
 		if err != nil {
 			t.Fatal(err)
@@ -425,25 +511,42 @@ func TestMergeResume(t *testing.T) {
 			calls++ // a replay of the journaled call: the resolution is staged already
 			return R(M{"status": "resolved", "files": []string{"shared.txt"}, "statement": "s"})
 		}}
-		// The state a kill leaves after A's merge and B's staged resolution:
-		// a real kill runs no abort, so it is built here as the step would.
+		// The state a kill leaves in the merge clone after A's merge (not
+		// yet fast-forwarded) and B's staged resolution, its conflict call
+		// pending: a real kill runs no abort, so it is built here as the
+		// step would. The resume runs in the clone, adopts A's merge by its
+		// trailers and fast-forwards to it, then completes B.
 		in := f.in("A", "B")
-		f.r.git("merge", "-q", "--no-ff", "-m", mergeMessage(in, "merge:w1", "A", "clean", nil), f.shas["A"])
+		pre := f.r.head()
+		c := f.makeClone()
+		c.git("merge", "-q", "--no-ff", "-m", mergeMessage(in, "merge:w1", "A", "clean", nil), f.shas["A"])
+		mergeA := c.head()
 		cmd := exec.Command("git", "merge", "--no-ff", "-m", mergeMessage(in, "merge:w1", "B", "clean", nil), f.shas["B"])
-		cmd.Dir = f.r.dir
+		cmd.Dir = c.dir
 		cmd.Run()
-		f.r.write("shared.txt", "from A\nfrom B\n")
-		f.r.git("add", "shared.txt")
-		if !f.r.mergeInProgress() {
-			t.Fatal("no merge in progress")
+		c.write("shared.txt", "from A\nfrom B\n")
+		c.git("add", "shared.txt")
+		if !c.mergeInProgress() || f.r.head() != pre {
+			t.Fatal("no merge in progress in the clone, or main moved")
+		}
+		var cwd string
+		h["merge-conflict"] = func(call orchtest.Call, _ *orchtest.State) any {
+			calls++
+			cwd = call.Opts.Dir
+			return R(M{"status": "resolved", "files": []string{"shared.txt"}, "statement": "s"})
 		}
 		res, err := runMerge(t, mergeOrch(t, f, nil, h), in, true)
 		if err != nil {
 			t.Fatal(err)
 		}
 		eq(t, statuses(res), "A=clean B=resolved")
+		eq(t, res.Merges[0].Sha, mergeA, "A's merge adopted from the clone")
 		eq(t, calls, 1)
+		eq(t, cwd, c.dir, "the conflict call ran in the merge clone")
 		eq(t, f.r.git("show", "HEAD~1:shared.txt"), "from A\nfrom B")
+		if _, err := os.Stat(c.dir); err == nil {
+			t.Error("the merge clone outlived the step")
+		}
 	})
 	t.Run("a replayed resolution that is gone", func(t *testing.T) {
 		both := map[string]map[string]string{"A": {"shared.txt": "from A\n"}, "B": {"shared.txt": "from B\n"}}
@@ -456,8 +559,8 @@ func TestMergeResume(t *testing.T) {
 				b, _ := plan.MarshalJS(v, "")
 				return lsfrt.CallResult{Value: b, Replayed: true}
 			}
-			f.r.write("shared.txt", "from A\nfrom B\n")
-			f.r.git("add", "shared.txt")
+			f.mc().write("shared.txt", "from A\nfrom B\n")
+			f.mc().git("add", "shared.txt")
 			return v
 		}}
 		res, err := runMerge(t, mergeOrch(t, f, nil, h), f.in("A", "B"), false)
@@ -526,10 +629,9 @@ func (r *gitRepo) commitOn(branch, path string) string {
 	return sha
 }
 
-// A conflict call that touches the checkout beyond the merge (stages or
-// writes another path, deletes or reverts the requester's work) is a
-// fault naming the paths, with the merge aborted: not a resolution to
-// decline quietly.
+// A conflict call that touches the merge clone beyond the merge (stages,
+// writes, changes or deletes another path) is a fault naming the paths,
+// with the merge aborted: not a resolution to decline quietly.
 func TestMergeConflictCallOutside(t *testing.T) {
 	both := map[string]map[string]string{"A": {"shared.txt": "from A\n"}, "B": {"shared.txt": "from B\n"}}
 	for name, tc := range map[string]struct {
@@ -538,24 +640,20 @@ func TestMergeConflictCallOutside(t *testing.T) {
 	}{
 		"another path staged":    {func(r *gitRepo) { r.write("README.md", "changed\n"); r.git("add", "README.md") }, `\["README\.md"\]`},
 		"a new untracked file":   {func(r *gitRepo) { r.write("scratch.txt", "x\n") }, `\["scratch\.txt"\]`},
-		"the requester's file":   {func(r *gitRepo) { os.Remove(filepath.Join(r.dir, "notes.txt")) }, `\["notes\.txt"\]`},
-		"the requester's change": {func(r *gitRepo) { r.git("checkout", "--", "README.md") }, `\["README\.md"\]`},
+		"a tracked file changed": {func(r *gitRepo) { r.write("README.md", "changed\n") }, `\["README\.md"\]`},
+		"a tracked file deleted": {func(r *gitRepo) { os.Remove(filepath.Join(r.dir, "README.md")) }, `\["README\.md"\]`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newMergeFixture(t, both, "A", "B")
-			f.r.write("notes.txt", "requester's\n")
-			if name == "the requester's change" {
-				f.r.write("README.md", "requester's edit\n")
-			}
 			o := mergeOrch(t, f, nil, map[string]orchtest.Handler{"merge-conflict": func(orchtest.Call, *orchtest.State) any {
-				f.r.write("shared.txt", "from A\nfrom B\n")
-				f.r.git("add", "shared.txt")
-				tc.act(f.r)
+				f.mc().write("shared.txt", "from A\nfrom B\n")
+				f.mc().git("add", "shared.txt")
+				tc.act(f.mc())
 				return R(M{"status": "resolved", "files": []string{"shared.txt"}, "statement": "s"})
 			}})
 			_, err := runMerge(t, o, f.in("A", "B"), false)
 			errMatch(t, err, `the conflict call changed `+tc.want+`, outside the merge of B`)
-			if f.r.mergeInProgress() {
+			if f.mc().mergeInProgress() {
 				t.Error("merge in progress")
 			}
 		})
@@ -590,11 +688,11 @@ func TestMergeInterruptedEdges(t *testing.T) {
 	f.r.commit(mPlan, "other\n", "other")
 	f.r.git("checkout", "-q", "integration")
 	cmd := exec.Command("git", "merge", "other")
-	cmd.Dir = f.r.dir
+	cmd.Dir = f.makeClone().dir
 	cmd.Run()
 	_, err := runMerge(t, mergeOrch(t, f, nil, nil), f.in("A"), true)
-	errMatch(t, err, `a merge is in progress in the main checkout that this stage did not start`)
-	if !f.r.mergeInProgress() {
+	errMatch(t, err, `a merge is in progress in the merge clone .* that this stage did not start`)
+	if !f.mc().mergeInProgress() {
 		t.Error("the foreign merge was aborted")
 	}
 
@@ -608,20 +706,28 @@ func TestMergeInterruptedEdges(t *testing.T) {
 	errMatch(t, err, `fails verification: its tree is not git's merge`)
 	eq(t, g.r.git("rev-list", "--first-parent", "--count", pre+"..HEAD"), "1", "not adopted, nothing more committed")
 
-	h := newMergeFixture(t, distinct, "A", "B")
-	h.r.write("src/b.go", "requester's\n") // B is refused this time
-	o := mergeOrch(t, h, nil, nil)
+	both := map[string]map[string]string{"A": {"src/a.go": "a\n"}, "B": {"README.md": "from B\n"}}
+	h := newMergeFixture(t, both, "A", "B")
+	h.r.commit("README.md", "base\n", "base") // B now conflicts
+	calls := 0
+	o := mergeOrch(t, h, nil, map[string]orchtest.Handler{"merge-conflict": func(orchtest.Call, *orchtest.State) any {
+		if calls++; calls == 1 { // B is unresolvable this time
+			return R(M{"status": "unresolvable", "files": []string{"README.md"}, "statement": "no"})
+		}
+		h.mc().write("README.md", "base\nfrom B\n")
+		h.mc().git("add", "README.md")
+		return R(M{"status": "resolved", "files": []string{"README.md"}, "statement": "s"})
+	}})
 	first, err := runMerge(t, o, h.in("A", "B"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	eq(t, statuses(first), "A=clean B=unresolvable")
-	os.Remove(filepath.Join(h.r.dir, "src/b.go"))
 	second, err := runMerge(t, o, h.in("A", "B"), true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	eq(t, statuses(second), "A=clean B=clean")
+	eq(t, statuses(second), "A=clean B=resolved")
 	eq(t, strings.Count(h.r.read(mPlan), "### A — complete at"), 1, "A recorded once")
 	contains(t, h.r.read(mPlan), "### B — complete at "+second.Merges[1].Sha)
 }
@@ -631,8 +737,8 @@ func TestMergeConflictNonASCIIPath(t *testing.T) {
 	both := map[string]map[string]string{"A": {"ü s.txt": "from A\n"}, "B": {"ü s.txt": "from B\n"}}
 	f := newMergeFixture(t, both, "A", "B")
 	o := mergeOrch(t, f, nil, map[string]orchtest.Handler{"merge-conflict": func(orchtest.Call, *orchtest.State) any {
-		f.r.write("ü s.txt", "from A\nfrom B\n")
-		f.r.git("add", "ü s.txt")
+		f.mc().write("ü s.txt", "from A\nfrom B\n")
+		f.mc().git("add", "ü s.txt")
 		return R(M{"status": "resolved", "files": []string{"ü s.txt"}, "statement": "s"})
 	}})
 	res, err := runMerge(t, o, f.in("A", "B"), false)
@@ -650,13 +756,14 @@ func TestMergeResumeExtraPath(t *testing.T) {
 	both := map[string]map[string]string{"A": {"shared.txt": "from A\n"}, "B": {"shared.txt": "from B\n"}}
 	f := newMergeFixture(t, both, "A", "B")
 	in := f.in("A", "B")
-	f.r.git("merge", "-q", "--no-ff", "-m", mergeMessage(in, "merge:w1", "A", "clean", nil), f.shas["A"])
+	c := f.makeClone()
+	c.git("merge", "-q", "--no-ff", "-m", mergeMessage(in, "merge:w1", "A", "clean", nil), f.shas["A"])
 	cmd := exec.Command("git", "merge", "--no-ff", "-m", mergeMessage(in, "merge:w1", "B", "clean", nil), f.shas["B"])
-	cmd.Dir = f.r.dir
+	cmd.Dir = c.dir
 	cmd.Run()
-	f.r.write("shared.txt", "from A\nfrom B\n")
-	f.r.write("README.md", "slipped in\n")
-	f.r.git("add", "shared.txt", "README.md")
+	c.write("shared.txt", "from A\nfrom B\n")
+	c.write("README.md", "slipped in\n")
+	c.git("add", "shared.txt", "README.md")
 	h := map[string]orchtest.Handler{"merge-conflict": func(orchtest.Call, *orchtest.State) any {
 		return R(M{"status": "resolved", "files": []string{"shared.txt"}, "statement": "s"})
 	}}
@@ -665,7 +772,7 @@ func TestMergeResumeExtraPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	eq(t, statuses(res), "A=clean B=unresolvable")
-	if f.r.mergeInProgress() {
+	if f.mc().mergeInProgress() {
 		t.Error("merge in progress")
 	}
 }

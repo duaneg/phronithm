@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -94,7 +95,7 @@ func (f *gateFixture) orch(t *testing.T, g gitRunner, h map[string]orchtest.Hand
 			return lsfrt.GateGreen
 		}, gc.Commit[:7]), nil
 	}
-	o := newOrch(journalRT{gitRT{s, f.r.dir, nil, t.TempDir()}, f.j}, runCtxFor(t, nil), nil)
+	o := newOrch(journalRT{gitRT{s, f.r.dir, nil, f.wt}, f.j}, runCtxFor(t, nil), nil)
 	if g != nil {
 		o.git = g
 	}
@@ -143,8 +144,8 @@ var resolveShared = map[string]map[string]string{"A": {"shared.txt": "from A\n"}
 
 func resolveBoth(f *gateFixture) map[string]orchtest.Handler {
 	return map[string]orchtest.Handler{"merge-conflict": func(orchtest.Call, *orchtest.State) any {
-		f.r.write("shared.txt", "from A\nfrom B\n")
-		f.r.git("add", "shared.txt")
+		f.mc().write("shared.txt", "from A\nfrom B\n")
+		f.mc().git("add", "shared.txt")
 		return R(M{"status": "resolved", "files": []string{"shared.txt"}, "statement": "both"})
 	}}
 }
@@ -296,8 +297,8 @@ func TestMergeGatesKillResolved(t *testing.T) {
 			if mergeKilled(t, f.orch(t, g, resolveBoth(f)), f.declared("A", "B")) {
 				t.Fatal("not killed")
 			}
-			if !f.r.mergeInProgress() {
-				t.Fatal("no merge in progress after the kill")
+			if !f.mc().mergeInProgress() {
+				t.Fatal("no merge in progress in the merge clone after the kill")
 			}
 			f.kill = nil
 			calls := 0
@@ -325,8 +326,8 @@ func TestMergeGatesRegressedThenKilled(t *testing.T) {
 	f := newGateFixture(t, files, "A", "B", "C")
 	// B merges cleanly; C conflicts with it and is killed during its gates.
 	h := map[string]orchtest.Handler{"merge-conflict": func(orchtest.Call, *orchtest.State) any {
-		f.r.write("shared.txt", "from B\nfrom C\n")
-		f.r.git("add", "shared.txt")
+		f.mc().write("shared.txt", "from B\nfrom C\n")
+		f.mc().git("add", "shared.txt")
 		return R(M{"status": "resolved", "files": []string{"shared.txt"}, "statement": "both"})
 	}}
 	f.kill = func(orchtest.GateCall) bool { return f.gated() == 3 }
@@ -357,8 +358,8 @@ func TestMergeUnresolvableThenKilled(t *testing.T) {
 		if strings.HasSuffix(c.Label, ":A") {
 			return R(M{"status": "unresolvable", "files": []string{"shared.txt"}, "statement": "no"})
 		}
-		f.r.write("other.txt", "from B\nfrom C\n")
-		f.r.git("add", "other.txt")
+		f.mc().write("other.txt", "from B\nfrom C\n")
+		f.mc().git("add", "other.txt")
 		return R(M{"status": "resolved", "files": []string{"other.txt"}, "statement": "both"})
 	}}
 	if mergeKilled(t, f.orch(t, gitKill{argIs(0, "commit")}, h), in) {
@@ -386,8 +387,11 @@ func TestMergeGatesUngatedCommit(t *testing.T) {
 	eq(t, f.gated(), 1)
 }
 
-// The integration branch moving during the gates: the new merge is gated
-// and committed; moving twice is the step's fault.
+// The main repo's integration branch moving during the gates (a requester
+// commit): the merge, made in the clone, does not fast-forward onto it, a
+// fault; the relaunch's clone sync faults on the divergence until the
+// clone is removed, and then the merge is made and gated again on the new
+// tip.
 func TestMergeGatesHeadMoves(t *testing.T) {
 	files := map[string]map[string]string{"A": {"src/a.go": "a\n"}}
 	f := newGateFixture(t, files, "A")
@@ -397,17 +401,17 @@ func TestMergeGatesHeadMoves(t *testing.T) {
 			f.r.commit("README.md", "moved\n", "requester's commit")
 		}
 	}
-	res, err := runMerge(t, f.orch(t, nil, nil), f.declared("A"), false)
+	_, err := runMerge(t, f.orch(t, nil, nil), f.declared("A"), false)
+	errMatch(t, err, `integration moved to [0-9a-f]{40} while [0-9a-f]{40} was made on an earlier tip`)
+	eq(t, f.gated(), 1)
+	_, err = runMerge(t, f.orch(t, nil, nil), f.declared("A"), true)
+	errMatch(t, err, `have diverged.*; remove .* and relaunch`)
+	os.RemoveAll(f.mc().dir)
+	res, err := runMerge(t, f.orch(t, nil, nil), f.declared("A"), true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	eq(t, statuses(res), "A=clean")
 	eq(t, f.gated(), 2)
-	eq(t, f.r.git("rev-parse", f.runs[1]+"^{tree}"), f.r.git("rev-parse", res.Merges[0].Sha+"^{tree}"))
 	eq(t, f.r.git("show", res.Merges[0].Sha+":README.md"), "moved")
-
-	f = newGateFixture(t, files, "A")
-	f.moved = func() { f.r.commit("README.md", "moved "+f.r.head()+"\n", "again") }
-	_, err = runMerge(t, f.orch(t, nil, nil), f.declared("A"), false)
-	errMatch(t, err, `moved during the gates of A's merge, twice`)
 }

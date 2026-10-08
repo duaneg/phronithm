@@ -254,6 +254,42 @@ func (r gitRT) Worktree(ctx context.Context, label string) (string, string, erro
 	return path, branch, nil
 }
 
+// MergeClone is a clone of the repo at <wtRoot>/merge/<name> on
+// integration, made by mergeCloneAt, or the existing one.
+func (r gitRT) MergeClone(ctx context.Context, name string) (string, error) {
+	dir := filepath.Join(r.wtRoot, "merge", name)
+	if _, err := os.Stat(dir); err == nil {
+		return dir, nil
+	}
+	return dir, mergeCloneAt(r.repo, dir)
+}
+
+// mergeCloneAt makes a clone of repo at dir on integration as the runtime
+// makes one: every branch local, no remote, the test identity, and the
+// repo's hooks (here by core.hooksPath, so a test's later hook change
+// reaches it).
+func mergeCloneAt(repo, dir string) error {
+	for _, args := range [][]string{
+		{"clone", "--no-local", "--no-checkout", "--no-tags", "-q", repo, dir},
+		{"-C", dir, "fetch", "--no-tags", "--update-head-ok", "-q", repo, "+refs/heads/*:refs/heads/*"},
+		{"-C", dir, "checkout", "-q", "integration"},
+		{"-C", dir, "remote", "remove", "origin"},
+		{"-C", dir, "config", "user.name", "t"},
+		{"-C", dir, "config", "user.email", "t@example.invalid"},
+		{"-C", dir, "config", "commit.gpgsign", "false"},
+		{"-C", dir, "config", "core.hooksPath", filepath.Join(repo, ".git", "hooks")},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			return fmt.Errorf("merge clone: git %v: %v %s", args, err, out)
+		}
+	}
+	return nil
+}
+
+func (r gitRT) RemoveMergeClone(ctx context.Context, name string) error {
+	return os.RemoveAll(filepath.Join(r.wtRoot, "merge", name))
+}
+
 func (r gitRT) Step(ctx context.Context, label string, input []byte, fn func(context.Context, bool) (json.RawMessage, error)) (json.RawMessage, error) {
 	if v, ok := r.replayed[label]; ok {
 		return v, nil

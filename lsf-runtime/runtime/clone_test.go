@@ -437,3 +437,30 @@ func TestRemoveCloneKeeps(t *testing.T) {
 		}
 	}
 }
+
+// A hooks directory with a subdirectory is copied whole; a stale repo-call
+// clone with dirt is not removed.
+func TestCloneHooksTreeAndStaleDirt(t *testing.T) {
+	withRepoCallsInClones(t)
+	cfg, _ := testConfig(t)
+	hooks := filepath.Join(cfg.Repo, ".git", "hooks")
+	os.MkdirAll(filepath.Join(hooks, "_"), 0o755)
+	marker := filepath.Join(t.TempDir(), "sourced")
+	os.WriteFile(filepath.Join(hooks, "_", "lib.sh"), []byte("echo ok > '"+marker+"'\n"), 0o644)
+	os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte("#!/bin/sh\n. \"$(dirname \"$0\")/_/lib.sh\"\n"), 0o755)
+	t.Setenv("STUB_SCRIPT", "commit:a.txt")
+	t.Setenv("STUB_DIRTY", "loose.txt")
+	o := Opts{Label: "replan:w1", Schema: json.RawMessage(verdictSchema)}
+	if _, err := call(t, cfg, o); err != nil {
+		t.Fatal(err)
+	}
+	if !exists(marker) {
+		t.Error("the hook's sourced file was not copied")
+	}
+	git(t, cfg.Repo, "commit", "-q", "--allow-empty", "-m", "moved")
+	o.Effort = "high"
+	_, err := call(t, cfg, o)
+	if r, ok := IsStop(err); !ok || r != StopRuntimeError || !exists(filepath.Join(cfg.StateDir, "clone", journalKey(o.Label), "loose.txt")) {
+		t.Errorf("stale dirty clone: %v", err)
+	}
+}

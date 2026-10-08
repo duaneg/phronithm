@@ -16,11 +16,14 @@ import (
 )
 
 // The merge stage as code (D24): each unit's completion-report commit is
-// merged into the integration branch in the main checkout, in plan merge
-// order, a conflict going to a model call that stages a resolution which
-// code commits; then one commit records the bookkeeping (bookkeeping.go).
-// Every commit carries trailers, so an interrupted rerun adopts its own
-// commits instead of merging or recording twice.
+// merged into the integration branch in the wave's merge clone (D29), in
+// plan merge order, a conflict going to a model call that stages a
+// resolution there which code commits; then one commit records the
+// bookkeeping (bookkeeping.go). After each verified commit the main repo
+// fetches it and fast-forwards its integration branch (ff.go). Every commit
+// carries trailers, so an interrupted rerun adopts its own commits instead
+// of merging or recording twice; the merge clone stays until the wave's
+// merges finish, so the rerun finds a merge it left in progress.
 
 // mergeUnitIn is one unit to merge: its completion-report branch and the
 // commit the completion report returned (a journaled value: nothing here
@@ -89,10 +92,25 @@ type mergeFault struct{ reason string }
 
 func (e *mergeFault) Error() string { return e.reason }
 
-// mergeGit is the merge step's git in the main checkout.
+// mergeGit is the merge step's git in the merge clone dir; main is the
+// main checkout, and xfer the main repo's ref a commit crosses by.
 type mergeGit struct {
 	gitOps
-	dir string
+	dir        string
+	main, xfer string
+}
+
+// toMain fetches sha from the merge clone into the main repo as m.xfer, so
+// gates can check it out and the integration branch fast-forward to it.
+func (m mergeGit) toMain(ctx context.Context, sha string) error {
+	if m.main == "" || m.main == m.dir {
+		return nil
+	}
+	if _, err := m.r.run(ctx, m.dir, "update-ref", "refs/lsf/xfer", sha); err != nil {
+		return err
+	}
+	_, err := m.r.run(ctx, m.main, "fetch", "--no-tags", "-q", m.dir, "+refs/lsf/xfer:"+m.xfer)
+	return err
 }
 
 // gitFile is a file under the git dir (MERGE_HEAD, MERGE_MSG), "" when
@@ -294,7 +312,7 @@ func (m mergeGit) ownMergeInProgress(ctx context.Context, label string, units []
 			return i, nil
 		}
 	}
-	return -1, fmt.Errorf("a merge is in progress in the main checkout that this stage did not start (MERGE_HEAD %s); finish or abort it and relaunch", head)
+	return -1, fmt.Errorf("a merge is in progress in the merge clone %s that this stage did not start (MERGE_HEAD %s); remove the clone and relaunch", m.dir, head)
 }
 
 // abortOwn aborts a merge in progress and checks the checkout: no merge in
@@ -480,7 +498,39 @@ func (o *orch) mergeStage(in mergeInput) stageFn {
 		if err != nil {
 			return nil, err
 		}
-		m := mergeGit{g, o.repo}
+		// The main checkout first: a requester edit there stops the step
+		// before any merge, gate or conflict call.
+		if err := o.mainOn(ctx, g, in.IntegrationBranch); err != nil {
+			return nil, err
+		}
+		bookPaths := []string{in.PlanPath, in.ArchivePath}
+		for _, p := range bookPaths {
+			if clean, err := g.pathClean(ctx, o.repo, p); err != nil || !clean {
+				return nil, errors.Join(err, fmt.Errorf("%s has changes in the main checkout; commit or discard them and relaunch", p))
+			}
+		}
+		name := "w" + itoa(in.Wave)
+		dir, err := o.rt.MergeClone(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		m := mergeGit{g, dir, o.repo, "refs/lsf/" + o.ctx.plan8() + "/xfer/" + name}
+		if _, err := g.r.run(ctx, o.repo, "update-ref", "-d", m.xfer); err != nil {
+			return nil, err
+		}
+		if err := o.syncMergeClone(ctx, m, in, label); err != nil {
+			return nil, err
+		}
+		ff := func() error {
+			head, err := m.head(ctx, m.dir)
+			if err == nil {
+				err = m.toMain(ctx, head)
+			}
+			if err == nil {
+				err = o.fastForward(ctx, g, in.IntegrationBranch, m.xfer)
+			}
+			return err
+		}
 		date := o.today()
 		bk := bookIn{Name: in.Name, ArchivePath: in.ArchivePath, LedgerPath: in.LedgerPath, Wave: in.Wave}
 		res := mergeResult{}
@@ -492,13 +542,12 @@ func (o *orch) mergeStage(in mergeInput) stageFn {
 			return nil, err
 		}
 		if ref != "refs/heads/"+in.IntegrationBranch {
-			return nil, fmt.Errorf("the main checkout is not on %s", in.IntegrationBranch)
+			return nil, fmt.Errorf("the merge clone %s is not on %s", m.dir, in.IntegrationBranch)
 		}
 		resume, err := m.ownMergeInProgress(ctx, label, in.Units, interrupted)
 		if err != nil {
 			return nil, err
 		}
-		bookPaths := []string{in.PlanPath, in.ArchivePath}
 		if resume < 0 {
 			staged, err := m.nulList(ctx, "diff", "--cached", "--name-only", "-z", "HEAD")
 			if err != nil {
@@ -506,7 +555,7 @@ func (o *orch) mergeStage(in mergeInput) stageFn {
 			}
 			for _, p := range staged {
 				if !interrupted || !slices.Contains(bookPaths, p) {
-					return nil, fmt.Errorf("%s is staged in the main checkout; a merge would commit it: commit or unstage it and relaunch", p)
+					return nil, fmt.Errorf("%s is staged in the merge clone %s; a merge would commit it: remove the clone and relaunch", p, m.dir)
 				}
 			}
 			for _, p := range bookPaths {
@@ -579,6 +628,9 @@ func (o *orch) mergeStage(in mergeInput) stageFn {
 			res.Merges = append(res.Merges, r.Merge)
 			if r.Status == "clean" || r.Status == "resolved" {
 				merged = append(merged, bookUnit{Unit: u.Unit, Sha: r.Sha, Report: u.Report})
+				if err := ff(); err != nil {
+					return nil, err
+				}
 			}
 		}
 
@@ -586,18 +638,112 @@ func (o *orch) mergeStage(in mergeInput) stageFn {
 			if err := o.bookkeep(ctx, m, in, bk, label, merged, date, interrupted); err != nil {
 				return nil, err
 			}
+			if err := ff(); err != nil {
+				return nil, err
+			}
 		}
-		if res.PlanSha, err = m.head(ctx, m.dir); err != nil {
+		if res.PlanSha, err = m.head(ctx, o.repo); err != nil {
 			return nil, err
 		}
-		if res.ArchitectureSha, err = m.out(ctx, m.dir, "rev-list", "-1", "refs/heads/"+in.IntegrationBranch, "--", in.ArchitectureDoc); err != nil {
+		if res.ArchitectureSha, err = m.out(ctx, o.repo, "rev-list", "-1", "refs/heads/"+in.IntegrationBranch, "--", in.ArchitectureDoc); err != nil {
 			return nil, err
 		}
-		if res.PauseRequested, err = m.pauseRequested(ctx, m.dir, in.PauseRef); err != nil {
+		if res.PauseRequested, err = m.pauseRequested(ctx, o.repo, in.PauseRef); err != nil {
 			return nil, err
+		}
+		// The wave's merges are finished: the clone and the transfer ref go.
+		if err := o.rt.RemoveMergeClone(ctx, name); err != nil {
+			o.rt.Log(fmt.Sprintf("%s: merge clone %s not removed: %v", label, dir, err))
+		}
+		if _, err := g.r.run(ctx, o.repo, "update-ref", "-d", m.xfer); err != nil {
+			o.rt.Log(fmt.Sprintf("%s: %s not deleted: %v", label, m.xfer, err))
 		}
 		return stageValue(res)
 	}
+}
+
+// syncMergeClone brings a reused merge clone's integration branch, c, into
+// line with the main repo's, h, before the step reads it, and refreshes the
+// clone's other branches from the main repo (the units' report branches; a
+// merge in progress is not touched). c ahead of h is a launch that stopped
+// between a commit and its fast-forward: each first-parent commit in h..c
+// must be one this step makes (a merge of a unit in the wave, or the
+// bookkeeping, last), and the merge loop adopts, verifies and gates each by
+// its trailers, fast-forwarding main as it goes. c behind h with no merge
+// in progress holds nothing, and is reset to h. Anything else is a fault.
+func (o *orch) syncMergeClone(ctx context.Context, m mergeGit, in mergeInput, label string) error {
+	ib := "refs/heads/" + in.IntegrationBranch
+	if _, err := m.r.run(ctx, m.dir, "fetch", "--no-tags", "-q", o.repo, "+refs/heads/*:refs/heads/*", "^"+ib); err != nil {
+		return fmt.Errorf("refreshing the merge clone %s: %w", m.dir, err)
+	}
+	if _, err := m.r.run(ctx, m.dir, "fetch", "--no-tags", "-q", o.repo, ib); err != nil {
+		return fmt.Errorf("fetching %s into the merge clone %s: %w", in.IntegrationBranch, m.dir, err)
+	}
+	h, err := m.out(ctx, m.dir, "rev-parse", "FETCH_HEAD")
+	if err != nil {
+		return err
+	}
+	c, err := m.out(ctx, m.dir, "rev-parse", ib)
+	if err != nil {
+		return err
+	}
+	remedy := fmt.Sprintf("; remove %s and relaunch, and the step adopts its merges from %s by their trailers", m.dir, in.IntegrationBranch)
+	if c == h {
+		return nil
+	}
+	if ahead, err := m.status(ctx, m.dir, "merge-base", "--is-ancestor", h, c); err != nil || ahead {
+		if err != nil {
+			return err
+		}
+		list, err := m.out(ctx, m.dir, "rev-list", "--first-parent", "--reverse", "--parents", h+".."+c)
+		if err != nil {
+			return err
+		}
+		lines := strings.Split(list, "\n")
+		for i, line := range lines {
+			f := strings.Fields(line)
+			step, err := m.trailer(ctx, m.dir, f[0], trailerStep)
+			if err != nil {
+				return err
+			}
+			ok := step == label
+			switch {
+			case !ok:
+			case len(f) == 3:
+				unit, err := m.trailer(ctx, m.dir, f[0], trailerUnit)
+				if err != nil {
+					return err
+				}
+				ok = slices.ContainsFunc(in.Units, func(u mergeUnitIn) bool { return u.Unit == unit && u.Sha == f[2] })
+			case len(f) == 2 && i == len(lines)-1:
+				paths, err := m.nulList(ctx, "diff", "--name-only", "-z", "--no-renames", f[1], f[0])
+				if err != nil {
+					return err
+				}
+				ok = !slices.ContainsFunc(paths, func(p string) bool { return p != in.PlanPath && p != in.ArchivePath })
+			default:
+				ok = false
+			}
+			if !ok {
+				return fmt.Errorf("the merge clone's %s holds %s, which is not this step's merge or bookkeeping%s", in.IntegrationBranch, f[0], remedy)
+			}
+		}
+		o.rt.Log(fmt.Sprintf("%s: the merge clone holds %d commit(s) past %s's %s; adopting them", label, len(lines), in.IntegrationBranch, h))
+		return nil
+	}
+	behind, err := m.status(ctx, m.dir, "merge-base", "--is-ancestor", c, h)
+	if err != nil {
+		return err
+	}
+	inProgress, err := m.gitFile(ctx, "MERGE_HEAD")
+	if err != nil {
+		return err
+	}
+	if !behind || inProgress != "" {
+		return fmt.Errorf("the merge clone's %s (%s) and the main repo's (%s) have diverged, or the main repo moved during a merge in progress%s", in.IntegrationBranch, c, h, remedy)
+	}
+	_, err = m.r.run(ctx, m.dir, "reset", "-q", "--hard", h)
+	return err
 }
 
 // bookTexts are the plan and archive at rev.
@@ -749,12 +895,12 @@ func (o *orch) mergeOne(ctx context.Context, m mergeGit, in mergeInput, label st
 	for attempt := 1; attempt <= 2; attempt++ {
 		t := o.ctx.tierFor("default")
 		cr, cl, err := o.agent(ctx, conflictPrompt(o.ctx, in, u, conflicts), lsfrt.Opts{
-			Label: "merge-conflict:w" + itoa(in.Wave) + ":" + u.Unit, Model: t.Model, Effort: t.Effort, Phase: "Merge", Schema: conflictSchema,
+			Label: "merge-conflict:w" + itoa(in.Wave) + ":" + u.Unit, Model: t.Model, Effort: t.Effort, Phase: "Merge", Schema: conflictSchema, Dir: m.dir,
 		})
 		if err != nil {
 			return fail(err)
 		}
-		cr.Uncommitted = nil // the staged resolution is expected; code checks the checkout itself
+		cr.Uncommitted = nil // the call runs in the merge clone as found: code checks it itself
 		v, sigs := o.callSigs(site{at: plan.At{Stage: "merge", Unit: u.Unit, Wave: plan.W(in.Wave)}, writer: false}, cr, cl)
 		res.Signals = append(res.Signals, sigs...)
 		r := decode[conflictResult](o.rt, cl, v)
@@ -874,6 +1020,9 @@ func (o *orch) mergeGates(ctx context.Context, m mergeGit, u mergeUnitIn, pre, t
 	if err != nil {
 		return gateSet{}, fmt.Errorf("the merge of %s: commit-tree for its gates: %w", u.Unit, err)
 	}
+	if err := m.toMain(ctx, cand); err != nil {
+		return gateSet{}, fmt.Errorf("the merge of %s: its candidate to the main repo for its gates: %w", u.Unit, err)
+	}
 	set, fault, err := o.gates(ctx, cand)
 	if err != nil {
 		return gateSet{}, err
@@ -900,6 +1049,9 @@ func (o *orch) gatedMerge(ctx context.Context, m mergeGit, in mergeInput, u merg
 	}
 	if set, ok := o.reusable(ctx, m, u, tree); ok && len(set.failed()) == 0 {
 		return nil
+	}
+	if err := m.toMain(ctx, commit); err != nil {
+		return fmt.Errorf("merge commit %s of %s to the main repo for its gates: %w", commit, u.Unit, err)
 	}
 	set, fault, err := o.gates(ctx, commit)
 	switch {
