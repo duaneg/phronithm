@@ -172,7 +172,7 @@
 //   - D24. The merge is a journaled code step (merge.go), not an agent: it
 //     merges each unit's completion-report commit (the report step's journaled
 //     SHA, so a replay needs no branch) into the integration branch in the
-//     main checkout, with a merge commit carrying Lsf-Step, Lsf-Unit and
+//     wave's merge clone (D29), with a merge commit carrying Lsf-Step, Lsf-Unit and
 //     Lsf-Merge trailers (Lsf-Conflict per resolved path). A conflict goes to
 //     a model call (merge-conflict:w<n>:<unit>, default tier) that may only
 //     edit and stage; the step accepts the resolution only with no unmerged
@@ -209,11 +209,11 @@
 //     (journal/merge_w<n>-*.json) is removed. A seed for the label is ignored
 //     (D18). JS's merge agent reports what it likes.
 //   - D25. Cleanup is a journaled code step (cleanup.go), run beside the wave
-//     gate. Its input is each merged unit's worktree labels from the run of
-//     its stages that merged (noteWorktree: every isolated call made or
-//     replayed, not a seeded one, whose worktree is an earlier launch's, and
-//     the completion-report step, sorted so a relaunch's input is the same).
-//     Each worktree is removed with every untracked, ignored and uncommitted
+//     gate. Its input is each merged unit's clone and worktree labels from the
+//     run of its stages that merged (noteWorktree: every isolated call made or
+//     replayed whose clone is not discarded, not a seeded one, whose clone is
+//     an earlier launch's, and the completion-report step's worktree, sorted
+//     so a relaunch's input is the same). Each clone or worktree is removed with every untracked, ignored and uncommitted
 //     file in it (lsfrt.Runtime.RemoveWorktree, which keeps one whose branch
 //     is not merged or that is not the runtime's), and its branch is deleted:
 //     the unit is complete, and its replay reads the tips the checks journaled
@@ -226,7 +226,7 @@
 //     paths: the worktrees, and their dirt, are gone. A failed removal is not
 //     retried.
 //
-// D26 and D27 are unit declared-gates'.
+// D26 and D27 are unit declared-gates'; D28 to D30 are unit s2-clones'.
 //
 //   - D26. With declared gates a merge is gated before it is committed, so a
 //     regressed merge committed nothing: the wave rewrites the
@@ -279,4 +279,40 @@
 //     it changes becomes the baseline: a requester's change to the block is
 //     made by decision, and only the wave re-plan's prompt forbids editing it. JS has none of this; an undeclared
 //     plan's prompts and steps are unchanged (promptparity).
+//   - D28. Every agent call runs in its own clone under the state dir
+//     (lsfrt: clone.go), as docs/design/lsf-runtime.md Permissions →
+//     Placement assigns it: a role's clone is kept (fetched back to
+//     lsf/<plan8>/<key> after each return) or discarded (removed after the
+//     call, with no uncommitted check). A repo call's clone is on the
+//     integration branch, and a kept one has CallResult.Branch as an
+//     isolated call's does. The main-checkout snapshot (before-state,
+//     content hashing, .dirt) is gone: every dirty path in a kept clone is
+//     the call's. A replay re-fetches a kept clone's branch while the clone
+//     exists. JS's calls run in worktrees or the main checkout.
+//   - D29. A writer repo call (direct-edits, decision-replan, replan,
+//     termination) reaches the integration branch only by the ff: step
+//     (ff.go), run when it returned a value that decodes with its clone clean
+//     and checked: the main checkout must be on the branch, clean (no staged
+//     or unstaged change to a tracked file, no merge, cherry-pick or revert in
+//     progress), and behind the fetched tip, and the clone's HEAD the tip;
+//     the step fast-forwards, then the clone and branch go. A fault, a held
+//     commit (uncommitted changes in the clone) or a writer on a discarded
+//     role is a stage-fault and the value null, with no agent-null beside it
+//     (nullUnlessFaulted); the clone stays. A reviewer repo call's kept
+//     clone is removed after it. The merge step runs in <stateDir>/merge/w<n>
+//     (lsfrt.Runtime.MergeClone): the main checkout is checked first, a reused
+//     clone is synced (commits past main must be this step's, adopted unit by
+//     unit), each verified and gated commit crosses to main by
+//     refs/lsf/<plan8>/xfer/w<n> and is fast-forwarded to, the conflict call
+//     runs in the clone (Opts.Dir), and the clone goes when the wave's merges
+//     finish. A requester edit in the main checkout faults at the next
+//     fast-forward instead of making a merge unresolvable. JS merges, and its
+//     repo stages commit, in the main checkout.
+//   - D30. The prompts describe the clones: isolated stages run in a clone
+//     with every named branch local, which the runtime fetches back; writer
+//     repo calls in a clone on the integration branch, fast-forwarded after
+//     they return; the commit-by-name clause has no main-checkout wording; the
+//     conflict call is in the merge clone. promptparity rewrites the JS prompts
+//     by its d30 table. The reworded prompts change those calls' input hash,
+//     so a run journaled before this unit re-runs them.
 package orchestrator

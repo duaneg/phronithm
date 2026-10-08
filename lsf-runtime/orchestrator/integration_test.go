@@ -48,12 +48,15 @@ func fakeClaude(table string) int {
 		}
 	}
 	if dir := os.Getenv("LSF_FAKE_CLAUDE_STATE"); dir != "" {
-		// Calls may run concurrently: one file per call, counted after.
+		// Calls may run concurrently: one file per call, counted after,
+		// holding the call's cwd.
 		f, err := os.CreateTemp(dir, "call-")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "fake claude: count:", err)
 			return 3
 		}
+		cwd, _ := os.Getwd()
+		f.WriteString(cwd)
 		f.Close()
 	}
 	prompt, err := io.ReadAll(os.Stdin)
@@ -395,7 +398,17 @@ func TestOnRuntimeCodeStages(t *testing.T) {
 		"decisions": []M{{"id": "d1", "question": "q", "decision": "yes"}}}, "")
 	cfg := lsfrt.Config{
 		StateDir: filepath.Join(dir, "state"), Repo: r.dir, ClaudeBin: os.Args[0], Args: args,
-		Roles: map[string]lsfrt.Role{"worker": {Tools: "default", PermissionMode: "dontAsk", Clone: "kept"}}, DefaultRole: "worker",
+		Roles: map[string]lsfrt.Role{
+			"worker":   {Tools: "default", PermissionMode: "dontAsk", Clone: "kept"},
+			"reviewer": {Tools: "default", PermissionMode: "dontAsk", Clone: "discarded"},
+		},
+		DefaultRole: "worker",
+		RoleRules: []lsfrt.RoleRule{ // the design's (lsf-runtime.md, Permissions → Roles)
+			{AgentType: "phronithm:critic", Role: "reviewer"},
+			{Label: "^(critique-(plan|design|code)|lens-review):r[0-9]+:", Role: "reviewer"},
+			{Label: "^review-gate:w[0-9]+(#|$)", Role: "reviewer"},
+			{Label: "^obligations(#|$)", Role: "reviewer"},
+		},
 	}
 	launch := func() lsfrt.Summary {
 		t.Helper()
@@ -494,6 +507,28 @@ func TestOnRuntimeCodeStages(t *testing.T) {
 		}
 	}
 	eq(t, first.Calls, spawns)
+
+	// No call ran in the main checkout or a worktree: each in its own clone,
+	// a writer's kept, a reviewer's discarded (scratch/, now gone).
+	state, _ := filepath.EvalSymlinks(cfg.StateDir)
+	files, _ := filepath.Glob(filepath.Join(callDir, "call-*")) // not the once markers
+	where := map[string]int{}
+	for _, f := range files {
+		b, _ := os.ReadFile(f)
+		cwd := string(b)
+		rel, err := filepath.Rel(state, cwd)
+		kind, _, _ := strings.Cut(rel, string(filepath.Separator))
+		if err != nil || (kind != "clone" && kind != "scratch") {
+			t.Errorf("a call ran in %s", cwd)
+		}
+		where[kind]++
+	}
+	if where["clone"] == 0 || where["scratch"] == 0 || where["clone"]+where["scratch"] != spawns {
+		t.Errorf("cwds %v over %d spawns", where, spawns)
+	}
+	if ents, _ := os.ReadDir(filepath.Join(cfg.StateDir, "scratch")); len(ents) != 0 {
+		t.Errorf("scratch left: %v", ents)
+	}
 
 	refs := func() string {
 		return r.git("for-each-ref", "--format=%(refname) %(objectname)") + "\nHEAD " + r.head()

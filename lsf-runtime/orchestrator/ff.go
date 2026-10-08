@@ -3,7 +3,6 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -71,8 +70,12 @@ func (o *orch) onBranch(ctx context.Context, g gitOps, integration string) error
 // in progress and no change to a tracked file.
 func (o *orch) mainClean(ctx context.Context, g gitOps) error {
 	for _, op := range []struct{ ref, what string }{{"MERGE_HEAD", "merge"}, {"CHERRY_PICK_HEAD", "cherry-pick"}, {"REVERT_HEAD", "revert"}} {
-		if busy, err := g.status(ctx, o.repo, "rev-parse", "-q", "--verify", op.ref); err != nil || busy {
-			return errors.Join(err, &ffFault{"a " + op.what + " is in progress in the main checkout; finish or abort it and relaunch"})
+		busy, err := g.status(ctx, o.repo, "rev-parse", "-q", "--verify", op.ref)
+		if err != nil {
+			return err
+		}
+		if busy {
+			return &ffFault{"a " + op.what + " is in progress in the main checkout; finish or abort it and relaunch"}
 		}
 	}
 	dirt, err := g.trackedDirt(ctx, o.repo)

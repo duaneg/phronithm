@@ -361,26 +361,36 @@ Unit `runtime-core`, plan `docs/plans/runtime-core-plan.md`. Package `lsfrt` in 
   - permission denials;
   - uncommitted paths (see *Uncommitted at return*);
   - for a null after invalid returns, the schema violations;
-  - for an isolated call, its worktree branch;
+  - the clone the call ran in: `kept`, `discarded`, or none;
+  - for a kept clone, its fetched branch and the clone's HEAD at the fetch;
   - attempts, cost, and whether it was replayed.
 
-  A replay returns the flags, denials, uncommitted paths and branch journaled with the call, and re-checks the paths. The orchestrator calls agents through `rt.Call` and maps these driver events to signals.
+  A replay returns the flags, denials, uncommitted paths, branch and clone journaled with the call. While a kept clone exists, the replay fetches its branch again and re-checks the paths. The orchestrator calls agents through `rt.Call` and maps these driver events to signals.
 - **`ValidateOutput(schema, raw)`** is the validator, exported for the returns the runtime did not see: the orchestrator's seeds. An empty schema is no check.
 - **`rt.Parallel(ctx, thunks)`** runs every thunk. A branch's error or panic becomes a nil slot. A stop in any branch is returned once all branches finish.
 - **`rt.Step(ctx, label, input, fn)`** journals a code step (see Journal).
 - **`rt.Repo()`** is the config's `repo`, the main checkout.
-- **`rt.Worktree(ctx, label)`** is a code step's own worktree and its branch: the worktree an agent call with that label and isolation `worktree` gets, created or reused the same way.
-- **`rt.RemoveWorktree(ctx, label, integration, deleteBranch)`** removes a label's worktree when its branch is merged into `integration` (its tip an ancestor), with every untracked, ignored and uncommitted file in it, and lists those paths (a wholly untracked directory as one `dir/` entry). With `deleteBranch` it also deletes the branch. A directory that is not a worktree on the label's branch, a branch not merged, and a directory whose branch is gone are kept, with the reason. The ancestor check is about commits; which labels may lose uncommitted work is the caller's choice.
+- **`rt.Worktree(ctx, label)`** is a code step's own worktree `wt/<key>` on `lsf/<plan8>/<key>`, created from the integration branch or reused. Code steps are runtime code; agent calls get clones.
+- **`rt.RemoveWorktree(ctx, label, integration, deleteBranch)`** removes a label's kept clone, or a code step's worktree, when its branch is merged into `integration` (its tip an ancestor), with every untracked, ignored and uncommitted file in it, and lists those paths (a wholly untracked directory as one `dir/` entry). With `deleteBranch` it also deletes the branch. Kept, with the reason:
+  - a label with both a clone and a worktree;
+  - a directory that is not a worktree on the label's branch, or not a clone on it or on `integration` (a repo call's clone);
+  - a clone whose HEAD is not the branch's tip in the main repo (commits not fetched);
+  - a branch not merged, and a directory whose branch is gone.
+
+  The ancestor check is about commits; which labels may lose uncommitted work is the caller's choice.
+- **`rt.MergeClone(ctx, name)`** is the merge clone `<stateDir>/merge/<name>` on the integration branch, made or, when it is a clone on that branch, reused as found, a merge in progress included. **`rt.RemoveMergeClone(ctx, name)`** removes it.
 - **`rt.RunGates(ctx, label, commit, setup, gates)`** runs a plan's declared gate commands on a clean detached checkout of `commit` at `<stateDir>/gates/<key>`, which is removed afterwards. It runs `setup` first, then each gate in order. Each command runs through `sh` in its own process group, with stdin `/dev/null`, its output logged under `<stateDir>/gates/logs`, and the runtime's environment less the variables that point git elsewhere (`GIT_DIR` and the like). Setup runs under `gateTimeout`. Exit 0 is `green` and any other exit `red`. A timeout is `not-run`, and a failed setup makes every gate `not-run`. Any process a command leaves behind is killed when it ends. A stop kills the running group, and the stop is returned. Runs are bounded by `gateConcurrency`; the caller journals them.
 - **`rt.Log`** and **`rt.Args`**: `Args` is the config's `args`, passed through.
 
-`opts` mirrors the JavaScript: `label`, `phase` (telemetry only), `model`, `effort`, `agentType`, `isolation`, `schema`.
+`opts` mirrors the JavaScript: `label`, `phase` (telemetry only), `model`, `effort`, `agentType`, `isolation`, `schema`. It adds `dir`: an existing directory under `<stateDir>/merge/` to run in as found, with no clone, fetch-back or uncommitted check (the conflict call). `dir` is not in the call's hash.
 
 ### Configuration
 
 The JSON config is decoded strictly. `testdata/config.example.json` carries the spike's roles and rules as a worked example; it is not a default.
 
-- **Roles.** Each role is `tools`, `allow`, `deny` and `permissionMode`. They become `--tools`, `--allowedTools`, `--disallowedTools` and `--permission-mode`. The runtime has no built-in role; `s2-permissions-design` decides their content.
+- **Roles.** Each role is `tools`, `allow`, `deny`, `permissionMode` and `clone`. The first four become `--tools`, `--allowedTools`, `--disallowedTools` and `--permission-mode`. `clone` (`kept` or `discarded`, required) is the call's clone kind. The runtime has no built-in role; the Permissions section gives their content.
+- **`pluginDir`**, the plugin root, replaces `<plugin>` in a role's `deny` entries when argv is built. A `<plugin>` without it, or in `allow`, is a config error.
+- **Placement refusals.** A launch whose `repo` or `stateDir` is under `/tmp` or `/var/tmp` (or macOS's `/private` forms), as written or through a symlink, is refused. So is a repo that is shallow, has submodules (`.gitmodules` at the integration tip) or an LFS filter: clones are untested with them.
 - **Role rules.** `roleRules` map `agentType` and a label regex (both must match when both are set) to a role. The first match wins; otherwise `defaultRole` applies.
 - **Skills.** `skills` map a label regex to a skill. A matching call's prompt is sent as `/<skill> <prompt>`.
 - **Caps** are per launch: `maxCalls` (spawns), `maxWallClock`, `maxCostUSD` (summed `total_cost_usd`; in-flight calls can overshoot).
@@ -406,10 +416,22 @@ Order inside a call:
 3. The dry-run check runs.
 4. Each attempt waits out the session-limit gate, then takes a concurrency slot and holds it while it:
    - admits or stops in one critical section (stop, parent context, gate again, caps);
-   - creates the worktree, at the first admitted attempt of an isolated call, so a refused call leaves none;
+   - makes or reuses the call's clone, at its first admitted attempt, so a refused call leaves none;
    - spawns and classifies.
 
    A session limit moves the gate before the slot frees.
+5. After a value or a null (not a stop or a dry run), a kept clone's branch is fetched into the main repo as `lsf/<plan8>/<key>`, without tags, and the clone is checked (Uncommitted at return); a discarded clone is removed. A failed fetch-back stops the run with `runtime-error`, the clone kept.
+
+**Clones.** Every agent call runs in its own plain clone under the state dir, never in the main checkout or a worktree:
+
+| Call | Directory | Checked out |
+|---|---|---|
+| `opts.dir` set (the conflict call) | that directory, as found | as found |
+| isolation `worktree` | `clone/<key>` (kept role) or `scratch/<key>` (discarded) | `lsf/<plan8>/<key>`: the main repo's branch if it exists, else new from the integration branch |
+| no isolation | `clone/<key>` or `scratch/<key>` | the integration branch |
+
+- **Making one.** `git clone --no-local --no-checkout --no-tags`, a fetch of every main branch as a local branch, the checkout, and the remote removed. The clone gets the main repo's effective hooks (copied, `core.hooksPath` set to the copy), its effective `user.name`, `user.email`, signing and line-ending config, and its `info/exclude` and `info/attributes`. A failure removes the partial directory and stops the run.
+- **Reuse.** A kept clone is reused when it is a clone (its `.git` a directory) at its toplevel with HEAD on its branch; anything else stops the run, naming it. Its other branches are refreshed from the main repo. A repo call's clone whose HEAD no longer descends from the main repo's integration tip is stale: it is remade, unless it holds commits not fetched or uncommitted changes, which stop the run. A discarded clone is always made afresh, and `scratch/` is wiped at launch, after orphan reaping.
 
 Classification reads the `result` event first, because the CLI can recover from a mid-stream error and still return a valid result. First match wins:
 
@@ -433,19 +455,12 @@ Classification reads the `result` event first, because the CLI can recover from 
 
 ### Uncommitted at return
 
-Every call that spawned and returns a value or a null reports the paths it left uncommitted: modified, staged or untracked, but not ignored. The check comes from `git status --porcelain=v1 -z --untracked-files=all`, run at the work tree's toplevel.
+Every call in a kept clone that spawned and returns a value or a null reports the paths it left uncommitted: modified, staged or untracked, but not ignored. The check comes from `git status --porcelain=v1 -z --untracked-files=all --no-optional-locks`, run at the clone's toplevel. The clone is the call's own, so every dirty path is the call's, a failed attempt's before a retry included. No call runs in the main checkout, so there is no snapshot of it.
 
-- **An isolated call** reports every dirty path in its worktree. The worktree is the call's own.
-- **What is compared.** For a repo call, each dirty path's status, plus its content: a hash and mode for a regular file, or the target for a symlink. The status runs with `--no-optional-locks`, so it never takes the index lock from an agent's git.
-- **A repo call** snapshots the main checkout at its first admitted attempt, with a content hash for each dirty file. It reports only the paths that are new, or whose status or content changed, by its return. Dirt from a failed attempt before a retry is the call's.
-- **Excluded:** paths under the state dir, which are neither reported nor hashed.
-- **A call ended by a stop or a repeated signal, or a dry run,** gets no check. Every other return after a spawn, null included, is checked. A check that the stop itself cut short is not a failure.
-- **A failed check** (git error or timeout, before or after) sets `uncommitted-unchecked`. The record keeps the failure as `unchecked`, not the flag, and a replay checks afresh. For a repo call, with no before-state to compare, it reports every dirty path, the requester's own included, so a writer's stop then clears only once the main checkout is clean.
-- **The journal** keeps the paths. A replay re-checks them:
-  - an isolated call checks its worktree as it now stands; a removed worktree is clean;
-  - a repo call keeps the journaled paths that are still dirty.
-
-  So committing or removing the paths, then resuming, clears the signal.
+- **A discarded clone and an explicit `dir`** get no check.
+- **A call ended by a stop or a repeated signal, or a dry run,** gets no check. A check that the stop itself cut short is not a failure.
+- **A failed check** (git error or timeout) sets `uncommitted-unchecked`. The record keeps the failure as `unchecked`, not the flag, and a replay checks afresh.
+- **The journal** keeps the paths. A replay re-checks the clone as it now stands, after fetching its branch again; a removed clone is clean. So committing or removing the paths in the clone, then resuming, clears the signal, and the commit reaches the main repo.
 
 ### Journal and state dir
 
@@ -453,15 +468,17 @@ Every call that spawned and returns a value or a null reports the paths it left 
 |---|---|
 | `lock` | the launch's `flock` |
 | `journal/<key>.json` | a completed call's or step's record: label, kind, input hash, return, flags, denials, uncommitted paths, whether the uncommitted check failed |
-| `journal/<key>.dirt` | a repo call's uncommitted paths from a null return, until the call is recorded |
 | `journal/<key>.intent` | a step's input hash while it runs |
 | `calls/<key>.<launch>.a<n>.<session>.jsonl` | each attempt's stream |
 | `children.json` | session id → pid of live calls |
-| `wt/<key>` | isolated calls' worktrees, on `lsf/<plan8>/<key>` |
+| `clone/<key>` | kept clones |
+| `scratch/<key>` | discarded clones, wiped at launch |
+| `merge/w<n>` | merge clones |
+| `wt/<key>` | code steps' worktrees, on `lsf/<plan8>/<key>` |
 | `status.json`, `summary.json`, `log.txt`, `telemetry.jsonl` | launch state, the `stop_reason`, the log, one event per line |
 
 - **Keys.** `<key>` is the label made filename-safe plus 8 hex digits of its hash. Labels must be unique per call: the journal keeps one record per label, and a label reused with other inputs in one launch is logged `label-reused`.
-- **Call records.** A call's hash covers the prompt, the skill it is sent as, the schema, the model, the effort and the isolation. Role and permissions are excluded, so changing them does not re-run completed work. A null return is not recorded, so a resume retries it. A call with the same label and inputs is replayed within a launch as well as across launches.
+- **Call records.** A call's hash covers the prompt, the skill it is sent as, the schema, the model, the effort and the isolation. Role and permissions are excluded, so changing them does not re-run completed work, with one exception: a repo call recorded from a discarded clone re-runs once its role keeps its clone, since its commits were lost. A null return is not recorded, so a resume retries it. A call with the same label and inputs is replayed within a launch as well as across launches.
 - **Step records.** A step writes an intent, runs, records its return (null included) and removes the intent. A step that errors keeps its intent, so the next run of that step, in this launch or a later one, gets `interrupted=true` for its own effect check. An unreadable record of a step stops the run with `runtime-error` rather than rerun it blind.
 - **Replays.** A replayed value is byte-identical to the live one (compacted JSON).
 - **File writes.** Records, intents, `children.json`, the status and the summary are written by temp file and rename.
@@ -472,11 +489,10 @@ Every call that spawned and returns a value or a null reports the paths it left 
 - **`stop_reason` precedence.** A stop the runtime recorded wins, even if the body swallowed it. Then a `StopError` from the body, then `cancelled` (the parent context), then `crashed` (a body error or panic), then `returned`.
 - **Caps** are checked at spawn. A cap that passes during a step or a backoff stops the run at the next spawn.
 - **Orphans.** At launch, every process whose arguments carry `--session-id <id>` for an id in `children.json` is a call left by a killed launch. A gate's shell is recorded under an `lsf-gate:` marker, which it carries as `$0`, and is matched the same way. A gate command that begins with `exec` replaces that shell, so it cannot be found. Its group gets SIGTERM, then SIGKILL after `killGrace`; a zombie counts as gone. If `ps` fails, or a kill fails, those records are carried into this launch's `children.json` for the next launch to reap. A torn `children.json` is reported and treated as empty.
-- **Worktrees.**
-  - Creation is serialised. Each git command has a 5-minute timeout and ends on a repeated signal.
-  - An existing `wt/<key>` is reused only if it is a worktree on its branch; otherwise the run stops with `runtime-error`.
-  - A branch whose directory is gone is re-attached, not reset.
-  - Removal takes the same serialisation and timeouts.
+- **Clones and worktrees.**
+  - Creation, fetch-back and removal are serialised. Each git command has a 5-minute timeout and ends on a repeated signal; the runtime's git runs with `core.fsmonitor=false`, since an agent can write its clone's config.
+  - A call admitted to spawn waits for its clone without yielding to a stop set since; a fetch-back runs after a first signal, as the call's result is journaled.
+  - A code step's existing `wt/<key>` is reused only if it is a worktree on its branch; otherwise the run stops with `runtime-error`. A branch whose directory is gone is re-attached, not reset.
   - Missing `planSha` or `integrationBranch` in `args` stops the run with `runtime-error`.
 
 ### Not in this unit
@@ -488,15 +504,15 @@ Every call that spawned and returns a value or a null reports the paths it left 
 
 ### Known limits
 
-- **Uncommitted attribution.** A requester edit to the main checkout during a repo call is attributed to that call. The review gate runs beside the cleanup step, which writes only under the state dir and the refs, so a change made then is attributed to the gate.
-- **Earlier attempts' worktrees.** Cleanup removes the worktrees a merged unit's stages used, made or replayed, in the launch that merged it; a relaunch that replays a unit to its merge removes the earlier launch's worktrees with it. The worktrees of an attempt that did not merge (an aborted wave, or a unit the launch did not merge) stay, with their branches: they may hold work a stop left uncommitted. So does a seeded stage's.
-- **A failed cleanup is not retried.** A merged unit is not revisited, so a worktree whose removal failed stays, with its branch; the log names it.
-- **Worktrees git will not remove.** A worktree holding a submodule, or one that is locked, fails its removal, which is logged, and the worktree stays.
-- **A repo call's re-run.** A repo call that returned null keeps its uncommitted paths in `<key>.dirt`, and its re-run's before-state leaves them out, so they are reported again. A call that was stopped, killed, or crashed before returning keeps nothing: its re-run takes any dirt it left into its before-state.
+- **Earlier attempts' clones.** Cleanup removes the clones a merged unit's stages used, made or replayed, in the launch that merged it; a relaunch that replays a unit to its merge removes the earlier launch's clones with it. The clones of an attempt that did not merge (an aborted wave, or a unit the launch did not merge) stay, with their branches: they may hold work a stop left uncommitted. So does a seeded stage's.
+- **A repo writer's clone that never fast-forwards** (a null, a stop, a fault) stays, with its branch, until the call's re-run replaces it. No unit's cleanup removes it.
+- **A failed cleanup is not retried.** A merged unit is not revisited, so a clone or worktree whose removal failed stays, with its branch; the log names it.
+- **Clone cost.** Every call copies the repo's objects (`--no-local`) and every main branch, serialised with other clone work. On a large repo this is per-call time and disk; it is unmeasured.
+- **A forced fetch-back.** A kept clone's branch overwrites the main repo's `lsf/<plan8>/<key>` at each return and each replay while the clone exists; a commit made on that branch in the main repo instead is kept only by the reflog.
 - **A replay that fails its schema** (a changed validator, an edited record) re-runs the call. For a writer, the re-run can repeat a commit the first run made.
 - **Large files.** A dirty file over 64 MiB is compared by size and modification time, not content.
 - **Session limits.** The shape of a session limit under `-p` is built from the binary's schema and interactive transcripts, not observed. The first real limit's stream is kept under `calls/`.
-- **Retries in a dirty worktree.** A retry after a worker made partial changes reruns in the same worktree.
+- **Retries in a dirty clone.** A retry after a call made partial changes reruns in the same clone, a discarded one included.
 - **Group kill after reaping.** After the leader of a cancelled call is reaped, its pgid could in principle be reused before the group SIGKILL. Sequential pid allocation makes this need a wrapped pid space.
 - **Orphan grandchildren.** An orphan whose group leader is gone is not signalled.
 - **Descendants of a normal exit.** A call that exits normally while a descendant holds its stdout returns `killGrace` later. The descendant is not killed; what happens to processes a stage detaches is `long-running-design`'s question.

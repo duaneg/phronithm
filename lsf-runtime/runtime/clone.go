@@ -338,6 +338,14 @@ func (rt *Runtime) fetchBack(ctx context.Context, label string, p placement, res
 	defer func() { <-rt.wtSem }()
 	gctx, cancel := rt.gitContext(ctx)
 	defer cancel()
+	was, _ := gitStdout(gctx, rt.cfg.Repo, "rev-parse", "-q", "--verify", "refs/heads/"+p.dest)
+	defer func() {
+		now, _ := gitStdout(gctx, rt.cfg.Repo, "rev-parse", "-q", "--verify", "refs/heads/"+p.dest)
+		if w, n := strings.TrimSpace(string(was)), strings.TrimSpace(string(now)); w != "" && w != n && res.Replayed {
+			rt.event("branch-refetched", map[string]any{"label": label, "branch": p.dest, "from": w, "to": n})
+			rt.Log(fmt.Sprintf("%s: the replay moved %s from %s to %s, its clone's tip", label, p.dest, w, n))
+		}
+	}()
 	if b, err := gitOut(gctx, rt.cfg.Repo, "fetch", "--no-tags", "-q", p.dir, "+refs/heads/"+p.branch+":refs/heads/"+p.dest); err != nil {
 		return fmt.Errorf("fetching %s from its clone %s: %v: %s", p.branch, p.dir, err, strings.TrimSpace(string(b)))
 	}
