@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/duaneg/phronithm/lsf-runtime/internal/tmproot"
 	"github.com/duaneg/phronithm/lsf-runtime/orchestrator"
 	lsfrt "github.com/duaneg/phronithm/lsf-runtime/runtime"
 )
@@ -139,6 +140,9 @@ func run(root, claude, dir, example string, dryRun bool) error {
 		if dir, err = os.MkdirTemp(filepath.Join(cache, "lsf-fixturerun"), "run-"); err != nil {
 			return err
 		}
+	}
+	if tmproot.Under(dir) {
+		return fmt.Errorf("work dir %s is under /tmp or /var/tmp, where the runtime refuses to launch", dir)
 	}
 	// A state dir from an earlier launch would replay its journal and mix
 	// its transcripts into the version check.

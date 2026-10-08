@@ -87,6 +87,7 @@ func TestLoadConfigRejects(t *testing.T) {
 		{`{"stateDir":"/x","defaultRole":"w","roles":{"w":{"tools":"t","permissionMode":"dontAsk"}}}`, `roles.w: clone must be "kept" or "discarded", not ""`},
 		{`{"stateDir":"/x","defaultRole":"w","roles":{"w":{"tools":"t","permissionMode":"dontAsk","clone":"fetched"}}}`, `not "fetched"`},
 		{`{"stateDir":"/x","defaultRole":"w","roles":{"w":{"tools":"t","permissionMode":"dontAsk","clone":"kept","deny":["Edit(/<plugin>/**)"]}}}`, "roles.w: deny names <plugin> but pluginDir is not set"},
+		{`{"stateDir":"/x","pluginDir":"/p","defaultRole":"w","roles":{"w":{"tools":"t","permissionMode":"dontAsk","clone":"kept","allow":["Read(/<plugin>/**)"]}}}`, "roles.w: <plugin> is substituted in deny only"},
 	} {
 		_, err := LoadConfig(writeConfig(t, tc.body))
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -193,10 +194,10 @@ func TestTestTempDirNotUnderTempRoot(t *testing.T) {
 }
 
 // pluginDir is made absolute, and <plugin> in a deny entry becomes it in
-// the argv; allow entries are passed as written.
+// the argv.
 func TestPluginSubstitution(t *testing.T) {
 	c, err := LoadConfig(writeConfig(t, `{"stateDir":"/x","pluginDir":"/opt/phr","defaultRole":"w",
-		"roles":{"w":{"tools":"t","permissionMode":"dontAsk","clone":"kept","allow":["Read(/<plugin>/**)"],"deny":["Edit(/<plugin>/**)","Write(/<plugin>/**)","Bash(rm*)"]}}}`))
+		"roles":{"w":{"tools":"t","permissionMode":"dontAsk","clone":"kept","deny":["Edit(/<plugin>/**)","Write(/<plugin>/**)","Bash(rm*)"]}}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,9 +205,6 @@ func TestPluginSubstitution(t *testing.T) {
 	argv := buildArgv(Opts{Label: "x", Schema: json.RawMessage(`{}`)}, r, c.PluginDir, "sid")
 	if got, want := flagValues(argv, "--disallowedTools"), []string{"Edit(//opt/phr/**)", "Write(//opt/phr/**)", "Bash(rm*)"}; !slices.Equal(got, want) {
 		t.Errorf("deny %q, want %q", got, want)
-	}
-	if got := flagValues(argv, "--allowedTools"); !slices.Equal(got, []string{"Read(/<plugin>/**)"}) {
-		t.Errorf("allow %q", got)
 	}
 	rel, err := LoadConfig(writeConfig(t, `{"stateDir":"/x","pluginDir":"phr","defaultRole":"w","roles":{"w":{"tools":"t","permissionMode":"dontAsk","clone":"kept"}}}`))
 	if err != nil || !filepath.IsAbs(rel.PluginDir) {

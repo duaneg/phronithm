@@ -23,6 +23,12 @@ func TestUnder(t *testing.T) {
 	if Under(base) {
 		t.Skipf("%s is under a temp root", base)
 	}
+	if err := os.Symlink("loop", filepath.Join(base, "loop")); err != nil {
+		t.Fatal(err)
+	}
+	if !Under(filepath.Join(base, "loop", "x")) {
+		t.Error("a symlink cycle is not refused")
+	}
 	for name, target := range map[string]string{"live": "/tmp", "dangling": "/tmp/tmproot-no-such-dir/x", "relative": "../../../../../../../../../tmp"} {
 		l := filepath.Join(base, name)
 		if err := os.Symlink(target, l); err != nil {

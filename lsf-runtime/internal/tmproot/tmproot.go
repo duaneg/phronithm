@@ -3,6 +3,8 @@
 package tmproot
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,8 +24,14 @@ func in(p string) bool {
 
 // Under reports whether p is under a root, lexically or once the symlinks in
 // its longest existing prefix are resolved (a state dir is created after the
-// check). A dangling symlink is judged by its target.
-func Under(p string) bool {
+// check). A dangling symlink is judged by its target. A path that cannot
+// be judged (a symlink cycle, an unreadable component) counts as under.
+func Under(p string) bool { return under(p, 0) }
+
+func under(p string, depth int) bool {
+	if depth > 40 { // a symlink cycle
+		return true
+	}
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		return true
@@ -35,13 +43,19 @@ func Under(p string) bool {
 		if r, err := filepath.EvalSymlinks(p); err == nil {
 			return in(filepath.Join(r, rest))
 		}
-		if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-			if t, err := os.Readlink(p); err == nil {
-				if !filepath.IsAbs(t) {
-					t = filepath.Join(filepath.Dir(p), t)
-				}
-				return Under(filepath.Join(t, rest))
+		fi, err := os.Lstat(p)
+		switch {
+		case err == nil && fi.Mode()&os.ModeSymlink != 0:
+			t, err := os.Readlink(p)
+			if err != nil {
+				return true
 			}
+			if !filepath.IsAbs(t) {
+				t = filepath.Join(filepath.Dir(p), t)
+			}
+			return under(filepath.Join(t, rest), depth+1)
+		case err != nil && !errors.Is(err, fs.ErrNotExist):
+			return true
 		}
 		parent := filepath.Dir(p)
 		if parent == p {

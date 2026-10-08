@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -138,7 +139,8 @@ func (c *Config) prepare() error {
 	if len(c.Roles) == 0 {
 		errs = append(errs, errors.New("roles: at least one role is required"))
 	}
-	for name, r := range c.Roles {
+	for _, name := range slices.Sorted(maps.Keys(c.Roles)) {
+		r := c.Roles[name]
 		if r.PermissionMode == "" {
 			errs = append(errs, fmt.Errorf("roles.%s: permissionMode is required", name))
 		}
@@ -148,8 +150,12 @@ func (c *Config) prepare() error {
 		if r.Clone != CloneKept && r.Clone != CloneDiscarded {
 			errs = append(errs, fmt.Errorf("roles.%s: clone must be %q or %q, not %q", name, CloneKept, CloneDiscarded, r.Clone))
 		}
-		if c.PluginDir == "" && slices.ContainsFunc(r.Deny, func(d string) bool { return strings.Contains(d, pluginToken) }) {
+		hasToken := func(d string) bool { return strings.Contains(d, pluginToken) }
+		if c.PluginDir == "" && slices.ContainsFunc(r.Deny, hasToken) {
 			errs = append(errs, fmt.Errorf("roles.%s: deny names %s but pluginDir is not set", name, pluginToken))
+		}
+		if slices.ContainsFunc(r.Allow, hasToken) {
+			errs = append(errs, fmt.Errorf("roles.%s: %s is substituted in deny only, not allow", name, pluginToken))
 		}
 	}
 	if _, ok := c.Roles[c.DefaultRole]; !ok {
