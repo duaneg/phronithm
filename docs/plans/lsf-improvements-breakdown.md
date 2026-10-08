@@ -2,7 +2,7 @@
 
 ## Summary
 
-A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 38 units, fifteen complete; critical path 9 units through the S2 build, distribution and the serialised orchestrator stream. Base commit `b3dac6a`.
+A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 38 units, sixteen complete; critical path 9 units through the S2 build, distribution and the serialised orchestrator stream. Base commit `b3dac6a`.
 
 The postmortem's problems are taken as accurate for archipeligo. The proposals in [lsf-improvements](../design/lsf-improvements.md) are candidate options, not designs: every decision unit states its problem without a solution, checks whether the problem holds outside archipeligo, and weighs the proposal against alternatives that include doing nothing.
 
@@ -46,18 +46,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 
 ### declared-gates — complete at `24669e9`; entry at `98e2d66`; report `docs/plans/declared-gates-completion.md`
 
-### plan-preflight-check
-- **Type**: feature
-- **Risk**: low — `plan.LoadGraph` and `plan.ValidatePlan` already catch the overlap, cycle and `clears` cases; the block-against-entries comparison is new code with no reference implementation, specified by `phronithm:breakdown`'s quality check
-- **Clarity**: specified
-- **Iteration**: write-once
-- **Effort**: medium
-- **Scope**: `lsf-runtime/validate`, `skills/breakdown/SKILL.md::quality-check`, `skills/lsf-drive/SKILL.md::startup`
-- **Publishes**: a plan-validation command runnable outside a workflow
-- **Depends on**: orchestrator-port-plan (logical, `plan.LoadGraph` and `plan.ValidatePlan`)
-- **External gates**: `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`)
-- **Done condition**: A command runnable outside a workflow exits non-zero, printing the load stage's problems, on fixtures for an unserialised overlap, a cycle, a bad `clears` entry, a malformed `lsf-gates` block and a plan block that disagrees with its entries, and exits zero on this plan. The agreement check covers what the quality check names: every unit, its type, its Depends-on units, its Scope paths, its gates with kind and pin, and the execution order; a completed unit's one-line stub is checked against the block's `complete: true` only. `phronithm:breakdown` and `phronithm:lsf-drive` name it where a plan is committed and where one is launched. The tests pass.
-- **Description**: Postmortem §D "Plan checks only at load": two plans fresh from breakdown stopped at load. The check is independent of the substrate decision, since both a script and a driver need it before launch. Neither `graph.js` nor its port compares the block with the entries; that check is this unit's. `CLAUDE.md` is outside its Scope: `orchestrator-port-loop`, which may run beside it, owns the `lsf-runtime` entry, and `programme-close` lists the command. **Flag:** three surfaces written; two are a few lines of skill text, so the excess is not context.
+### plan-preflight-check — complete at `eaa39a2`; entry at `2c98baf`; report `docs/plans/plan-preflight-check-completion.md`
 
 ### significant-precision-sample
 - **Type**: design
@@ -169,12 +158,12 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Clarity**: exploratory — one open decision: D1 (first-use download of a release binary) or D4 (a CI-built `archive` marketplace source)
 - **Iteration**: write-once
 - **Effort**: medium
-- **Scope**: `lsf-runtime/dist`, `.github/workflows/lsf-runtime.yml`, `skills/lsf-drive/SKILL.md::launch`, `docs/design/lsf-runtime.md::distribution`
+- **Scope**: `lsf-runtime/dist`, `.github/workflows/lsf-runtime.yml`, `skills/lsf-drive/SKILL.md::launch`, `skills/lsf-drive/SKILL.md::startup`, `skills/breakdown/SKILL.md::quality-check`, `docs/design/lsf-runtime.md::distribution`
 - **Publishes**: the launcher the skills invoke; the release build
-- **Depends on**: runtime-cli-drive (logical, the CLI the launcher runs; serialises `skills/lsf-drive/SKILL.md::launch`); runtime-language-design (design, the routes and targets)
+- **Depends on**: runtime-cli-drive (logical, the CLI the launcher runs; serialises `skills/lsf-drive/SKILL.md::launch` and `::startup`); runtime-language-design (design, the routes and targets); plan-preflight-check (logical, `lsf-validate`; serialises `skills/breakdown/SKILL.md::quality-check`)
 - **External gates**: `github-actions` (environment); `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`); `git` (environment, 2.38 or later on every CI runner); `requester-verdict` (organisational)
-- **Done condition**: The Distribution section is committed, choosing D1 or D4, with the requester's verdict recorded. CI builds static binaries for linux and darwin on amd64 and arm64 with `CGO_ENABLED=0`, and runs the `lsf-runtime` tests on Linux and macOS, orphan reaping included. A launcher at `${CLAUDE_PLUGIN_ROOT}/lsf-runtime/` runs the platform's binary, and the plan-validation command through it. It prefers a locally built binary or one named by an environment variable, so `--plugin-dir` development and `shakedown-fixture` run the working tree. Under D1 it refuses a binary whose sha256 does not match its pin. `phronithm:lsf-drive` invokes the runtime through the launcher; there is no top-level `bin/`. A plugin installed from a local marketplace runs the runtime on this host through the launcher. The tests pass.
-- **Description**: `lsf-runtime.md` Language, Open for the re-plan: no unit owned the route, the CI or the release, though the spike's estimate counted packaging. Windows outside WSL is out of scope (requester verdict, 2026-10-06; R16).
+- **Done condition**: The Distribution section is committed, choosing D1 or D4, with the requester's verdict recorded. CI builds static binaries for linux and darwin on amd64 and arm64 with `CGO_ENABLED=0`, and runs the `lsf-runtime` tests on Linux and macOS, orphan reaping included. A launcher at `${CLAUDE_PLUGIN_ROOT}/lsf-runtime/` runs the platform's binary, and the plan-validation command through it. `phronithm:breakdown`'s quality check and `phronithm:lsf-drive`'s Startup run `lsf-validate` through the launcher, not `go run`, and tell problems from a command failure by its exit code (1 or 2), not by empty stdout. It prefers a locally built binary or one named by an environment variable, so `--plugin-dir` development and `shakedown-fixture` run the working tree. Under D1 it refuses a binary whose sha256 does not match its pin. `phronithm:lsf-drive` invokes the runtime through the launcher; there is no top-level `bin/`. A plugin installed from a local marketplace runs the runtime on this host through the launcher. The tests pass.
+- **Description**: `lsf-runtime.md` Language, Open for the re-plan: no unit owned the route, the CI or the release, though the spike's estimate counted packaging. Windows outside WSL is out of scope (requester verdict, 2026-10-06; R16). Until this unit, both skills call `go -C ${CLAUDE_PLUGIN_ROOT}/lsf-runtime run ./validate/cmd/lsf-validate`, which needs Go and reports every non-zero exit as 1. **Flag:** four surfaces exceed the surface bound; the skill and design changes are a few lines of text each, so the excess is not context.
 
 ### script-retirement
 - **Type**: refactor
@@ -419,7 +408,7 @@ units:
         pin: "v26.9.0"
   - id: plan-preflight-check
     type: feature
-    complete: false
+    complete: true
     dependencies: [orchestrator-port-plan]
     scope: [lsf-runtime/validate, skills/breakdown/SKILL.md::quality-check, skills/lsf-drive/SKILL.md::startup]
     publishes: [plan-validation command]
@@ -626,8 +615,8 @@ units:
   - id: runtime-distribution
     type: integration
     complete: false
-    dependencies: [runtime-cli-drive, runtime-language-design]
-    scope: [lsf-runtime/dist, .github/workflows/lsf-runtime.yml, skills/lsf-drive/SKILL.md::launch, docs/design/lsf-runtime.md::distribution]
+    dependencies: [runtime-cli-drive, runtime-language-design, plan-preflight-check]
+    scope: [lsf-runtime/dist, .github/workflows/lsf-runtime.yml, skills/lsf-drive/SKILL.md::launch, skills/lsf-drive/SKILL.md::startup, skills/breakdown/SKILL.md::quality-check, docs/design/lsf-runtime.md::distribution]
     publishes: [runtime launcher, release build]
     gates:
       - name: github-actions
@@ -767,7 +756,7 @@ graph TD
   SS[substrate-spike: complete]
   APR[arch-pin-refresh: complete]
   GRI[gate-results-integrity: complete]
-  PPC[plan-preflight-check]
+  PPC[plan-preflight-check: complete]
   SPS[significant-precision-sample]
   ECD[empirical-criteria-design]
   EUD[empirical-unit-design]
@@ -827,6 +816,7 @@ graph TD
   RCD -. testing .-> SR --> ESS --> FCI --> LRI
   RCD --> RD --> SR
   RLD -.-> RD
+  PPC --> RD
   RD --> DM
   APR -.-> CMC
   RAD -.-> CMC
@@ -941,7 +931,7 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 
 `s2-permissions-design` → `runtime-cli-drive` → `runtime-distribution` → `script-retirement` → `empirical-script-support` → `findings-consumer-impl` → `long-running-impl` → `shakedown-fixture` → `programme-close`.
 
-9 units remaining: one large, seven medium, one small. Two chains tie with it: `plan-preflight-check` in place of `s2-permissions-design`, and `empirical-criteria-design` → `empirical-unit-design` → `retained-artefacts-impl` into `script-retirement`. All three heads but `plan-preflight-check` wait on a requester verdict. The S2 build's size is a conjectured estimate, and the runtime and the port each exceeded it (R1).
+9 units remaining: one large, seven medium, one small. One chain ties with it: `empirical-criteria-design` → `empirical-unit-design` → `retained-artefacts-impl` into `script-retirement`. Both heads wait on a requester verdict. The S2 build's size is a conjectured estimate, and the runtime and the port each exceeded it (R1).
 
 ## Meta-Tasks
 
@@ -1005,11 +995,31 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 - R21 cross-cutting — a project whose gates leave unignored files stops every runtime writer stage on `uncommitted-at-return` and records residue on every reader; the statement names the paths, and the repair is the project's ignore rules.
 - R22 cross-cutting — the code merge needs `git merge-tree --write-tree` (git 2.38 or later); until `runtime-cli-drive`'s launch check, a run on older git stops at its first merge as `stage-fault`.
 - R23 runtime-cli-drive — a red gate result the environment caused (exit 126 or 127, a missing service, an OOM kill) replays from the journal for the same tree and declaration until its record is removed by hand (requester decision, 2026-10-08).
+- R24 runtime-distribution — until the launcher ships, the plan-validation command needs a Go toolchain and compiles on each call; without Go, `phronithm:breakdown` and `phronithm:lsf-drive` fall back to manual checks (P-D4's residual).
+- R25 cross-cutting — `lsf-validate`'s pin check is substring containment and one-directional (requester decision, 2026-10-08: left as is); a pin token inside a longer version, or an entry pin absent from the block, passes.
 - R16 script-retirement — the runtime targets Linux and macOS only (requester verdict, 2026-10-06). Once the Workflow script is deleted, Phase 3 has no Windows path outside WSL until a unit adds a non-POSIX kill path.
 
 ## Plan Maintenance
 
 On each unit completion, run the re-plan step before starting its dependants.
+
+### 2026-10-08 — decisions load-agreement, pin-gap, retired-stub
+check load-agreement — declined: `validate.Agreement` at load is cheap but not low in false positives (76 problems on cartomancer-v2's completed `quality-bar-interiors` plan, from field grammar; rationale mentions in Execution Order); pre-flight at commit and launch only
+check pin-gap — an entry pin absent from the block stays unreported; R25
+check retired-stub — breakdown's `unit-removed` rule stands; archipeligo-evolved's `weighted-contest-rung` stub is the requester's to drop, outside the programme; that plan fails `phronithm:lsf-drive` Startup until then
+
+### 2026-10-08 — plan-preflight-check complete
+Report: docs/plans/plan-preflight-check-completion.md @ eaa39a2.
+done-condition runtime-distribution — both skills run `lsf-validate` through the launcher and key on exit codes 1 and 2; four-surface flag
+scope-reassignment runtime-distribution — adds `skills/lsf-drive/SKILL.md::startup` and `skills/breakdown/SKILL.md::quality-check`
+new-edge plan-preflight-check → runtime-distribution — `lsf-validate`; serialises `skills/breakdown/SKILL.md::quality-check`
+check runtime-cli-drive — Startup steps 2–3 rewritten by this unit, behind its existing edge; a `validate.Check` subcommand is optional; no change
+check programme-close — `CLAUDE.md` listing of `lsf-validate` and `lsf-runtime/validate` already in its done condition; no change
+check empirical-unit-impl — the quality-check bullet this unit rewrote is behind its existing edge; its fixture plan passing the command already holds it to the strict field grammar; no change
+check runtime-cli-drive, runtime-distribution — size budget re-checked on seven mid-implementation decisions and about 2,100 lines over 19 files finished with context comfortable; within budget under their flags
+check register — P-D4 disposed `fixed` by the report; no change
+check R24, R25 added
+check critical path — 9 units, two tied chains
 
 ### 2026-10-07 — declared-gates complete
 Report: docs/plans/declared-gates-completion.md @ 24669e9.
