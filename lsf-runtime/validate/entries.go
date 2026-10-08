@@ -19,7 +19,7 @@ type entry struct {
 	Duplicates []string // field names given more than once, first value kept
 }
 
-func (e *entry) stub() bool { return len(e.Fields) == 0 && len(e.Duplicates) == 0 }
+func (e *entry) stub() bool { return len(e.Fields) == 0 }
 
 // document is the parsed prose. A nil section means the heading is absent.
 type document struct {
@@ -30,7 +30,7 @@ type document struct {
 
 var (
 	fieldRE = regexp.MustCompile(`^- \*\*([^*]+)\*\*:[ \t]*(.*)$`)
-	fenceRE = regexp.MustCompile("^ {0,3}(```|~~~)")
+	fenceRE = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})(.*)$")
 )
 
 // line is a document line outside any fenced code block.
@@ -43,19 +43,24 @@ func splitLines(markdown string) []line {
 	markdown = strings.ReplaceAll(markdown, "\r\n", "\n")
 	raw := strings.Split(markdown, "\n")
 	out := make([]line, len(raw))
-	var open string
+	var open string // the opening fence's run, "" outside a fence
 	for i, t := range raw {
-		if m := fenceRE.FindStringSubmatch(t); m != nil {
-			switch {
-			case open == "":
+		m := fenceRE.FindStringSubmatch(t)
+		switch {
+		case m == nil:
+		case open == "":
+			// CommonMark: a backtick fence's info string has no backtick.
+			if m[1][0] == '`' && strings.Contains(m[2], "`") {
+				m = nil
+			} else {
 				open = m[1]
-			case open == m[1]:
-				open = ""
 			}
-			out[i] = line{t, true}
-			continue
+		case m[1][0] == open[0] && len(m[1]) >= len(open) && strings.TrimSpace(m[2]) == "":
+			open = ""
+		default:
+			m = nil
 		}
-		out[i] = line{t, open != ""}
+		out[i] = line{t, m != nil || open != ""}
 	}
 	return out
 }
@@ -72,9 +77,10 @@ func headingLevel(t string) int {
 	return n
 }
 
-// section returns the lines under the `## <title>` heading up to the next
-// level-2 or level-1 heading, or nil when the heading is absent.
-func section(lines []line, title string) []line {
+// section returns the lines under the first `## <title>` heading up to the
+// next level-2 or level-1 heading; found is false when the heading is
+// absent.
+func section(lines []line, title string) (body []line, found bool) {
 	for i, l := range lines {
 		if l.fence || headingLevel(l.text) != 2 || strings.TrimSpace(l.text[2:]) != title {
 			continue
@@ -86,19 +92,19 @@ func section(lines []line, title string) []line {
 			}
 			end++
 		}
-		return lines[i+1 : end]
+		return lines[i+1 : end], true
 	}
-	return nil
+	return nil, false
 }
 
 func parseDocument(markdown string) document {
 	lines := splitLines(markdown)
 	var doc document
-	if wu := section(lines, "Work Units"); wu != nil {
+	if wu, ok := section(lines, "Work Units"); ok {
 		doc.WorkUnits = true
 		doc.Entries = parseEntries(wu)
 	}
-	if eo := section(lines, "Execution Order"); eo != nil {
+	if eo, ok := section(lines, "Execution Order"); ok {
 		texts := make([]string, 0, len(eo))
 		for _, l := range eo {
 			if !l.fence {
@@ -113,7 +119,9 @@ func parseDocument(markdown string) document {
 
 // parseEntries reads the `### ` entries of a Work Units section. A field's
 // value continues over the following lines until the next field line, a
-// heading, or a blank line followed by non-indented text.
+// heading, or a blank line followed by non-indented text or a fence.
+// Fenced lines are never part of a value. A heading of any level ends the
+// entry's fields.
 func parseEntries(lines []line) []*entry {
 	var entries []*entry
 	var cur *entry
@@ -173,20 +181,20 @@ func firstToken(s string) string {
 	return ""
 }
 
-// continuesAfterBlank reports whether the next non-blank, unfenced line is
-// indented, so a field's value runs on past a blank line.
+// continuesAfterBlank reports whether the next non-blank line is indented
+// text, so a field's value runs on past a blank line.
 func continuesAfterBlank(rest []line) bool {
 	for _, l := range rest {
-		if l.fence || strings.TrimSpace(l.text) == "" {
+		if strings.TrimSpace(l.text) == "" {
 			continue
 		}
-		return l.text[0] == ' ' || l.text[0] == '\t'
+		return !l.fence && (l.text[0] == ' ' || l.text[0] == '\t')
 	}
 	return false
 }
 
 // splitTop splits s on sep where sep is outside parentheses and backticks.
-// ok is false when the parentheses do not balance.
+// ok is false when the parentheses or backticks do not balance.
 func splitTop(s string, sep byte) (parts []string, ok bool) {
 	depth, tick, start := 0, false, 0
 	for i := 0; i < len(s); i++ {
@@ -206,11 +214,11 @@ func splitTop(s string, sep byte) (parts []string, ok bool) {
 			start = i + 1
 		}
 	}
-	return append(parts, s[start:]), depth == 0
+	return append(parts, s[start:]), depth == 0 && !tick
 }
 
 // stripParens removes parenthesised text (outside backticks), keeping the
-// rest. ok is false when the parentheses do not balance.
+// rest. ok is false when the parentheses or backticks do not balance.
 func stripParens(s string) (out string, ok bool) {
 	var b strings.Builder
 	depth, tick := 0, false
@@ -234,7 +242,7 @@ func stripParens(s string) (out string, ok bool) {
 			b.WriteByte(c)
 		}
 	}
-	if depth != 0 {
+	if depth != 0 || tick {
 		return "", false
 	}
 	return b.String(), true
