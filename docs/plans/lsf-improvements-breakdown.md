@@ -2,7 +2,7 @@
 
 ## Summary
 
-A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 38 units, sixteen complete; critical path 9 units through the S2 build, distribution and the serialised orchestrator stream. Base commit `b3dac6a`.
+A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 40 units, seventeen complete; critical path 10 units through the S2 build, distribution and the serialised orchestrator stream. Base commit `b3dac6a`.
 
 The postmortem's problems are taken as accurate for archipeligo. The proposals in [lsf-improvements](../design/lsf-improvements.md) are candidate options, not designs: every decision unit states its problem without a solution, checks whether the problem holds outside archipeligo, and weighs the proposal against alternatives that include doing nothing.
 
@@ -10,7 +10,7 @@ The programme is complete when every row of the problem register has a dispositi
 
 The substrate is S2, a host runtime running the orchestrator through headless `claude -p` calls, confirmed by `substrate-spike`. The runtime and the orchestrator are written in Go (`runtime-language-design`, requester verdict 2026-10-06; JavaScript and TypeScript excluded), for Linux and macOS; the orchestrator is ported, under `lsf-runtime/`. The Workflow script stays the supported Phase 3 path, under `lsf-substrate.md`'s interim policy, until `script-retirement`.
 
-Key risks: the S2 build is a conjectured estimate and leads the critical path; seven units wait on a requester verdict, so requester attention, not agent time, bounds the schedule; and the evidence for generality is one other project (cartomancer-v2), all code units.
+Key risks: the S2 build is a conjectured estimate and leads the critical path; six units wait on a requester verdict, so requester attention, not agent time, bounds the schedule; and the evidence for generality is one other project (cartomancer-v2), all code units.
 
 Units marked **provisional** have entries the re-plan rewrites when the design unit they depend on completes. A design that declines to act retires its provisional units, with the reason in the register.
 
@@ -47,6 +47,8 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 ### declared-gates — complete at `24669e9`; entry at `98e2d66`; report `docs/plans/declared-gates-completion.md`
 
 ### plan-preflight-check — complete at `eaa39a2`; entry at `2c98baf`; report `docs/plans/plan-preflight-check-completion.md`
+
+### s2-permissions-design — complete at `d26f71c`; entry at `3c92191`; report `docs/design/lsf-runtime.md` (Permissions)
 
 ### significant-precision-sample
 - **Type**: design
@@ -113,18 +115,31 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Done condition**: `docs/design/lsf-session-role.md` is committed. It decides what analysis precedes a question to the requester, when a recommendation may be made and what it must state, the model tier, the route from repeated stops to an investigation, and whether gates may be cleared ahead of the stop. It is replayed against postmortem §E's four cases (the 41-seed question, "Keep baseline", the three stage-1 stops, the three pre-clearable gates). Since P-E1, P-E3 to P-E7 and P-E9 also occurred on cartomancer-v2 in sessions driven without `phronithm:lsf-drive`, it states whether the decided role binds only `phronithm:lsf-drive` or any session driving a run. The requester's verdict is recorded.
 - **Description**: Postmortem §E "Compressed decisions", "A recommendation without its basis", "Options inside a failing frame" and "Pre-clearable gates".
 
-### s2-permissions-design
-- **Type**: design
-- **Risk**: medium — the spike's deny list is bypassable, and the alternatives are untested or edit the orchestrator
-- **Clarity**: exploratory — one open decision: the per-stage permission configuration
+### s2-clones
+- **Type**: feature
+- **Risk**: high — every agent call leaves the main checkout and the worktrees, and every writer's work reaches the integration branch by a new fast-forward step
+- **Clarity**: specified — `lsf-runtime.md` Permissions (Placement, Reviewers, Merge conflicts, Runtime changes 1–3) and the clone-lifetime verdict
+- **Iteration**: write-once
+- **Effort**: large
+- **Scope**: `lsf-runtime/runtime`, `lsf-runtime/orchestrator`, `docs/design/lsf-runtime.md::runtime`
+- **Publishes**: per-call clones (kept and discarded) and fetch-back; the integration fast-forward step; the merge clone; the role field `clone`
+- **Depends on**: s2-permissions-design (design, Placement, Reviewers and Merge conflicts); code-merge-cleanup (logical, the merge and cleanup steps moved into clones, `RemoveWorktree`); declared-gates (logical, serialises the runtime and orchestrator files)
+- **External gates**: `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`); `git` (environment, 2.38 or later)
+- **Done condition**: Every agent call runs in its own plain clone under the state dir, as Placement's table assigns it, and none in the main checkout or a worktree. A launch with the main checkout or the state dir under `/tmp` or `/var/tmp` is refused. A kept clone's branch is fetched into the main repo as `lsf/<plan8>/<key>`, without tags. A kept clone stays until its unit's cleanup, which removes it in place of a worktree and lists its untracked and ignored files as `RemoveWorktree` does (requester verdict, 2026-10-08). A discarded clone is removed after its call and has no uncommitted check. Roles carry the field `clone` (`kept` or `discarded`), and `<plugin>` is substituted in `deny`. A writer repo call (`direct-edits`, `decision-replan`, `replan`, `termination`) reaches the integration branch only through an orchestrator step that checks its fetched branch and fast-forwards; the step stops the run when the main checkout is not clean at the expected tip. The merge step runs in `<stateDir>/merge/w<n>` with every check Merge conflicts lists, the conflict call takes that clone as its cwd, the integration branch fast-forwards after each verified merge commit, and the clone stays until the wave's merges finish. Every branch a prompt names is a local branch in the clone. The repo-call snapshot goes from Uncommitted at return, and the Runtime section says so. Tests show: a writer's untracked file survives to its unit's cleanup; a reviewer's clone is gone after its call; a requester edit in the main checkout stops the run at the next fast-forward; a step killed mid-merge resumes in the merge clone and adopts its merge by trailers. `code-merge-cleanup`'s and `runtime-signals`' tests pass, amended only where they asserted a worktree or the main checkout. The tests pass.
+- **Description**: The first half of the Permissions section's Runtime changes, split from a single carrier on the size budget (requester verdict, 2026-10-08). Calls still run under the configured roles: the boundary lands with `s2-sandbox`, and these clones are its precondition, since the sandbox's `denyRead` on the main checkout holds only when no call runs there. The orchestrator half has no reference implementation.
+
+### s2-sandbox
+- **Type**: feature
+- **Risk**: high — the proxy holds the live credential, and a launch or proxy fault fails every call
+- **Clarity**: exploratory — one open decision: whether a call failing with 401 on an expired, unrefreshed token becomes a stop (Permissions, Credential proxy)
 - **Iteration**: write-once
 - **Effort**: medium
-- **Scope**: `docs/design/lsf-runtime.md::permissions`
-- **Publishes**: the per-stage permission configuration
-- **Depends on**: substrate-spike (knowledge, run 1's prefix-rule failure and the deny list of runs 2–7); runtime-core (knowledge, the role shape `{tools, allow, deny, permissionMode}` and its rules matching `agentType` and a label regex)
-- **External gates**: `claude-code-headless` (environment, Claude Code 2.1.289); `requester-verdict` (organisational)
-- **Done condition**: The Permissions section is committed. It decides each stage role's permission configuration, comparing at least a deny list with Bash granted, prompts rewritten to single commands, `--permission-mode auto`, and running each call inside the `ic` isolation container with broad permissions, as the maths exemplar does. Each option is run on the spike fixture: whether an implement stage completes, and whether a probe agent told to edit `.claude/settings.json` and delete a branch by shell is stopped, recorded per option. It states what a reviewer role may write. It states whether declared gate commands, which run on the host with the runtime's environment and credentials outside every role and are trusted as the plan document is, need a control beyond the `declared-gates-changed` stop. Each option is stated as runtime roles, with label patterns that match the labels the orchestrator issues, including D10's `#n` suffix on a repeated label (a `$`-anchored pattern does not), and the `merge-conflict:w<n>:<unit>` call, which runs in the main checkout, not a worktree, and edits and stages there; an option the role shape cannot express, such as the container, names the runtime change it needs and the unit that carries it. The requester's verdict is recorded.
-- **Description**: Spike condition 3; P-C5, P-C6. The spike's deny list held on agent restraint, not enforcement (results, check 9). The exemplar's broad permissions are safe because the container, not per-call rules, is the boundary.
+- **Scope**: `lsf-runtime/runtime`, `lsf-runtime/plan/gates.go`, `lsf-runtime/tools/fixturerun`, `docs/plan-graph.md::gate-block`, `skills/breakdown/SKILL.md::phase-1`, `docs/design/lsf-runtime.md::runtime`, `docs/design/lsf-runtime.md::permissions`
+- **Publishes**: the sandboxed call launch; the credential proxy; declared gates under `srt`; the gate block's `hosts`
+- **Depends on**: s2-clones (logical, the clones the sandbox's `denyRead` and `allowWrite` name; serialises the runtime files); s2-permissions-design (design, A call's launch, Credential proxy and Declared gates)
+- **External gates**: `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`); `claude-code-headless` (environment, Claude Code 2.1.294); `sandbox-runtime` (environment, `srt` 0.0.79); `bubblewrap` (environment, 0.13.0)
+- **Done condition**: Runtime changes 3–6 of the Permissions section, less what `s2-clones` carries. Each call gets the settings, flags and replaced environment of A call's launch, with a config `env` passthrough list and extra `denyRead` paths. The credential proxy starts, holds and stops with the launch: it refuses a request whose bearer is not the launch's placeholder, substitutes the live token, re-reads the credentials file when it changes, and streams unbuffered. The unit decides whether a 401 with no refresh becomes a stop and records it in Credential proxy. Declared gates and `setup` run under `srt` 0.0.79 with the filesystem, network and environment Declared gates gives. Every agent call's Bash, writer or reviewer, and `setup` reach only the gate block's `hosts`, and gate commands none, as Network gives. The `lsf-gates` parser takes `hosts`, alone or beside gate commands; a block holding `hosts` alone leaves gate handling as for a plan with no block; a loopback entry fails the load; a change to `hosts` stops on `declared-gates-changed`. `docs/plan-graph.md`'s Gate block and `phronithm:breakdown`'s Phase 1 gate paragraph name it, the paragraph asking for the hosts the project's builds and tests fetch from. Tests cover the proxy's refusal, substitution and streaming, and each call's argv, environment and settings. `tools/fixturerun` runs the spike fixture end to end under the decided configuration on 2.1.294, and the streams in `lsf-runtime/testdata/streams/` are re-checked against 2.1.294 (R17). A live check shows sandboxed Bash fetching from a declared package registry and refused an undeclared host. The tests pass.
+- **Description**: The second half of the Permissions section's Runtime changes. The `s2-permissions` harness (`run.sh`'s launch, `inject-proxy.py`) is the reference for the launch and the proxy. Disposes of P-C5 and P-C6. **Flag:** five surfaces exceed the surface bound; outside `lsf-runtime/runtime`, the parser change is one field, the fixture run one configuration, and the documents a few lines each, so the excess is not context.
 
 ### retained-artefacts-impl
 - **Type**: feature
@@ -134,10 +149,10 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Effort**: medium
 - **Scope**: `lsf-runtime/plan`, `lsf-runtime/orchestrator`, `lsf-runtime/runtime`, `docs/design/lsf-runtime.md::runtime`, `docs/design/lsf-workflow.md::wave-loop`
 - **Publishes**: the `Retains:` declaration's parse and store check; the journaled move to `<store>/<unit>/`
-- **Depends on**: retained-artefacts-design (design, the policy); empirical-unit-design (design, where `Retains:` and the store are declared); code-merge-cleanup (logical, cleanup as a code stage); declared-gates (logical, serialises the plan and runtime files)
+- **Depends on**: retained-artefacts-design (design, the policy); empirical-unit-design (design, where `Retains:` and the store are declared); code-merge-cleanup (logical, cleanup as a code stage); s2-clones (logical, kept clones and their removal at cleanup); s2-sandbox (logical, serialises the plan and runtime files)
 - **External gates**: `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`)
-- **Done condition**: A unit's `Retains:` paths are read where `empirical-unit-design` places them, and a `Retains:` line in a project with no declared store fails the load, and so the pre-flight command. At cleanup, a merged worktree's `Retains:` paths are moved to `<store>/<unit>/`, `<unit>` being the plan's unit id, before the worktree is removed; every other ignored or untracked file goes with it, listed in the report. The move is a journaled runtime step: a test kills it mid-move and the resume completes it without stopping on its own partial destination or losing a path, and a destination that exists before the move stops it with the worktree kept. A test moves across filesystems and shows the source is removed only after the copy verifies by the method the unit decides. `code-merge-cleanup`'s cleanup tests pass. The tests pass.
-- **Description**: The runtime half of `lsf-empirical-work.md`'s Retained artefacts. The parse and the move land together, so no interim rule keeps a worktree for an unmoved declaration. Cleanup's removal is `lsfrt.Runtime.RemoveWorktree`, which deletes everything untracked or ignored and lists it, and every branch of a merged unit is deleted with it; the move runs before that call, per worktree label. On a substrate with no storage outside the worktree the runtime moves on the host; the agent needs no write access outside its worktree. **Flag:** three code surfaces exceed the surface bound; the `plan` change is one field and its load check, so the excess is not context.
+- **Done condition**: A unit's `Retains:` paths are read where `empirical-unit-design` places them, and a `Retains:` line in a project with no declared store fails the load, and so the pre-flight command. At cleanup, a merged unit's kept clones' `Retains:` paths are moved to `<store>/<unit>/`, `<unit>` being the plan's unit id, before the clone is removed; every other ignored or untracked file goes with it, listed in the report. The move is a journaled runtime step: a test kills it mid-move and the resume completes it without stopping on its own partial destination or losing a path, and a destination that exists before the move stops it with the clone kept. A test moves across filesystems and shows the source is removed only after the copy verifies by the method the unit decides. `code-merge-cleanup`'s cleanup tests pass. The tests pass.
+- **Description**: The runtime half of `lsf-empirical-work.md`'s Retained artefacts. The parse and the move land together, so no interim rule keeps a worktree for an unmoved declaration. Cleanup's removal is the clone removal `s2-clones` puts in place of `lsfrt.Runtime.RemoveWorktree`, which deletes everything untracked or ignored and lists it, and every branch of a merged unit is deleted with it; the move runs before that call, per clone label. `lsf-empirical-work.md` states the policy for worktrees; a kept clone takes the worktree's place one for one (requester verdict, 2026-10-08). The runtime moves on the host; the sandboxed agent has no write access outside its clone. **Flag:** three code surfaces exceed the surface bound; the `plan` change is one field and its load check, so the excess is not context.
 
 ### runtime-cli-drive
 - **Type**: integration
@@ -147,9 +162,9 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Effort**: medium
 - **Scope**: `lsf-runtime/cli`, `skills/lsf-drive/SKILL.md::launch`, `skills/lsf-drive/SKILL.md::relaunch`, `skills/lsf-drive/SKILL.md::startup`, `docs/design/lsf-runtime.md::cli`
 - **Publishes**: the runtime CLI (launch, status, pause, resume, watch)
-- **Depends on**: declared-gates (logical, serialises the runtime files); s2-permissions-design (design, the decided configuration); plan-preflight-check (logical, serialises `skills/lsf-drive/SKILL.md::startup`); relay-probe (knowledge, relay behaviour); runtime-core (logical, `Run` and the state-dir layout: `status.json`, `summary.json`, `lock`); orchestrator-port-loop (logical, `orchestrator.Body`; knowledge, `tools/fixturerun`'s launch sequence)
-- **External gates**: `claude-code-headless` (environment, Claude Code 2.1.289); `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`); `git` (environment, 2.38 or later; 2.54.0 probed)
-- **Done condition**: `phronithm:lsf-drive` launches, pauses, resumes and reads the status of a run through the CLI, under the decided permission configuration. A fixture run launched from a turn in which the requester typed a message shows no agent transcript carrying a relayed message, cited by transcript (P-F1). The driver outlives the interactive session that launched it, or the skill says it runs from the requester's terminal. The Relaunch section keeps `gate-not-run`'s route: an environment or project change, not a decision, whether a stage or the runtime's own gate run raised it. It keeps the `declared-gates-changed` row: relaunch again, and the relaunch takes the changed block, or record a decision that restores it. It gives the route for a code-stage integrity stop, which repeats at every launch until a requester repair commit lands: the repair commit, and exempting the code stages' paths from any hook that rewrites or stages files. Its stop-kind table lists `uncommitted-at-return`, `skill-not-loaded`, `schema-violation`, `gate-omitted`, `stage-fault` and `branch-mismatch` with the routes `lsf-workflow.md`'s Relaunch target gives; `uncommitted-at-return` is answered by committing or removing the named paths, not by a decision, and the section says a requester edit in the main checkout during a writer call stops the run. It names the merge faults the requester clears by hand, each by the remedy its statement gives: a recorded merge SHA that no longer resolves after a history rewrite, a stale `index.lock`, a foreign merge in progress in the main checkout, paths a hook staged after a merge, a `pre-merge-commit` hook included, and a red gate result that the environment caused, which replays from the journal until `journal/gates_<tree prefix>-*.json` is removed (requester decision, 2026-10-08). A launch resolves `claude` once (configuration, `LSF_CLAUDE_BIN` or `PATH`) to its versioned path, records the version from the first init stream, and runs every call on that path; a test shows a binary replaced mid-launch is not used (requester decision, 2026-10-06). A launch refuses a `git` older than 2.38, naming the version found (requester decision, 2026-10-07). The tests pass.
+- **Depends on**: s2-sandbox (logical, the sandboxed launch and the proxy a launch holds; serialises the runtime files); s2-permissions-design (design, the decided configuration); plan-preflight-check (logical, serialises `skills/lsf-drive/SKILL.md::startup`); relay-probe (knowledge, relay behaviour); runtime-core (logical, `Run` and the state-dir layout: `status.json`, `summary.json`, `lock`); orchestrator-port-loop (logical, `orchestrator.Body`; knowledge, `tools/fixturerun`'s launch sequence)
+- **External gates**: `claude-code-headless` (environment, Claude Code 2.1.294); `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`); `git` (environment, 2.38 or later; 2.54.0 probed)
+- **Done condition**: `phronithm:lsf-drive` launches, pauses, resumes and reads the status of a run through the CLI, under the decided permission configuration. A fixture run launched from a turn in which the requester typed a message shows no agent transcript carrying a relayed message, cited by transcript (P-F1). The driver outlives the interactive session that launched it, or the skill says it runs from the requester's terminal. The Relaunch section keeps `gate-not-run`'s route: an environment or project change, not a decision, whether a stage or the runtime's own gate run raised it. It keeps the `declared-gates-changed` row: relaunch again, and the relaunch takes the changed block, or record a decision that restores it. It gives the route for a code-stage integrity stop, which repeats at every launch until a requester repair commit lands: the repair commit, and exempting the code stages' paths from any hook that rewrites or stages files. Its stop-kind table lists `uncommitted-at-return`, `skill-not-loaded`, `schema-violation`, `gate-omitted`, `stage-fault` and `branch-mismatch` with the routes `lsf-workflow.md`'s Relaunch target gives; `uncommitted-at-return` is answered by committing or removing the named paths, not by a decision, and the section says a requester edit in the main checkout stops the run at the next fast-forward. It names the merge faults the requester clears by hand, as the runtime raises them after `s2-clones` moved the merge into a merge clone, each by the remedy its statement gives: a recorded merge SHA that no longer resolves after a history rewrite, a stale `index.lock`, a foreign merge in progress in the main checkout, paths a hook staged after a merge, a `pre-merge-commit` hook included, and a red gate result that the environment caused, which replays from the journal until `journal/gates_<tree prefix>-*.json` is removed (requester decision, 2026-10-08). A launch resolves `claude` once (configuration, `LSF_CLAUDE_BIN` or `PATH`) to its versioned path, records the version from the first init stream, and runs every call on that path; a test shows a binary replaced mid-launch is not used (requester decision, 2026-10-06). A launch refuses a `git` older than 2.38, naming the version found (requester decision, 2026-10-07). The tests pass.
 - **Description**: Replaces `relay-mitigation`: headless calls carry no relay (results, check 3), so P-F1 reduces to the launch path. `tools/fixturerun` is a working launch: configuration from a file, args, `DISABLE_AUTOUPDATER=1` with a versioned `claude` checked before spending, a fresh state dir, then `lsfrt.Run(ctx, cfg, orchestrator.Body)`. A code-stage stop arrives as `stage-fault` with the statement `"<stage> failed: <reason>"`. **Flag:** three surfaces exceed the surface bound; the skill and design changes are sections of text, so the excess is not context.
 
 ### runtime-distribution
@@ -162,7 +177,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: the launcher the skills invoke; the release build
 - **Depends on**: runtime-cli-drive (logical, the CLI the launcher runs; serialises `skills/lsf-drive/SKILL.md::launch` and `::startup`); runtime-language-design (design, the routes and targets); plan-preflight-check (logical, `lsf-validate`; serialises `skills/breakdown/SKILL.md::quality-check`)
 - **External gates**: `github-actions` (environment); `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`); `git` (environment, 2.38 or later on every CI runner); `requester-verdict` (organisational)
-- **Done condition**: The Distribution section is committed, choosing D1 or D4, with the requester's verdict recorded. CI builds static binaries for linux and darwin on amd64 and arm64 with `CGO_ENABLED=0`, and runs the `lsf-runtime` tests on Linux and macOS, orphan reaping included. A launcher at `${CLAUDE_PLUGIN_ROOT}/lsf-runtime/` runs the platform's binary, and the plan-validation command through it. `phronithm:breakdown`'s quality check and `phronithm:lsf-drive`'s Startup run `lsf-validate` through the launcher, not `go run`, and tell problems from a command failure by its exit code (1 or 2), not by empty stdout. It prefers a locally built binary or one named by an environment variable, so `--plugin-dir` development and `shakedown-fixture` run the working tree. Under D1 it refuses a binary whose sha256 does not match its pin. `phronithm:lsf-drive` invokes the runtime through the launcher; there is no top-level `bin/`. A plugin installed from a local marketplace runs the runtime on this host through the launcher. The tests pass.
+- **Done condition**: The Distribution section is committed, choosing D1 or D4, with the requester's verdict recorded. CI builds static binaries for linux and darwin on amd64 and arm64 with `CGO_ENABLED=0`, and runs the `lsf-runtime` tests on Linux and macOS, orphan reaping included. A launcher at `${CLAUDE_PLUGIN_ROOT}/lsf-runtime/` runs the platform's binary, and the plan-validation command through it. `phronithm:breakdown`'s quality check and `phronithm:lsf-drive`'s Startup run `lsf-validate` through the launcher, not `go run`, and tell problems from a command failure by its exit code (1 or 2), not by empty stdout. It prefers a locally built binary or one named by an environment variable, so `--plugin-dir` development and `shakedown-fixture` run the working tree. Under D1 it refuses a binary whose sha256 does not match its pin. The Distribution section says how a user gets `srt` 0.0.79 and, on Linux, `bubblewrap`, or names them as prerequisites. `phronithm:lsf-drive` invokes the runtime through the launcher; there is no top-level `bin/`. A plugin installed from a local marketplace runs the runtime on this host through the launcher. The tests pass.
 - **Description**: `lsf-runtime.md` Language, Open for the re-plan: no unit owned the route, the CI or the release, though the spike's estimate counted packaging. Windows outside WSL is out of scope (requester verdict, 2026-10-06; R16). Until this unit, both skills call `go -C ${CLAUDE_PLUGIN_ROOT}/lsf-runtime run ./validate/cmd/lsf-validate`, which needs Go and reports every non-zero exit as 1. **Flag:** four surfaces exceed the surface bound; the skill and design changes are a few lines of text each, so the excess is not context.
 
 ### script-retirement
@@ -175,7 +190,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: none
 - **Depends on**: runtime-cli-drive (testing, the replacement path runs through `phronithm:lsf-drive`); runtime-distribution (logical, plugin users get the runtime before the script is deleted); retained-artefacts-impl (logical, serialises the orchestrator and plan files; the runtime is the only path only once a `Retains:` line is honoured); empirical-unit-design (design, the gate a project with no gate of its own declares)
 - **External gates**: none
-- **Done condition**: `workflows/` is deleted: the generated script, the JavaScript orchestrator and its tests, `build.js` and the spike. The JavaScript parity tools under `lsf-runtime/tools` (`graphparity`, `promptparity`) are deleted with it, and `go test` has no `node` dependency; the pinned plan fixtures and the divergence registers in `plan/doc.go` and `orchestrator/doc.go` stay. No `// js:` title in the orchestrator tests cites the deleted `implement.test.js` as if it existed: each is deleted, or amended to cite it at a named commit. `lsf-workflow.md` describes the runtime's stages, not the Workflow script's: no copy, scribe or cleanup agent, load-stage agent, or model-call merge (the Go merge's conflict call stays) remains in the Constraints, Lifecycle mapping, Wave loop, Escalation, Persistence or Testing sections. No Go comment describes a stage the Go runs as code as an agent or copy stage (`plan/graph.go`, `orchestrator/report.go`, `prompts.go`, `orchtest/fixtures.go`, as of `code-stage-interface`), and `orchtest`'s `Stub.Call` has no branch for the JavaScript merge prompt. `CLAUDE.md`'s Structure section names `lsf-runtime/` and no longer `workflows/`. The unit decides whether a plan must declare its gates, consistent with `empirical-unit-design`'s gate for a project with none, and records it in `lsf-workflow.md::lifecycle-mapping` with the disposition of R11 and R12 for undeclared plans. If a plan must declare, the load rejects one with no `lsf-gates` block, and `docs/plan-graph.md` and `phronithm:breakdown`'s Phase 1 step 4 say so; otherwise stage-reported gates, `gate-omitted` and the long-gate recipe stay for undeclared plans and are described as the runtime's. The `lsf-runtime` tests pass.
+- **Done condition**: `workflows/` is deleted: the generated script, the JavaScript orchestrator and its tests, `build.js` and the spike. The JavaScript parity tools under `lsf-runtime/tools` (`graphparity`, `promptparity`) are deleted with it, and `go test` has no `node` dependency; the pinned plan fixtures and the divergence registers in `plan/doc.go` and `orchestrator/doc.go` stay. No `// js:` title in the orchestrator tests cites the deleted `implement.test.js` as if it existed: each is deleted, or amended to cite it at a named commit. `lsf-workflow.md` describes the runtime's stages, not the Workflow script's, in per-call clones and a merge clone as `lsf-runtime.md`'s Permissions places them, not worktrees: no copy, scribe or cleanup agent, load-stage agent, or model-call merge (the Go merge's conflict call stays) remains in the Constraints, Lifecycle mapping, Wave loop, Escalation, Persistence or Testing sections. No Go comment describes a stage the Go runs as code as an agent or copy stage (`plan/graph.go`, `orchestrator/report.go`, `prompts.go`, `orchtest/fixtures.go`, as of `code-stage-interface`), and `orchtest`'s `Stub.Call` has no branch for the JavaScript merge prompt. `CLAUDE.md`'s Structure section names `lsf-runtime/` and no longer `workflows/`. The unit decides whether a plan must declare its gates, consistent with `empirical-unit-design`'s gate for a project with none, and records it in `lsf-workflow.md::lifecycle-mapping` with the disposition of R11 and R12 for undeclared plans. If a plan must declare, the load rejects one with no `lsf-gates` block, and `docs/plan-graph.md` and `phronithm:breakdown`'s Phase 1 step 4 say so; otherwise stage-reported gates, `gate-omitted` and the long-gate recipe stay for undeclared plans and are described as the runtime's. The `lsf-runtime` tests pass.
 - **Description**: Ends `lsf-substrate.md`'s interim policy: the Workflow script is the supported Phase 3 path until this unit, and the design document describes it until then. **Flag:** five surfaces exceed the surface bound; four are deletions or comment edits, so the context load is the design document's rewrite; the declaration rule, if adopted, is a load check and two sentences.
 
 ### empirical-script-support
@@ -212,9 +227,9 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Effort**: large
 - **Scope**: `docs/design/lsf-long-running.md`
 - **Publishes**: the decision on work that outlasts a stage
-- **Depends on**: substrate-spike (design, confirmed substrate); runtime-core (knowledge, the runtime's supervision of its calls); empirical-unit-design (design, plan-level shape); retained-artefacts-design (design, retained-artefact policy for a job's outputs); gate-results-integrity (knowledge, the `gate-not-run` stop and the long-gate recipe)
+- **Depends on**: substrate-spike (design, confirmed substrate); runtime-core (knowledge, the runtime's supervision of its calls); s2-permissions-design (design, per-call clones and the Bash sandbox); empirical-unit-design (design, plan-level shape); retained-artefacts-design (design, retained-artefact policy for a job's outputs); gate-results-integrity (knowledge, the `gate-not-run` stop and the long-gate recipe)
 - **External gates**: none
-- **Done condition**: `docs/design/lsf-long-running.md` is committed. It decides how work that outlasts one agent stage runs under the host runtime, and states the behaviour of the wave barrier, a re-plan while the work is in flight, resume, liveness, and a process left behind by a stopped run. On resume it distinguishes an interrupted attempt from one a re-plan or decision superseded, and states what happens to the interrupted attempt's commits and untracked outputs. It states the behaviour for a descendant that holds a call's stdout after the call exits (not group-killed; the call returns `killGrace` late) and for a retry after partial work, which reruns in the same worktree. It states the route for a project gate that cannot finish within one stage even with the long-gate recipe, which in a plan with no `lsf-gates` block stops with `gate-not-run` and has no exit through the workflow. For a declared plan, it states how gate runs count against `maxWallClock`: every gate checkout is a cold build, every merge but a wave's first reruns the gates, units gate one after another under `gateConcurrency` 1, a broken environment costs each waiting unit its full timeout, and a stop kills an in-flight gate, which reruns on relaunch (requester decision, 2026-10-08). It states how a job's outputs fall under the retained-artefact classes: cited by recipe if regenerable, otherwise declared by `Retains:` and moved to the store. `phronithm:critique` (critique-design) passes at the gate bar.
+- **Done condition**: `docs/design/lsf-long-running.md` is committed. It decides how work that outlasts one agent stage runs under the host runtime, and states the behaviour of the wave barrier, a re-plan while the work is in flight, resume, liveness, and a process left behind by a stopped run. On resume it distinguishes an interrupted attempt from one a re-plan or decision superseded, and states what happens to the interrupted attempt's commits and untracked outputs. It states the behaviour for a descendant that holds a call's stdout after the call exits (not group-killed; the call returns `killGrace` late) and for a retry after partial work. It states how a job runs inside a call's Bash sandbox, which reaches only the gate block's `hosts` and writes only its clone and `/tmp`, and how its outputs survive the clone, which stays until its unit's cleanup. It states the route for a project gate that cannot finish within one stage even with the long-gate recipe, which in a plan with no `lsf-gates` block stops with `gate-not-run` and has no exit through the workflow. For a declared plan, it states how gate runs count against `maxWallClock`: every gate checkout is a cold build, every merge but a wave's first reruns the gates, units gate one after another under `gateConcurrency` 1, a broken environment costs each waiting unit its full timeout, and a stop kills an in-flight gate, which reruns on relaunch (requester decision, 2026-10-08). It states how a job's outputs fall under the retained-artefact classes: cited by recipe if regenerable, otherwise declared by `Retains:` and moved to the store. `phronithm:critique` (critique-design) passes at the gate bar.
 - **Description**: Postmortem §A: 18 campaign stages took 39.7 of 62.1 implement agent-hours; one campaign outlived its stage and left an orphan process.
 
 ### long-running-impl
@@ -317,7 +332,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Scope**: `lsf-runtime/fixtures/shakedown`, `docs/design/lsf-workflow.md::status`, `docs/design/lsf-workflow.md::testing`
 - **Publishes**: a fixture plan covering the unit kinds the runtime claims to run
 - **Depends on**: long-running-impl (testing, the last script unit); empirical-unit-impl (testing, the plan form); drive-mechanics (testing, the launch path)
-- **External gates**: `claude-code-headless` (environment, Claude Code 2.1.289)
+- **External gates**: `claude-code-headless` (environment, Claude Code 2.1.294); `sandbox-runtime` (environment, `srt` 0.0.79); `bubblewrap` (environment, 0.13.0)
 - **Done condition**: The runtime, launched through `phronithm:lsf-drive` on a fixture plan with at least one code unit whose gate runs past the 600 s tool timeout, one design unit that settles a decision the architecture document left open, and one empirical unit whose job outlasts the tool timeout, returns `complete`, with the design unit's change recorded as an architecture amendment. A second run, on a variant whose unit moves a decision the document made, stops with `architecture-invalidated`. The design's Status section cites both run ids, lists the unit kinds the runtime has run on, and records how the long gate completed.
 - **Description**: Postmortem §G: the workflow was shaken down on code units and met measurement units first on a live programme. The two architecture cases are the upgrade path for the gate half of `arch-pin-refresh`'s done condition, and the long gate for `gate-results-integrity`'s live long-gate claim; both were `conjectured` at completion. `tools/fixturerun` is a starting point for the launch; its caps (40 calls, $25, 1 h) suit one unit. **Flag:** the scope path moves if the fixture lives in the bench repository.
 
@@ -491,14 +506,14 @@ units:
         kind: organisational
   - id: s2-permissions-design
     type: design
-    complete: false
+    complete: true
     dependencies: [substrate-spike, runtime-core]
     scope: [docs/design/lsf-runtime.md::permissions]
     publishes: [per-stage permission configuration]
     gates:
       - name: claude-code-headless
         kind: environment
-        pin: "2.1.289"
+        pin: "2.1.294"
       - name: requester-verdict
         kind: organisational
   - id: runtime-language-design
@@ -586,10 +601,42 @@ units:
       - name: lsf-toolchain
         kind: environment
         pin: "1.27.1"
+  - id: s2-clones
+    type: feature
+    complete: false
+    dependencies: [s2-permissions-design, code-merge-cleanup, declared-gates]
+    scope: [lsf-runtime/runtime, lsf-runtime/orchestrator, docs/design/lsf-runtime.md::runtime]
+    publishes: [per-call clones, integration fast-forward step, merge clone, clone role field]
+    gates:
+      - name: lsf-toolchain
+        kind: environment
+        pin: "1.27.1"
+      - name: git
+        kind: environment
+        pin: ">= 2.38"
+  - id: s2-sandbox
+    type: feature
+    complete: false
+    dependencies: [s2-clones, s2-permissions-design]
+    scope: [lsf-runtime/runtime, lsf-runtime/plan/gates.go, lsf-runtime/tools/fixturerun, docs/plan-graph.md::gate-block, skills/breakdown/SKILL.md::phase-1, docs/design/lsf-runtime.md::runtime, docs/design/lsf-runtime.md::permissions]
+    publishes: [sandboxed call launch, credential proxy, srt gate runs, hosts gate field]
+    gates:
+      - name: lsf-toolchain
+        kind: environment
+        pin: "1.27.1"
+      - name: claude-code-headless
+        kind: environment
+        pin: "2.1.294"
+      - name: sandbox-runtime
+        kind: environment
+        pin: "0.0.79"
+      - name: bubblewrap
+        kind: environment
+        pin: "0.13.0"
   - id: retained-artefacts-impl
     type: feature
     complete: false
-    dependencies: [retained-artefacts-design, empirical-unit-design, code-merge-cleanup, declared-gates]
+    dependencies: [retained-artefacts-design, empirical-unit-design, code-merge-cleanup, s2-clones, s2-sandbox]
     scope: [lsf-runtime/plan, lsf-runtime/orchestrator, lsf-runtime/runtime, docs/design/lsf-runtime.md::runtime, docs/design/lsf-workflow.md::wave-loop]
     publishes: [Retains parse and store check, journaled store move]
     gates:
@@ -599,13 +646,13 @@ units:
   - id: runtime-cli-drive
     type: integration
     complete: false
-    dependencies: [declared-gates, s2-permissions-design, plan-preflight-check, relay-probe, runtime-core, orchestrator-port-loop]
+    dependencies: [s2-sandbox, s2-permissions-design, plan-preflight-check, relay-probe, runtime-core, orchestrator-port-loop]
     scope: [lsf-runtime/cli, skills/lsf-drive/SKILL.md::launch, skills/lsf-drive/SKILL.md::relaunch, skills/lsf-drive/SKILL.md::startup, docs/design/lsf-runtime.md::cli]
     publishes: [runtime CLI]
     gates:
       - name: claude-code-headless
         kind: environment
-        pin: "2.1.289"
+        pin: "2.1.294"
       - name: lsf-toolchain
         kind: environment
         pin: "1.27.1"
@@ -659,7 +706,7 @@ units:
   - id: long-running-design
     type: design
     complete: false
-    dependencies: [substrate-spike, runtime-core, empirical-unit-design, retained-artefacts-design, gate-results-integrity]
+    dependencies: [substrate-spike, runtime-core, s2-permissions-design, empirical-unit-design, retained-artefacts-design, gate-results-integrity]
     scope: [docs/design/lsf-long-running.md]
     publishes: [long-running work decision]
     gates: []
@@ -729,7 +776,13 @@ units:
     gates:
       - name: claude-code-headless
         kind: environment
-        pin: "2.1.289"
+        pin: "2.1.294"
+      - name: sandbox-runtime
+        kind: environment
+        pin: "0.0.79"
+      - name: bubblewrap
+        kind: environment
+        pin: "0.13.0"
   - id: programme-close
     type: integration
     complete: false
@@ -737,7 +790,7 @@ units:
     scope: [docs/design/lsf-problem-register.md, docs/design/lsf-improvements.md, docs/design/lsf-workflow.md::status, CLAUDE.md]
     publishes: []
     gates: []
-execution_order: [problem-register, relay-probe, arch-pin-refresh, gate-results-integrity, substrate-options, significant-precision-sample, empirical-criteria-design, retained-artefacts-design, substrate-spike, empirical-unit-design, findings-consumer-design, drive-decision-design, runtime-language-design, runtime-core, s2-permissions-design, orchestrator-port-plan, plan-preflight-check, orchestrator-port-loop, code-stage-interface, runtime-signals, code-merge-cleanup, declared-gates, retained-artefacts-impl, runtime-cli-drive, runtime-distribution, script-retirement, empirical-script-support, findings-consumer-impl, long-running-design, long-running-impl, empirical-criteria-impl, phase2-gate-discipline, empirical-unit-impl, programme-close-out, drive-presentation-impl, drive-mechanics, shakedown-fixture, programme-close]
+execution_order: [problem-register, relay-probe, arch-pin-refresh, gate-results-integrity, substrate-options, significant-precision-sample, empirical-criteria-design, retained-artefacts-design, substrate-spike, empirical-unit-design, findings-consumer-design, drive-decision-design, runtime-language-design, runtime-core, s2-permissions-design, orchestrator-port-plan, plan-preflight-check, orchestrator-port-loop, code-stage-interface, runtime-signals, code-merge-cleanup, declared-gates, s2-clones, s2-sandbox, retained-artefacts-impl, runtime-cli-drive, runtime-distribution, script-retirement, empirical-script-support, findings-consumer-impl, long-running-design, long-running-impl, empirical-criteria-impl, phase2-gate-discipline, empirical-unit-impl, programme-close-out, drive-presentation-impl, drive-mechanics, shakedown-fixture, programme-close]
 ```
 
 ## Dependency Graph
@@ -748,7 +801,9 @@ Solid arrows are logical edges (including file serialisation), dashed are testin
 graph TD
   RV([requester-verdict])
   CC([claude-code-workflow-tool 2.1.289])
-  CH([claude-code-headless 2.1.289])
+  CH([claude-code-headless 2.1.294; 2.1.289 for units complete before s2-permissions-design])
+  SRT([sandbox-runtime 0.0.79])
+  BW([bubblewrap 0.13.0])
 
   PR[problem-register: complete]
   RP[relay-probe: complete]
@@ -763,7 +818,7 @@ graph TD
   RAD[retained-artefacts-design: complete]
   FCD[findings-consumer-design]
   DDD[drive-decision-design]
-  SPD[s2-permissions-design]
+  SPD[s2-permissions-design: complete]
   RLD[runtime-language-design: complete]
   RC[runtime-core: complete]
   OPP[orchestrator-port-plan: complete]
@@ -772,6 +827,8 @@ graph TD
   CMC[code-merge-cleanup: complete]
   RS[runtime-signals: complete]
   DG[declared-gates: complete]
+  SC[s2-clones]
+  SX[s2-sandbox]
   RAI[retained-artefacts-impl]
   RCD[runtime-cli-drive]
   RD[runtime-distribution]
@@ -809,7 +866,11 @@ graph TD
   SS -.-> LRD
   SS -.-> DM
   APR --> GRI
-  OPL --> CSI --> RS --> CMC --> DG --> RCD
+  OPL --> CSI --> RS --> CMC --> DG --> SC --> SX --> RCD
+  SPD -.-> SC
+  SPD -.-> SX
+  CMC --> SC
+  SPD -.-> LRD
   CSI --> CMC
   RS --> DG
   OPL --> RCD
@@ -823,7 +884,8 @@ graph TD
   RAD -.-> RAI
   EUD -.-> RAI
   CMC --> RAI
-  DG --> RAI --> SR
+  SC --> RAI
+  SX --> RAI --> SR
   RAI -. testing .-> EUI
   SPD -.-> RCD
   PPC --> RCD
@@ -880,10 +942,16 @@ graph TD
   CH --> SPD
   CH --> RC
   CH --> OPL
+  CH --> SX
   CH --> RCD
   CH --> SF
+  SRT --> SX
+  SRT --> SF
+  BW --> SX
+  BW --> SF
   GA([github-actions]) --> RD
-  GIT([git >= 2.38]) --> RCD
+  GIT([git >= 2.38]) --> SC
+  GIT --> RCD
   GIT --> RD
 ```
 
@@ -894,7 +962,7 @@ graph TD
 3. `empirical-criteria-design`, `retained-artefacts-design`, `substrate-spike`.
 4. `empirical-unit-design`, `findings-consumer-design`, `drive-decision-design`, `runtime-language-design`. Each design decision lands before any unit it governs starts.
 5. `runtime-core`, `s2-permissions-design`, `orchestrator-port-plan`, `plan-preflight-check`, `orchestrator-port-loop`. The permissions design states its options in the runtime's role shape. The runtime and the port; the plan model and the runtime can run side by side, and the pre-flight command uses the ported parser.
-6. `code-stage-interface`, `runtime-signals`, `code-merge-cleanup`, `declared-gates`, `retained-artefacts-impl`, `runtime-cli-drive`, `runtime-distribution`, `script-retirement`. The rest of the S2 build, serial on `lsf-runtime/`. It leads the orchestrator stream so later units are built and tested on the runtime, not the Workflow script. `retained-artefacts-impl` runs beside `runtime-cli-drive` and `runtime-distribution`, which write none of its files, and lands before `script-retirement` makes the runtime the only path.
+6. `code-stage-interface`, `runtime-signals`, `code-merge-cleanup`, `declared-gates`, `s2-clones`, `s2-sandbox`, `retained-artefacts-impl`, `runtime-cli-drive`, `runtime-distribution`, `script-retirement`. The rest of the S2 build, serial on `lsf-runtime/`. The permission boundary lands before the CLI, so every launch through `phronithm:lsf-drive` runs under it. It leads the orchestrator stream so later units are built and tested on the runtime, not the Workflow script. `retained-artefacts-impl` runs beside `runtime-cli-drive` and `runtime-distribution`, which write none of its files, and lands before `script-retirement` makes the runtime the only path.
 7. `empirical-script-support`, `findings-consumer-impl`. The rest of the orchestrator stream, serial on `lsf-runtime/plan` and `lsf-runtime/orchestrator`.
 8. `long-running-design`, `long-running-impl`. Last in the stream: the least certain unit, and the one most likely to be re-planned.
 9. `empirical-criteria-impl`, `phase2-gate-discipline`, `empirical-unit-impl`, `programme-close-out`, `drive-presentation-impl`, `drive-mechanics`. Skill text, each after its decision.
@@ -909,9 +977,9 @@ No unit edits the JavaScript orchestrator: it stays the Workflow script's source
 - **Worker 1, decisions and skill text.** `empirical-criteria-design` → `retained-artefacts-design` → `substrate-options` → `empirical-unit-design` → `findings-consumer-design` → `drive-decision-design` → `s2-permissions-design` → `runtime-language-design` → the skill-text units of step 9. Writes `docs/design/` decision records and `skills/`.
 - **Worker 2, orchestrator and runtime.** `relay-probe` → `significant-precision-sample` → `substrate-spike` → the stream of steps 5–8. Writes `lsf-runtime/`, deletes `workflows/`, and writes sections of `docs/design/lsf-workflow.md` and `docs/design/lsf-runtime.md`.
 
-Synchronisation points: `relay-probe` before `substrate-options`; `substrate-options` before `substrate-spike`; `empirical-unit-design` before `retained-artefacts-impl`; `runtime-core` before `s2-permissions-design`; `s2-permissions-design` before `runtime-cli-drive`; `runtime-language-design` before `runtime-core` and the port; each design unit before the unit it governs; both workers before `shakedown-fixture`.
+Synchronisation points: `relay-probe` before `substrate-options`; `substrate-options` before `substrate-spike`; `empirical-unit-design` before `retained-artefacts-impl`; `runtime-core` before `s2-permissions-design`; `s2-permissions-design` before `s2-clones`; `runtime-language-design` before `runtime-core` and the port; each design unit before the unit it governs; both workers before `shakedown-fixture`.
 
-Shared files are split by section. `docs/design/lsf-workflow.md`, `skills/lsf-drive/SKILL.md`, `skills/large-scale-feature/SKILL.md` and `skills/breakdown/SKILL.md` are each owned per section, written in Scope as `file::section`. `docs/design/lsf-empirical-work.md` is owned per section by its three design units, and `docs/design/lsf-runtime.md` by `s2-permissions-design`, `runtime-language-design`, `runtime-core`, `runtime-cli-drive` and `runtime-distribution`. `lsf-runtime/` is owned per subdirectory; every writer of one is on a single serial chain. A unit that writes a whole shared file (`drive-mechanics`, `empirical-unit-impl`) has an edge from every unit that writes a section of it.
+Shared files are split by section. `docs/design/lsf-workflow.md`, `skills/lsf-drive/SKILL.md`, `skills/large-scale-feature/SKILL.md` and `skills/breakdown/SKILL.md` are each owned per section, written in Scope as `file::section`. `docs/design/lsf-empirical-work.md` is owned per section by its three design units, and `docs/design/lsf-runtime.md` by `s2-permissions-design`, `runtime-language-design`, `runtime-core`, `s2-clones`, `s2-sandbox`, `runtime-cli-drive` and `runtime-distribution`. `lsf-runtime/` is owned per subdirectory; every writer of one is on a single serial chain. A unit that writes a whole shared file (`drive-mechanics`, `empirical-unit-impl`) has an edge from every unit that writes a section of it.
 
 ### N workers
 
@@ -929,9 +997,9 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 
 ## Critical Path
 
-`s2-permissions-design` → `runtime-cli-drive` → `runtime-distribution` → `script-retirement` → `empirical-script-support` → `findings-consumer-impl` → `long-running-impl` → `shakedown-fixture` → `programme-close`.
+`s2-clones` → `s2-sandbox` → `runtime-cli-drive` → `runtime-distribution` → `script-retirement` → `empirical-script-support` → `findings-consumer-impl` → `long-running-impl` → `shakedown-fixture` → `programme-close`.
 
-9 units remaining: one large, seven medium, one small. One chain ties with it: `empirical-criteria-design` → `empirical-unit-design` → `retained-artefacts-impl` into `script-retirement`. Both heads wait on a requester verdict. The S2 build's size is a conjectured estimate, and the runtime and the port each exceeded it (R1).
+10 units remaining: two large, seven medium, one small. Two chains tie with it into `script-retirement`: `s2-clones` → `s2-sandbox` → `retained-artefacts-impl`, and `empirical-criteria-design` → `empirical-unit-design` → `retained-artefacts-impl`. `s2-clones` is ready now; `empirical-criteria-design` waits on a requester verdict. The S2 build's size is a conjectured estimate, and the runtime and the port each exceeded it (R1).
 
 ## Meta-Tasks
 
@@ -954,7 +1022,7 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
   | `findings-consumer-design` | P-B1, P-B3 |
   | `programme-close-out` | P-B2, P-B4 |
   | `drive-decision-design` | P-E2, P-E3, P-E4, P-E5 |
-  | `s2-permissions-design` | P-C5, P-C6 |
+  | `s2-sandbox` | P-C5, P-C6 |
   | `code-stage-interface` | P-C1, P-C2, P-C3, P-C4, P-C8 (fabricated ledger SHAs) |
   | `code-merge-cleanup` | P-C8 (fabricated merge SHAs), P-C9 |
   | `runtime-signals` | P-C7, P-C8 (denied commits) |
@@ -968,14 +1036,14 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 
   A design unit's row passes to its implementing unit when the design decides to act. A provisional unit the substrate decision retires passes its rows to the units that replace it.
 - **Generality stated.** Every design unit's record states, for the option it chooses, the evidence that the problem holds outside archipeligo, or that it does not and the change is scoped to programmes like it. For a row qualified `not testable`, the record says no second project could show it and states whether the change is adopted generally or scoped. A record citing P-A1, P-A2, P-E4 or P-E9 as generality evidence carries the row's analogue or partial qualifier. Carried by `substrate-options`, `empirical-criteria-design`, `empirical-unit-design`, `retained-artefacts-design`, `findings-consumer-design`, `drive-decision-design`, `long-running-design`, `phase2-gate-discipline`.
-- **Headless pin.** A unit gated on `claude-code-headless` checks it against `~/.local/share/claude/versions/2.1.289` run with `DISABLE_AUTOUPDATER=1`, or cites the `version` of a transcript it produced; `claude --version` does not discharge it, since the installed default auto-updates. Carried by `s2-permissions-design`, `orchestrator-port-loop`, `runtime-cli-drive`, `shakedown-fixture`.
+- **Headless pin.** A unit gated on `claude-code-headless` checks it against `~/.local/share/claude/versions/2.1.294` run with `DISABLE_AUTOUPDATER=1`, or cites the `version` of a transcript it produced; `claude --version` does not discharge it, since the installed default auto-updates. Carried by `s2-sandbox`, `runtime-cli-drive`, `shakedown-fixture`.
 - **Design of record.** A unit that changes behaviour the design describes amends its own section of `docs/design/lsf-workflow.md` in the same commit. Carried by every unit with a `lsf-workflow.md::` or `lsf-runtime.md::` Scope entry.
 
 ## Risk Registry
 
 - R1 cross-cutting — the spike estimated 1,500–2,500 lines, tests included, for all of S2; the runtime alone is about 2,190 lines and 1,730 of tests, and the orchestrator port about 2,600 lines, 2,800 of tests and 1,800 of harness and tools. The remaining S2 units are likely larger than estimated in wall-clock; runtime-core and the port finished with context comfortable, so the size budget holds.
 - R15 shakedown-fixture — the port's oracle is the ported tests, byte-identical prompts over 55 scenarios and one single-unit fixture run; the wave gate's and re-plan's behaviour on a real multi-unit plan is shown only here.
-- R2 cross-cutting — seven units wait on one requester verdict; the schedule is bounded by verdicts, not by work.
+- R2 cross-cutting — six units wait on one requester verdict; the schedule is bounded by verdicts, not by work.
 - R3 cross-cutting — generality rests on cartomancer-v2 alone, a stream of code units; 11 rows are `not testable` there (P-A3, P-A4, P-A5, P-A7, P-A8, P-A12, P-A13, P-C3, P-G1, P-G3, P-G4), and a problem classed `archipeligo only so far` may be common to any measurement-heavy programme.
 - R4 significant-precision-sample — a hand classification by the model whose reviews produced the findings; the rubric is fixed first, and the requester may want a second rater.
 - R5 phase2-gate-discipline — the opus-tier adversary re-run that `critique-gate.md` waits on belongs to the critique-upgrade backlog and is left out of this programme by requester decision (2026-10-04); the unit sets an interim policy without it.
@@ -987,8 +1055,8 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 - R11 script-retirement — in a plan with no `lsf-gates` block, and under the Workflow script, a stage that reports `green` for a gate it did not run passes the `gate-not-run` check; closed for declared plans by `declared-gates`.
 - R12 script-retirement — in a plan with no `lsf-gates` block, and under the Workflow script, the long-gate recipe is untested in live agents, and a gate over 600 s stops with `gate-not-run` if the harness kills the detached process; closed for declared plans by `declared-gates`.
 - R13 cross-cutting — until `empirical-script-support`, a non-design unit in a project with no gate of its own stops with `gate-not-run` on every launch.
-- R14 s2-permissions-design — until the decision, runtime stages run under the spike's deny list, which a shell command can bypass (spike check 9).
-- R17 cross-cutting — the `claude-code-headless` pin holds only while the auto-updater keeps 2.1.289 in `~/.local/share/claude/versions/`; if it is pruned the gate re-pins and the recorded streams in `lsf-runtime/testdata/streams/` are re-checked.
+- R14 s2-sandbox — until it lands, runtime stages run under the spike's deny list, which a shell command can bypass (spike check 9), and declared gates run on the host with the runtime's environment and network.
+- R17 cross-cutting — the `claude-code-headless` pin holds only while the auto-updater keeps its version in `~/.local/share/claude/versions/`. 2.1.289 was pruned by 2026-10-08 and the gate re-pinned to 2.1.294; `s2-sandbox` re-checks the 2.1.289 streams in `lsf-runtime/testdata/streams/`, and the next pruning re-pins again.
 - R18 cross-cutting — the session-limit stream shape is conjectured (no real limit observed under `-p`), and a weekly or model-specific limit pauses every call, bounded only by the wall-clock cap; the first real limit's transcript under `calls/` is the upgrade path.
 - R19 cross-cutting — the frozen JavaScript, still the supported Phase 3 path until `script-retirement`, carries the defects the port fixed (D14, D16, D17): a branchless completion report is dropped from the merge silently and the unit re-runs every wave; `maxUnitsPerWave` 0 reports `complete` having run nothing; a null `directEdits`, `amendments` or `appendedUnits` throws.
 - R20 retained-artefacts-impl — high risk, placed mid-stream because it needs cleanup as code and the declaration's place; the mitigation is its kill-mid-move and cross-filesystem tests, and until it lands a runtime run keeps no ignored file, while the Workflow script stays the supported path.
@@ -997,11 +1065,38 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 - R23 runtime-cli-drive — a red gate result the environment caused (exit 126 or 127, a missing service, an OOM kill) replays from the journal for the same tree and declaration until its record is removed by hand (requester decision, 2026-10-08).
 - R24 runtime-distribution — until the launcher ships, the plan-validation command needs a Go toolchain and compiles on each call; without Go, `phronithm:breakdown` and `phronithm:lsf-drive` fall back to manual checks (P-D4's residual).
 - R25 cross-cutting — `lsf-validate`'s pin check is substring containment and one-directional (requester decision, 2026-10-08: left as is); a pin token inside a longer version, or an entry pin absent from the block, passes.
+- R26 s2-sandbox — the native sandbox is unprobed on macOS (Seatbelt), and the `/tmp` and mount-point findings are Linux-only; `runtime-distribution`'s macOS CI is the first run there.
+- R27 cross-cutting — agent Bash and `setup` can send what they read in a clone to any host in the gate block's `hosts`; a host that accepts writes, such as GitHub, can receive the repo. A tool that ignores the sandbox's proxy variables gets no network even to an allowed host.
 - R16 script-retirement — the runtime targets Linux and macOS only (requester verdict, 2026-10-06). Once the Workflow script is deleted, Phase 3 has no Windows path outside WSL until a unit adds a non-POSIX kill path.
 
 ## Plan Maintenance
 
 On each unit completion, run the re-plan step before starting its dependants.
+
+### 2026-10-08 — decisions impl-split, clone-lifetime, agent-network
+unit-added s2-clones — Runtime changes 1–3's clone half of the Permissions section's carrier `s2-permissions-impl`, split on the size budget (requester verdict)
+unit-added s2-sandbox — Runtime changes 3–6's launch, proxy, `srt` gates and `hosts`; the 401 stop is its open decision
+done-condition s2-clones — a kept clone stays until its unit's cleanup, replacing a worktree one for one (requester verdict)
+done-condition s2-sandbox — agent Bash (writers and reviewers) and `setup` reach the gate block's `hosts` list, which replaces `setupHosts`; a live registry check (requester verdict)
+
+### 2026-10-08 — s2-permissions-design complete
+Report: docs/design/lsf-runtime.md (Permissions) @ d26f71c.
+gate-repin s2-permissions-design, runtime-cli-drive, shakedown-fixture — `claude-code-headless` 2.1.289 → 2.1.294; 2.1.289 pruned before the probes (R17)
+gate-added s2-sandbox, shakedown-fixture — `sandbox-runtime` (environment, `srt` 0.0.79); `bubblewrap` (environment, 0.13.0)
+new-edge s2-sandbox → runtime-cli-drive — the sandboxed launch and proxy; replaces declared-gates as the runtime-file serialisation
+new-edge s2-clones, s2-sandbox → retained-artefacts-impl — kept clones and their removal at cleanup; replaces declared-gates
+done-condition retained-artefacts-impl — `Retains:` paths move out of a merged unit's kept clones, not its worktrees
+done-condition runtime-cli-drive — a requester edit in the main checkout stops at the next fast-forward; merge faults as raised after the merge clone
+done-condition runtime-distribution — says how a user gets `srt` and `bubblewrap`, or names them as prerequisites
+done-condition script-retirement — `lsf-workflow.md` describes clones and the merge clone, not worktrees
+new-edge s2-permissions-design → long-running-design — per-call clones and the Bash sandbox
+done-condition long-running-design — a job inside the Bash sandbox (declared hosts only, clone and `/tmp` writes) and its outputs' survival to cleanup
+scope-reassignment s2-sandbox — takes P-C5 and P-C6 from s2-permissions-design
+check R14 — re-homed to s2-sandbox
+check R17 — 2.1.289 pruned; re-pinned, `s2-sandbox` re-checks the recorded streams
+check R26, R27 added; R27 is the residual of the network verdict
+check empirical-unit-impl — `docs/plan-graph.md::gate-block` and `skills/breakdown/SKILL.md::phase-1`, written by s2-sandbox, are behind its edge through retained-artefacts-impl; no change
+check critical path — 10 units, two tied chains
 
 ### 2026-10-08 — decisions load-agreement, pin-gap, retired-stub
 check load-agreement — declined: `validate.Agreement` at load is cheap but not low in false positives (76 problems on cartomancer-v2's completed `quality-bar-interiors` plan, from field grammar; rationale mentions in Execution Order); pre-flight at commit and launch only

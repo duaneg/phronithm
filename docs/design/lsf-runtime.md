@@ -178,8 +178,10 @@ Unit `s2-permissions-design`. Evidence: [s2-permissions results](../investigatio
 **Status:** decided, 2026-10-08. Requester verdicts:
 - **B2 for every stage:** the native Bash sandbox, `--restricted`, and the credential held only in a host proxy.
 - **Reviewers** keep no writes (see Reviewers).
-- **Declared gates** run under pinned `srt`, with a plan-declared host allowlist for `setup`.
-- **The runtime changes** are carried by a new unit, `s2-permissions-impl`.
+- **Declared gates** run under pinned `srt`.
+- **Network:** agent calls' Bash, writers and reviewers alike, and gates' `setup` reach only the hosts the gate block's `hosts` list declares (see Network). Gate commands have none.
+- **The runtime changes** are carried by two new units, `s2-clones` and `s2-sandbox` (split at the re-plan).
+- **A kept clone** stays until its unit's cleanup, as a worktree does now (2026-10-08).
 
 ### Options
 
@@ -250,10 +252,10 @@ The runtime builds each call's settings, argv and environment. The role supplies
   ```json
   {"sandbox": {"enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false, "autoAllowBashIfSandboxed": true,
     "filesystem": {"denyRead": ["$HOME", "<repo>", "<stateDir>", "/run/containerd", "…config denyRead"], "allowWrite": ["<clone>"]},
-    "network": {"allowedDomains": [], "strictAllowlist": true}}}
+    "network": {"allowedDomains": ["<hosts>"], "strictAllowlist": true}}}
   ```
 
-  - Bash has no network. The proxy is reached by `claude` itself, not by Bash. A Bash allowance for the proxy would let Bash spend on the API with the injected credential.
+  - Bash reaches only the declared `hosts` (see Network). The proxy is reached by `claude` itself, not by Bash. A Bash allowance for the proxy would let Bash spend on the API with the injected credential.
   - `/run/containerd` works round a 2.1.294 bug that fails every sandboxed Bash call.
   - A reviewer's clone is in `allowWrite` too: `bwrap` writes mount points into the cwd and fails every call if it cannot.
 - **Flags:** `--restricted`, `--tools`, `--allowedTools`, `--disallowedTools`, `--plugin-dir <plugin> --add-dir <plugin>`, `--settings` and `--permission-mode dontAsk`, plus the flags the runtime already passes.
@@ -273,7 +275,7 @@ The runtime builds each call's settings, argv and environment. The role supplies
 
 - **What it does.** The runtime starts it at launch on an ephemeral 127.0.0.1 port, with a placeholder random to the launch. It refuses a request whose bearer is not the placeholder. Otherwise it replaces the bearer with the live session's OAuth access token from `~/.claude/.credentials.json`, adds the OAuth beta header, forwards to `api.anthropic.com`, and streams the response back unbuffered.
 - **Which token.** The live session's credential, with no separate token (requester, 2026-10-08).
-- **When it reads the token.** It re-reads the file when the file changes, so a refresh by an interactive session reaches running calls. A run that outlives the token with no refresh fails its calls as `permanent` (401). `s2-permissions-impl` decides whether that becomes a stop.
+- **When it reads the token.** It re-reads the file when the file changes, so a refresh by an interactive session reaches running calls. A run that outlives the token with no refresh fails its calls as `permanent` (401). `s2-sandbox` decides whether that becomes a stop.
 - **The proxy stops with the launch.**
 
 ### Reviewers
@@ -297,23 +299,31 @@ The runtime builds each call's settings, argv and environment. The role supplies
 - **The merge clone stays until the wave's merges finish.** So an interrupted step finds its merge in progress, and its adoption by trailers works as today.
 - **`refusedOverLocal` no longer arises in the merge.** The merge clone holds no requester edits. A requester edit now blocks the fast-forward and stops the run.
 
+### Network
+
+- **The problem.** With no network, each call starts from a fresh clone and an empty per-call home, so a stage whose build or tests fetch dependencies (npm, pip, Go modules, a GitHub archive) fails inside the call.
+- **The rule** (requester, 2026-10-08). Bash in every agent call, writers and reviewers alike, and gates' `setup`, may reach only the hosts the `lsf-gates` block's `hosts` list names. Gate commands get no network. With no `hosts` list, nothing has network.
+- **Why the gate block.** It is fixed for a launch, it changes only by a requester decision, and a change stops the run on `declared-gates-changed`. The plan block would not do: re-plan stages are agents that edit it, so an agent could widen its own network. A plan with no gates may carry an `lsf-gates` block holding `hosts` alone.
+- **What the runtime refuses.** A `hosts` entry naming loopback (`localhost`, `127.0.0.0/8`, `::1`), since the proxy listens there.
+- **Evidence.** In `B2` the native sandbox let Bash reach its one allowed host, the proxy, and blocked every egress probe. No real package registry was probed: `s2-sandbox` shows one.
+
 ### Declared gates
 
 - **The `declared-gates-changed` stop is not enough.** It shows the requester a changed command. But the commands run code the stages wrote (tests, scripts, package install hooks), and today that code runs on the host with the runtime's environment and network.
 - **Gates run under `srt` 0.0.79,** pinned.
   - **Filesystem.** Read is denied for `$HOME`, the repo and the state dir, except the gate checkout. Write is allowed to the gate checkout only.
-  - **Network.** None for gates. `setup` is allowed only the hosts the gate block declares.
+  - **Network.** None for gates. `setup` is allowed only the gate block's `hosts`.
   - **Environment.** Built as for an agent call, without the Anthropic variables.
   - In the gate check, a hostile gate under `srt` found the env canary absent and the file canaries denied, could not write the main checkout, and had every egress blocked.
-- **Gate block change.** The `lsf-gates` block gains `setupHosts`, a list of host names. The block stays pinned within a launch, so a change to `setupHosts` also stops the run on `declared-gates-changed`.
+- **Gate block change.** The `lsf-gates` block gains `hosts`, a list of host names (see Network), and may carry it with no gate commands. The block stays pinned within a launch, so a change to `hosts` also stops the run on `declared-gates-changed`.
 - **`srt` prerequisites:** `rg` on `PATH`, a short `TMPDIR`, and `SHELL` a system shell.
 - **Placement.** The check passed with the gate checkout under the masked `$HOME`, as the decided layout puts it (`w3/gate-srtA`).
 
 ### Runtime changes
 
-Carried by `s2-permissions-impl`, a new feature unit on `lsf-runtime/runtime`, `lsf-runtime/orchestrator`, `lsf-runtime/plan` and `docs/plan-graph.md`'s `lsf-gates` section. It comes after this unit and before `runtime-cli-drive`, serial with `retained-artefacts-impl`. The breakdown does not have it yet: the re-plan after this unit adds it, with these changes as its done condition.
+Carried by `s2-clones` (1, 2, and the `clone` field and discarded-clone rule of 3) and then `s2-sandbox` (the rest), both before `runtime-cli-drive` and `retained-artefacts-impl`.
 
-1. **Clones for every agent call,** as in Placement: clone, fetch-back, removal, and the refusal to launch under `/tmp` or `/var/tmp`. The repo-call snapshot in Uncommitted at return goes, since no agent call runs in the main checkout.
+1. **Clones for every agent call,** as in Placement: clone, fetch-back, removal (a kept clone at its unit's cleanup, a discarded one after its call), and the refusal to launch under `/tmp` or `/var/tmp`. The repo-call snapshot in Uncommitted at return goes, since no agent call runs in the main checkout.
 2. **Orchestrator changes:**
    - steps that fast-forward the integration branch to a writer repo call's fetched branch;
    - the merge step in a merge clone;
@@ -324,12 +334,13 @@ Carried by `s2-permissions-impl`, a new feature unit on `lsf-runtime/runtime`, `
    - a config `env` passthrough list and extra `denyRead` paths;
    - no uncommitted check for a discarded clone.
 4. **The credential proxy:** started, held and stopped with the launch.
-5. **Gates under `srt`,** and `setupHosts` in the gate block and its parser.
+5. **Gates under `srt`,** and `hosts` in the gate block and its parser, applied to agent calls' Bash and to `setup` as in Network.
 6. **The fixture run under B2.** `tools/fixturerun` runs the spike fixture end to end under the decided configuration.
 
 ### Known limits
 
-- **`setup` has network.** Code that `setup` runs (package install hooks) can send what it reads in the gate checkout to the hosts `setupHosts` allows. It cannot reach the credential or `$HOME`.
+- **Allowed hosts are an exfiltration channel.** Agent Bash and code that `setup` runs (package install hooks) can send what they read in the clone or gate checkout to any host in `hosts`; a host that accepts writes, such as GitHub, can receive the repo. They cannot reach the credential or `$HOME`.
+- **Domain filtering goes through the sandbox's own proxy.** A tool that ignores the proxy environment variables gets no network even to an allowed host.
 - **`/tmp` is shared.** Bash in any call can read and write `/tmp` and `/var/tmp`, including other concurrent calls' `TMPDIR`s. Nothing the runtime keeps is there.
 - **File-tool confinement is Claude Code's, not the kernel's.** A `--restricted` bypass would reach whatever the user can. Whole-process `srt` is the remedy if one is found.
 - **Mount-point files.** The sandbox leaves zero-byte files (`.env*`, lock files, `.npmrc`, `.gitmodules` and others) in each clone and lists them in `.git/info/exclude`. They are ignored, and they go when the clone is removed.
