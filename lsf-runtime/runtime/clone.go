@@ -25,18 +25,12 @@ import (
 // effective hooks, its identity and line-ending config, and its
 // info/exclude and info/attributes. It has no remote.
 
-// keptRepoCallsInRepo keeps a call with no isolation whose role's clone is
-// kept (a writer repo call) in the main checkout, with its before-state
-// snapshot, until the orchestrator fast-forwards such calls' branches.
-var keptRepoCallsInRepo = true
-
 // placement is where a call runs.
 type placement struct {
 	dir    string // the call's cwd; "" without a repo
 	kind   string // CloneKept, CloneDiscarded, or "" for no clone
 	branch string // the branch the clone has checked out
 	dest   string // the main repo's branch a kept clone is fetched to
-	inRepo bool   // the main checkout (keptRepoCallsInRepo)
 }
 
 // configCopied are the config keys a clone takes from the main repo's
@@ -47,8 +41,8 @@ var configCopied = []string{"user.name", "user.email", "core.autocrlf", "core.eo
 
 // usesClone reports whether a call with these options and role runs in a
 // clone the runtime makes.
-func (rt *Runtime) usesClone(o Opts, role Role) bool {
-	return o.Dir == "" && rt.cfg.Repo != "" && !(o.Isolation == "" && role.Clone == CloneKept && keptRepoCallsInRepo)
+func (rt *Runtime) usesClone(o Opts) bool {
+	return o.Dir == "" && rt.cfg.Repo != ""
 }
 
 // placeCall resolves a call's working directory at its first admitted
@@ -71,8 +65,6 @@ func (rt *Runtime) placeCall(ctx context.Context, o Opts, key string, role Role)
 			return placement{}, err
 		}
 		return placement{}, nil
-	case !rt.usesClone(o, role):
-		return placement{dir: rt.cfg.Repo, inRepo: true}, nil
 	}
 	args, err := rt.cloneArgs(o)
 	if err != nil {
@@ -87,16 +79,17 @@ func (rt *Runtime) placeCall(ctx context.Context, o Opts, key string, role Role)
 		sub = "scratch"
 	}
 	p.dir = filepath.Join(rt.cfg.StateDir, sub, key)
-	if err := rt.withWorktreeLock(ctx); err != nil {
-		return placement{}, err
+	// The call is admitted, so it spawns: the wait does not yield to a stop
+	// set since, only to the context.
+	select {
+	case rt.wtSem <- struct{}{}:
+	case <-ctx.Done():
+		return placement{}, &StopError{Reason: StopCancelled}
 	}
 	defer func() { <-rt.wtSem }()
 	gctx, cancel := rt.gitContext(ctx)
 	defer cancel()
 	stop := func(err error) (placement, error) {
-		if s := rt.stopped(); s != nil {
-			return placement{}, s
-		}
 		if ctx.Err() != nil {
 			return placement{}, &StopError{Reason: StopCancelled}
 		}
@@ -278,7 +271,12 @@ func (rt *Runtime) copyRepoSetup(ctx context.Context, dir string) error {
 // copyHooks copies src's hooks recursively (a hook may source a sibling
 // in a subdirectory, as husky's do), not the *.sample files, keeping
 // modes. Symlinks are followed.
-func copyHooks(src, dst string) error {
+func copyHooks(src, dst string) error { return copyTree(src, dst, 0) }
+
+func copyTree(src, dst string, depth int) error {
+	if depth > 8 { // a symlink back up the tree
+		return fmt.Errorf("hooks: %s is nested too deep", src)
+	}
 	entries, err := os.ReadDir(src)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -299,7 +297,7 @@ func copyHooks(src, dst string) error {
 		case err != nil:
 			continue
 		case fi.IsDir():
-			err = copyHooks(s, d)
+			err = copyTree(s, d, depth+1)
 		case fi.Mode().IsRegular():
 			err = copyFile(s, d, fi.Mode().Perm())
 		}

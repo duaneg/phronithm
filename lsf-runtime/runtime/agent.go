@@ -30,7 +30,7 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 	}
 	c := &callState{o: o, key: key, skill: skill, sent: withSkill(skill, prompt)}
 	c.roleName, c.role = rt.cfg.roleFor(o)
-	if o.Isolation != "" || rt.usesClone(o, c.role) { // a dry run checks args too
+	if o.Isolation != "" || rt.usesClone(o) { // a dry run checks args too
 		if _, err := rt.cloneArgs(o); err != nil {
 			return CallResult{}, err
 		}
@@ -133,8 +133,6 @@ type callState struct {
 	place      placement // resolved at the first admitted attempt
 	placed     bool
 	res        CallResult
-	before     snapshot // a main-checkout call's work tree at its first admitted attempt
-	beforeErr  error
 }
 
 // attempt takes a concurrency slot, admits, spawns and classifies one
@@ -157,12 +155,6 @@ func (rt *Runtime) attempt(ctx context.Context, c *callState) (*attempt, verdict
 		}
 		c.place, c.placed = p, true
 		c.res.Clone = p.kind
-		if p.inRepo {
-			c.before, c.beforeErr = rt.takeSnapshot(ctx, p.dir, true)
-			for _, p := range rt.priorDirt(c.key) { // left by an earlier null of this call
-				delete(c.before, p)
-			}
-		}
 	}
 	sid := newUUID()
 	t0 := time.Now()

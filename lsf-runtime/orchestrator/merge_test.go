@@ -319,7 +319,7 @@ func TestMergeFaultsBeforeMerging(t *testing.T) {
 			cmd := exec.Command("git", "merge", "other")
 			cmd.Dir = f.r.dir
 			cmd.Run()
-		}, `the main checkout has uncommitted changes`},
+		}, `a merge is in progress in the main checkout; finish or abort it`},
 		{"foreign merge in progress in the merge clone", func(f *mergeFixture) {
 			f.r.git("checkout", "-q", "-b", "other", "integration~1")
 			f.r.commit(mPlan, "other\n", "other")
@@ -491,11 +491,15 @@ func TestMergeResume(t *testing.T) {
 	})
 	t.Run("killed after the bookkeeping commit", func(t *testing.T) {
 		f := newMergeFixture(t, distinct, "A")
-		// The reset after the bookkeeping commit is the second `reset -q --`
-		// (none before it); failing it is the step dying after the commit.
+		// The first `reset` is commitFiles' after the bookkeeping commit;
+		// failing it is the step dying after the commit, before its
+		// fast-forward.
 		_, err := runMerge(t, mergeOrch(t, f, &failNth{inner: execGit{}, match: argIs(0, "reset"), n: 1}, nil), f.in("A"), false)
 		errMatch(t, err, `killed`)
 		head := f.mc().head() // the commit is in the clone, not yet fast-forwarded
+		if f.r.head() == head {
+			t.Fatal("the bookkeeping commit reached main before the kill")
+		}
 		res, err := runMerge(t, mergeOrch(t, f, nil, nil), f.in("A"), true)
 		if err != nil {
 			t.Fatal(err)

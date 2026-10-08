@@ -383,7 +383,7 @@ func TestMergeGatesUngatedCommit(t *testing.T) {
 	f.r.git("commit", "-q", "-m", "requester")
 	f.r.git("merge", "-q", "--no-ff", "-m", mergeMessage(in, "merge:w1", "A", "clean", nil), f.shas["A"])
 	_, err := runMerge(t, f.orch(t, nil, nil), in, true)
-	errMatch(t, err, `merge commit [0-9a-f]+ of A is on the integration branch but its gates do not pass`)
+	errMatch(t, err, `merge commit [0-9a-f]+ of A is on the integration branch, or in the merge clone .*, but its gates do not pass`)
 	eq(t, f.gated(), 1)
 }
 
@@ -414,4 +414,23 @@ func TestMergeGatesHeadMoves(t *testing.T) {
 	eq(t, statuses(res), "A=clean")
 	eq(t, f.gated(), 2)
 	eq(t, f.r.git("show", res.Merges[0].Sha+":README.md"), "moved")
+}
+
+// A relaunch that finds several of the step's commits in the merge clone
+// past main fast-forwards main to each only once it is adopted, verified
+// and gated: B's red merge never reaches main, which stays at A's.
+func TestMergeGatesPendingCommitsAdoptedOneByOne(t *testing.T) {
+	f := newGateFixture(t, map[string]map[string]string{"A": {"src/a.go": "a\n"}, "B": {"src/bad": "x\n"}}, "A", "B")
+	in := f.declared("A", "B")
+	pre := f.r.head()
+	c := f.makeClone()
+	c.git("merge", "-q", "--no-ff", "-m", mergeMessage(in, "merge:w1", "A", "clean", nil), f.shas["A"])
+	mergeA := c.head()
+	c.git("merge", "-q", "--no-ff", "-m", mergeMessage(in, "merge:w1", "B", "clean", nil), f.shas["B"])
+	_, err := runMerge(t, f.orch(t, nil, nil), in, true)
+	errMatch(t, err, `merge commit [0-9a-f]+ of B is on the integration branch, or in the merge clone .*, but its gates do not pass`)
+	eq(t, f.r.head(), mergeA, "main at A's merge, not B's")
+	if f.r.head() == pre {
+		t.Error("A's merge was not fast-forwarded")
+	}
 }

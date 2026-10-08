@@ -518,18 +518,23 @@ func (o *orch) mergeStage(in mergeInput) stageFn {
 		if _, err := g.r.run(ctx, o.repo, "update-ref", "-d", m.xfer); err != nil {
 			return nil, err
 		}
+		// The transfer ref goes however the step ends: a commit it pins is
+		// in the merge clone, which a fault keeps.
+		defer func() {
+			if _, err := g.r.run(context.WithoutCancel(ctx), o.repo, "update-ref", "-d", m.xfer); err != nil {
+				o.rt.Log(fmt.Sprintf("%s: %s not deleted: %v", label, m.xfer, err))
+			}
+		}()
 		if err := o.syncMergeClone(ctx, m, in, label); err != nil {
 			return nil, err
 		}
-		ff := func() error {
-			head, err := m.head(ctx, m.dir)
-			if err == nil {
-				err = m.toMain(ctx, head)
+		// ff moves main to sha, a commit this step verified (and gated):
+		// never to the clone's HEAD, which a relaunch may find past it.
+		ff := func(sha string) error {
+			if err := m.toMain(ctx, sha); err != nil {
+				return err
 			}
-			if err == nil {
-				err = o.fastForward(ctx, g, in.IntegrationBranch, m.xfer)
-			}
-			return err
+			return o.fastForward(ctx, g, in.IntegrationBranch, m.xfer)
 		}
 		date := o.today()
 		bk := bookIn{Name: in.Name, ArchivePath: in.ArchivePath, LedgerPath: in.LedgerPath, Wave: in.Wave}
@@ -628,22 +633,34 @@ func (o *orch) mergeStage(in mergeInput) stageFn {
 			res.Merges = append(res.Merges, r.Merge)
 			if r.Status == "clean" || r.Status == "resolved" {
 				merged = append(merged, bookUnit{Unit: u.Unit, Sha: r.Sha, Report: u.Report})
-				if err := ff(); err != nil {
+				if err := ff(r.Sha); err != nil {
 					return nil, err
 				}
 			}
 		}
 
 		if len(merged) > 0 {
-			if err := o.bookkeep(ctx, m, in, bk, label, merged, date, interrupted); err != nil {
+			book, err := o.bookkeep(ctx, m, in, bk, label, merged, date, interrupted)
+			if err != nil {
 				return nil, err
 			}
-			if err := ff(); err != nil {
-				return nil, err
+			if book != "" {
+				if err := ff(book); err != nil {
+					return nil, err
+				}
 			}
 		}
-		if res.PlanSha, err = m.head(ctx, o.repo); err != nil {
+		// Every commit in the clone is now in main: one that is not was
+		// never adopted, and stays for the requester.
+		ch, err := m.head(ctx, m.dir)
+		if err != nil {
 			return nil, err
+		}
+		if res.PlanSha, err = m.out(ctx, o.repo, "rev-parse", "refs/heads/"+in.IntegrationBranch); err != nil {
+			return nil, err
+		}
+		if ch != res.PlanSha {
+			return nil, fmt.Errorf("the merge clone %s holds %s, which this step did not adopt (%s is at %s); remove the clone and relaunch", m.dir, ch, in.IntegrationBranch, res.PlanSha)
 		}
 		if res.ArchitectureSha, err = m.out(ctx, o.repo, "rev-list", "-1", "refs/heads/"+in.IntegrationBranch, "--", in.ArchitectureDoc); err != nil {
 			return nil, err
@@ -654,9 +671,6 @@ func (o *orch) mergeStage(in mergeInput) stageFn {
 		// The wave's merges are finished: the clone and the transfer ref go.
 		if err := o.rt.RemoveMergeClone(ctx, name); err != nil {
 			o.rt.Log(fmt.Sprintf("%s: merge clone %s not removed: %v", label, dir, err))
-		}
-		if _, err := g.r.run(ctx, o.repo, "update-ref", "-d", m.xfer); err != nil {
-			o.rt.Log(fmt.Sprintf("%s: %s not deleted: %v", label, m.xfer, err))
 		}
 		return stageValue(res)
 	}
@@ -812,34 +826,15 @@ func (o *orch) mergeOne(ctx context.Context, m mergeGit, in mergeInput, label st
 		return out, errors.Join(err, m.abortOwn(ctx, pre, staged))
 	}
 	if !resume && in.Declared && len(conflicts) == 0 {
-		// Gate git's merge of pre and the unit before merging. The
-		// integration branch moving meanwhile is gated again, once.
-		for moves := 0; ; moves++ {
-			set, err := o.mergeGates(ctx, m, u, pre, tree, mergeMessage(in, label, u.Unit, "clean", nil))
-			if err != nil {
-				return out, err
-			}
-			now, err := m.head(ctx, m.dir)
-			if err != nil {
-				return out, err
-			}
-			if now == pre {
-				if len(set.failed()) > 0 {
-					return regressed(out, set), nil
-				}
-				break
-			}
-			if moves == 1 {
-				return out, fmt.Errorf("the integration branch moved during the gates of %s's merge, twice; relaunch", u.Unit)
-			}
-			o.rt.Log(fmt.Sprintf("%s: HEAD moved from %s to %s during the gates of %s's merge; gating the new merge", label, pre, now, u.Unit))
-			pre = now
-			if staged, conflicts, tree, err = m.expectedStaged(ctx, pre, u.Sha); err != nil {
-				return out, err
-			}
-			if len(conflicts) > 0 {
-				break // the resolution is gated before its commit
-			}
+		// Gate git's merge of pre and the unit before merging. Only this
+		// step moves the merge clone's HEAD; a requester commit to the main
+		// repo meanwhile faults at the fast-forward.
+		set, err := o.mergeGates(ctx, m, u, pre, tree, mergeMessage(in, label, u.Unit, "clean", nil))
+		if err != nil {
+			return out, err
+		}
+		if len(set.failed()) > 0 {
+			return regressed(out, set), nil
 		}
 	}
 	if !resume {
@@ -1060,7 +1055,7 @@ func (o *orch) gatedMerge(ctx context.Context, m mergeGit, in mergeInput, u merg
 	case fault != "":
 		return fmt.Errorf("merge commit %s of %s: %s", commit, u.Unit, fault)
 	case len(set.failed()) > 0:
-		return fmt.Errorf("merge commit %s of %s is on the integration branch but its gates do not pass (%s); revert it and relaunch", commit, u.Unit, strings.Join(regressed(unitMerge{}, set).Files, "; "))
+		return fmt.Errorf("merge commit %s of %s is on the integration branch, or in the merge clone %s, but its gates do not pass (%s); revert it, or remove the clone, and relaunch", commit, u.Unit, m.dir, strings.Join(regressed(unitMerge{}, set).Files, "; "))
 	}
 	return nil
 }
@@ -1159,9 +1154,10 @@ func maintenanceDate(planText []byte, first string) string {
 }
 
 // bookkeep commits the plan bookkeeping for merged, or adopts this step's
-// own commit of it. On an interrupted rerun, dirt on the plan or archive
+// own commit of it, and returns that commit; "" when every unit was
+// recorded already. On an interrupted rerun, dirt on the plan or archive
 // must be this step's own rendering.
-func (o *orch) bookkeep(ctx context.Context, m mergeGit, in mergeInput, bk bookIn, label string, merged []bookUnit, date string, interrupted bool) error {
+func (o *orch) bookkeep(ctx context.Context, m mergeGit, in mergeInput, bk bookIn, label string, merged []bookUnit, date string, interrupted bool) (string, error) {
 	paths := []string{in.PlanPath, in.ArchivePath}
 	if interrupted {
 		sha, err := m.adoptSet(ctx, m.dir, in.IntegrationBranch, paths, label, func(parent, cand map[string]blobAt) bool {
@@ -1176,16 +1172,16 @@ func (o *orch) bookkeep(ctx context.Context, m mergeGit, in mergeInput, bk bookI
 			if sha != "" {
 				o.rt.Log(fmt.Sprintf("%s: bookkeeping already committed at %s; adopted", label, sha))
 			}
-			return err
+			return sha, err
 		}
 	}
 	head, err := m.head(ctx, m.dir)
 	if err != nil {
-		return err
+		return "", err
 	}
 	planText, _, archive, archiveOK, err := m.bookTexts(ctx, head, in)
 	if err != nil {
-		return err
+		return "", err
 	}
 	// A unit whose stub at its merge commit is already in the plan was
 	// recorded by an earlier run of this step (one that went on to fail):
@@ -1199,7 +1195,7 @@ func (o *orch) bookkeep(ctx context.Context, m mergeGit, in mergeInput, bk bookI
 		pending = append(pending, u)
 	}
 	if len(pending) == 0 {
-		return nil
+		return "", nil
 	}
 	merged = pending
 	// Dirt on the paths is this step's own write only after a kill inside
@@ -1209,39 +1205,38 @@ func (o *orch) bookkeep(ctx context.Context, m mergeGit, in mergeInput, bk bookI
 	for _, p := range paths {
 		clean, err := m.pathClean(ctx, m.dir, p)
 		if err != nil {
-			return err
+			return "", err
 		}
 		dirty = dirty || !clean
 	}
 	if dirty {
 		gotPlan, err := readFile(m.dir, in.PlanPath)
 		if err != nil {
-			return err
+			return "", err
 		}
 		gotArchive, err := readFile(m.dir, in.ArchivePath)
 		if err != nil {
-			return err
+			return "", err
 		}
 		if d := maintenanceDate(gotPlan, merged[0].Unit); d != "" {
 			date = d
 		}
 		wantPlan, wantArchive, err := renderBookkeeping(planText, archive, archiveOK, bk, merged, date)
 		if err != nil {
-			return err
+			return "", err
 		}
 		if !interrupted || string(gotPlan) != string(wantPlan) || (gotArchive != nil && string(gotArchive) != string(wantArchive)) {
-			return fmt.Errorf("%s or %s has uncommitted changes this stage did not make; commit or discard them and relaunch", in.PlanPath, in.ArchivePath)
+			return "", fmt.Errorf("%s or %s has uncommitted changes this stage did not make; commit or discard them and relaunch", in.PlanPath, in.ArchivePath)
 		}
 	}
 	newPlan, newArchive, err := renderBookkeeping(planText, archive, archiveOK, bk, merged, date)
 	if err != nil {
-		return err
+		return "", err
 	}
 	units := []string{}
 	for _, u := range merged {
 		units = append(units, u.Unit)
 	}
-	_, err = m.commitFiles(ctx, m.dir, in.IntegrationBranch, []fileWrite{{in.PlanPath, newPlan}, {in.ArchivePath, newArchive}},
+	return m.commitFiles(ctx, m.dir, in.IntegrationBranch, []fileWrite{{in.PlanPath, newPlan}, {in.ArchivePath, newArchive}},
 		"docs("+in.Name+"): wave "+itoa(in.Wave)+" merge bookkeeping ("+strings.Join(units, ", ")+")", label, head)
-	return err
 }

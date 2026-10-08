@@ -215,7 +215,11 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 			return nil, true, false, err
 		}
 		gr.cr.Value = raws[0]
-		gv, gs := l.callSigs(site{at: plan.At{Stage: "review-gate", Wave: plan.W(wave)}, writer: false}, gr.cr, gr.label)
+		gs0 := site{at: plan.At{Stage: "review-gate", Wave: plan.W(wave)}, writer: false}
+		gv, gs := l.callSigs(gs0, gr.cr, gr.label)
+		if _, err := l.repoCallClone(ctx, gs0, gr.cr, gr.label); err != nil {
+			return nil, true, false, err
+		}
 		waveSignals = append(waveSignals, gs...)
 		g := decode[plan.GateResult](l.rt, gr.label, gv)
 		if g == nil {
@@ -294,7 +298,7 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 	replanSigs := append([]*plan.Signal{}, cs...)
 	nextPlan := l.plan
 	if rp == nil {
-		replanSigs = append(replanSigs, plan.NullReturnSignal(plan.At{Stage: "replan", Wave: plan.W(wave)}))
+		replanSigs = nullUnlessFaulted(replanSigs, plan.At{Stage: "replan", Wave: plan.W(wave)})
 	} else {
 		replanSigs = append(replanSigs, replanSignals(&rp.Result, rpItems, "replan", wave, l.ledger)...)
 		// Before the load, and on a stopping wave too, so the edits are not
@@ -411,7 +415,7 @@ func (l *launch) terminate(ctx context.Context) (json.RawMessage, bool, error) {
 		return nil, true, err
 	}
 	if term == nil {
-		ev := plan.EvaluateWave(slices.Concat(cs, []*plan.Signal{plan.NullReturnSignal(plan.At{Stage: "termination"})}))
+		ev := plan.EvaluateWave(nullUnlessFaulted(cs, plan.At{Stage: "termination"}))
 		l.record(ev)
 		out, err := l.stopped(ctx, "termination", ev.Stops, nil)
 		return out, true, err

@@ -130,8 +130,8 @@ func TestRemoveWorktreeKeeps(t *testing.T) {
 	}
 }
 
-// An isolated call's result carries its worktree branch, live and on
-// replay; a call without isolation carries none.
+// A kept call's result carries its fetched branch, live and on replay,
+// isolated or not.
 func TestCallResultBranch(t *testing.T) {
 	cfg, _ := testConfig(t)
 	cfg.Repo = gitRepo(t)
@@ -150,8 +150,10 @@ func TestCallResultBranch(t *testing.T) {
 	if err != nil || !replay.Replayed || replay.Branch != want {
 		t.Fatalf("replay: %+v %v", replay, err)
 	}
-	plain, err := call(t, cfg, vOpts)
-	if err != nil || plain.Branch != "" {
+	p := vOpts
+	p.Label = "replan:w1"
+	plain, err := call(t, cfg, p)
+	if err != nil || plain.Branch != "lsf/fedcba98/"+journalKey(p.Label) {
 		t.Fatalf("no isolation: %+v %v", plain, err)
 	}
 }

@@ -2,9 +2,13 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/duaneg/phronithm/lsf-runtime/plan"
 )
 
 // The main checkout's integration branch moves only by fast-forward (D29):
@@ -52,6 +56,9 @@ func (o *orch) mainOn(ctx context.Context, g gitOps, integration string) error {
 		}
 		return &ffFault{fmt.Sprintf("the main checkout is on %s, not %s", on, integration)}
 	}
+	if inMerge, err := g.status(ctx, o.repo, "rev-parse", "-q", "--verify", "MERGE_HEAD"); err != nil || inMerge {
+		return errors.Join(err, &ffFault{"a merge is in progress in the main checkout; finish or abort it and relaunch"})
+	}
 	dirt, err := g.trackedDirt(ctx, o.repo)
 	if err != nil {
 		return err
@@ -89,7 +96,9 @@ func (o *orch) fastForward(ctx context.Context, g gitOps, integration, target st
 	if !ahead {
 		return &ffFault{fmt.Sprintf("%s moved to %s while %s was made on an earlier tip; rebase or drop those commits, then relaunch", integration, head, tip)}
 	}
-	if _, err := g.r.run(ctx, o.repo, "merge", "--ff-only", "-q", tip); err != nil {
+	// Not cancelled mid-checkout: a half-updated work tree would read as
+	// the requester's changes.
+	if _, err := g.r.run(context.WithoutCancel(ctx), o.repo, "merge", "--ff-only", "-q", tip); err != nil {
 		return &ffFault{fmt.Sprintf("git refused to fast-forward %s to %s: %v", integration, tip, err)}
 	}
 	if now, err := g.head(ctx, o.repo); err != nil || now != tip {
@@ -97,4 +106,39 @@ func (o *orch) fastForward(ctx context.Context, g gitOps, integration, target st
 	}
 	o.rt.Log(fmt.Sprintf("fast-forwarded %s from %s to %s", integration, head, tip))
 	return nil
+}
+
+// ffInput is the ff: step's journaled input.
+type ffInput struct {
+	Branch      string `json:"branch"`
+	Integration string `json:"integration"`
+	CloneHead   string `json:"cloneHead"`
+}
+
+// ffStep fast-forwards the integration branch to a writer repo call's
+// fetched branch. A clone whose HEAD was not on the branch fetched (the
+// call detached or switched it) is a fault, so work on HEAD is never
+// dropped silently; so is a fast-forward fastForward refuses.
+func (o *orch) ffStep(branch, cloneHead string) stageFn {
+	return func(ctx context.Context, label string, interrupted bool) (json.RawMessage, error) {
+		g, err := o.gitFor()
+		if err != nil {
+			return nil, err
+		}
+		tip, err := g.out(ctx, o.repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
+		if err != nil {
+			return nil, fmt.Errorf("%s does not resolve in the main repo: %w", branch, err)
+		}
+		if cloneHead != "" && cloneHead != tip {
+			return nil, fmt.Errorf("the clone's HEAD %s is not %s's tip %s, which was fetched: commit on %s in the clone, or drop the work, and relaunch", cloneHead, branch, tip, o.ctx.integrationBranch)
+		}
+		before, err := g.head(ctx, o.repo)
+		if err != nil {
+			return nil, err
+		}
+		if err := o.fastForward(ctx, g, o.ctx.integrationBranch, "refs/heads/"+branch); err != nil {
+			return nil, err
+		}
+		return plan.MarshalJS(map[string]any{"from": before, "to": tip}, "")
+	}
 }

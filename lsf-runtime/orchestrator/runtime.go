@@ -101,10 +101,12 @@ func (o *orch) agent(ctx context.Context, prompt string, opts lsfrt.Opts) (lsfrt
 		return cr, opts.Label, nil
 	}
 	opts.Label = o.unique(opts.Label)
-	if opts.Isolation == "worktree" {
+	cr, err := o.rt.Call(ctx, prompt, opts)
+	// A discarded clone is gone already; every other isolated call's clone
+	// (or a stub's) goes at its unit's cleanup.
+	if opts.Isolation == "worktree" && cr.Clone != lsfrt.CloneDiscarded {
 		o.noteWorktree(opts.Label)
 	}
-	cr, err := o.rt.Call(ctx, prompt, opts)
 	return cr, opts.Label, err
 }
 
@@ -304,6 +306,16 @@ func (o *orch) callSigs(s site, cr lsfrt.CallResult, label string) (json.RawMess
 	return cr.Value, sigs
 }
 
+// nullUnlessFaulted is a writer repo call's signals for a null value: with
+// agent-null added, unless the value was nulled by its ff: step's
+// stage-fault, which already stops.
+func nullUnlessFaulted(sigs []*plan.Signal, at plan.At) []*plan.Signal {
+	if slices.ContainsFunc(sigs, func(s *plan.Signal) bool { return s.Kind == "stage-fault" && s.Stage == at.Stage }) {
+		return sigs
+	}
+	return append(slices.Clone(sigs), plan.NullReturnSignal(at))
+}
+
 // hasStop reports whether any of sigs is a stop kind.
 func hasStop(sigs []*plan.Signal) bool {
 	return slices.ContainsFunc(sigs, func(s *plan.Signal) bool { return plan.IsStopKind(s.Kind) })
@@ -321,14 +333,71 @@ func call[T any](ctx context.Context, o *orch, s site, prompt string, opts lsfrt
 // and its final label.
 type callMeta struct{ branch, label string }
 
-// callBranch is call, also returning the call's callMeta.
+// callBranch is call, also returning the call's callMeta. A writer repo
+// call's commits reach the integration branch here, by the ff: step (D29),
+// when it returned a value with its clone clean; a fault there is a
+// stage-fault among the signals and the value is null. A caller adds
+// agent-null to a null only without that fault (nullUnlessFaulted).
 func callBranch[T any](ctx context.Context, o *orch, s site, prompt string, opts lsfrt.Opts) (*ret[T], []*plan.Signal, callMeta, error) {
 	cr, label, err := o.agent(ctx, prompt, opts)
 	if err != nil {
 		return nil, nil, callMeta{}, err
 	}
 	v, sigs := o.callSigs(s, cr, label)
+	if opts.Isolation == "" && (v != nil || !s.writer) {
+		fault, err := o.repoCallClone(ctx, s, cr, label)
+		if err != nil {
+			return nil, nil, callMeta{}, err
+		}
+		if fault != "" {
+			return nil, append(sigs, stageFaultSignal(s.at, fault)), callMeta{cr.Branch, label}, nil
+		}
+	}
 	return decode[T](o.rt, label, v), sigs, callMeta{cr.Branch, label}, nil
+}
+
+// repoCallClone settles a repo call's clone after its return (a writer's
+// only when non-null). A
+// writer's kept clone, clean, is fast-forwarded (ffStep) and then removed
+// with its branch; a dirty or unchecked one is left for its signal, and
+// for the requester. A writer in a discarded clone lost its commits: a
+// fault naming the role fix. A reviewer's kept clone is removed now, as it
+// has no unit's cleanup. fault is "" when there is none; err is a stop.
+func (o *orch) repoCallClone(ctx context.Context, s site, cr lsfrt.CallResult, label string) (fault string, err error) {
+	switch {
+	case s.writer && cr.Clone == lsfrt.CloneDiscarded:
+		return "writer repo call " + label + " ran in a discarded clone, so its commits were not kept: give its role clone: kept", nil
+	case !s.writer && cr.Clone == lsfrt.CloneKept:
+		o.rt.Log(label + ": a reviewer ran in a kept clone; give its role clone: discarded")
+		o.removeClone(ctx, label)
+		return "", nil
+	case !s.writer || cr.Branch == "" || len(cr.Uncommitted) > 0 || slices.Contains(cr.Flags, lsfrt.FlagUncommittedUnchecked):
+		return "", nil
+	}
+	_, _, err = o.runStep(ctx, "ff:"+label, ffInput{cr.Branch, o.ctx.integrationBranch, cr.CloneHead}, o.ffStep(cr.Branch, cr.CloneHead))
+	var se *stageErr
+	switch {
+	case errors.As(err, &se):
+		return se.reason, nil
+	case err != nil:
+		return "", err
+	}
+	o.removeClone(ctx, label)
+	return "", nil
+}
+
+// removeClone removes label's clone and branch, merged; a failure, or a
+// clone kept, is logged.
+func (o *orch) removeClone(ctx context.Context, label string) {
+	r, err := o.rt.RemoveWorktree(ctx, label, o.ctx.integrationBranch, true)
+	switch {
+	case err != nil:
+		o.rt.Log(fmt.Sprintf("%s: clone not removed: %v", label, err))
+	case r.Removed:
+		o.rt.Log(fmt.Sprintf("%s: clone %s removed with %d untracked or ignored path(s) %q", label, r.Path, len(r.Paths), r.Paths))
+	case r.Kept != "absent":
+		o.rt.Log(fmt.Sprintf("%s: clone %s kept: %s", label, r.Path, r.Kept))
+	}
 }
 
 // step is runStep plus decode. fault is the stage's failure reason, "" when

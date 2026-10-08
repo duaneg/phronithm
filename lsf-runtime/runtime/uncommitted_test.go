@@ -74,37 +74,10 @@ func TestUncommittedReplayStillDirty(t *testing.T) {
 	}
 }
 
-func TestUncommittedRepoCallComparesBefore(t *testing.T) {
-	cfg, _ := testConfig(t)
-	commitFile(t, cfg.Repo, "tracked.txt", "a\n")
-	commitFile(t, cfg.Repo, "other.txt", "o\n")
-	// Dirt before the call: an untracked file and a modified tracked one
-	// (which the call changes further), and a modified one it leaves alone.
-	os.WriteFile(filepath.Join(cfg.Repo, "before.txt"), []byte("b"), 0o644)
-	os.WriteFile(filepath.Join(cfg.Repo, "tracked.txt"), []byte("a\nb\n"), 0o644)
-	os.WriteFile(filepath.Join(cfg.Repo, "other.txt"), []byte("o\np\n"), 0o644)
-	t.Setenv("STUB_SCRIPT", "modify:tracked.txt")
-	res, _ := call(t, cfg, vOpts)
-	if !slices.Equal(res.Uncommitted, []string{"tracked.txt"}) {
-		t.Fatalf("further change only: %+v", res)
-	}
-
-	// A replay keeps the journaled paths that are still dirty.
-	again, _ := call(t, cfg, vOpts)
-	if !again.Replayed || !slices.Equal(again.Uncommitted, []string{"tracked.txt"}) {
-		t.Fatalf("replay %+v", again)
-	}
-	git(t, cfg.Repo, "checkout", "--", "tracked.txt")
-	clean, _ := call(t, cfg, vOpts)
-	if !clean.Replayed || len(clean.Uncommitted) != 0 {
-		t.Fatalf("replay after commit or removal %+v", clean)
-	}
-}
-
-func TestUncommittedBeforeStateTakenOnce(t *testing.T) {
+func TestUncommittedFailedAttemptsDirt(t *testing.T) {
 	cfg, stub := testConfig(t)
-	// The first attempt dirties the tree and fails transiently; the retry
-	// succeeds. The dirt is the call's.
+	// The first attempt dirties the clone and fails transiently; the retry
+	// runs in the same clone and succeeds. The dirt is the call's.
 	t.Setenv("STUB_SCRIPT", "dirty-transient:partial.txt,ok")
 	res, _ := call(t, cfg, vOpts)
 	if stubCount(t, stub) != 2 || !slices.Equal(res.Uncommitted, []string{"partial.txt"}) {
@@ -117,33 +90,12 @@ func TestUncommittedRenameIsOneEntry(t *testing.T) {
 	commitFile(t, cfg.Repo, "old.txt", "a\n")
 	git(t, cfg.Repo, "mv", "old.txt", "new.txt")
 	rt := &Runtime{cfg: cfg, killCh: make(chan struct{})}
-	snap, err := rt.takeSnapshot(context.Background(), cfg.Repo, true)
+	paths, err := rt.dirtyPaths(context.Background(), cfg.Repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snap) != 1 || snap["new.txt"].orig != "old.txt" || snap["new.txt"].xy[0] != 'R' {
-		t.Fatalf("%+v", snap)
-	}
-}
-
-func TestUncommittedSkipsStateDir(t *testing.T) {
-	cfg, _ := isolatedConfig(t)
-	commitFile(t, cfg.Repo, ".keep", "")
-	cfg.StateDir = filepath.Join(cfg.Repo, ".lsf-state")
-	t.Setenv("STUB_SCRIPT", "ok")
-	// A repo call (journal, telemetry, logs under the state dir) and an
-	// isolated one (its worktree under it).
-	res, _ := call(t, cfg, vOpts)
-	o := vOpts
-	o.Label = "plan:u1"
-	o.Isolation = "worktree"
-	iso, _ := call(t, cfg, o)
-	if len(res.Uncommitted) != 0 || len(iso.Uncommitted) != 0 || slices.Contains(res.Flags, FlagUncommittedUnchecked) {
-		t.Fatalf("repo %+v isolated %+v", res, iso)
-	}
-	rt := &Runtime{cfg: cfg, killCh: make(chan struct{})}
-	if got := rt.stateDirIn(cfg.Repo); got != ".lsf-state" {
-		t.Fatalf("stateDirIn %q", got)
+	if !slices.Equal(paths, []string{"new.txt"}) {
+		t.Fatalf("%q", paths)
 	}
 }
 
@@ -174,23 +126,6 @@ func TestUncommittedUncheckedNotJournaled(t *testing.T) {
 	}
 }
 
-// A repo call whose check failed replays with every dirty path, having no
-// before-state to compare.
-func TestUncommittedUncheckedReplayRepo(t *testing.T) {
-	cfg, _ := testConfig(t)
-	t.Setenv("STUB_SCRIPT", "ok")
-	key := journalKey(vOpts.Label)
-	os.MkdirAll(filepath.Join(cfg.StateDir, "journal"), 0o755)
-	rec := record{Label: vOpts.Label, Kind: "call", Hash: callHash("do the thing", "", vOpts), Ret: json.RawMessage(`{"verdict":"pass","n":3}`), Unchecked: true}
-	b, _ := json.Marshal(rec)
-	os.WriteFile(filepath.Join(cfg.StateDir, "journal", key+".json"), b, 0o644)
-	os.WriteFile(filepath.Join(cfg.Repo, "left.txt"), []byte("x"), 0o644)
-	res, _ := call(t, cfg, vOpts)
-	if !res.Replayed || !slices.Equal(res.Uncommitted, []string{"left.txt"}) {
-		t.Fatalf("%+v", res)
-	}
-}
-
 // Every return after a spawn is checked: a value, a null after invalid
 // returns, an exhausted transient, a permanent error and a guard timeout.
 func TestUncommittedEveryReturnPath(t *testing.T) {
@@ -213,27 +148,6 @@ func TestUncommittedEveryReturnPath(t *testing.T) {
 				t.Fatalf("%v %+v", err, res)
 			}
 		})
-	}
-}
-
-// A state dir reached through a symlink, inside the repository, is still
-// excluded.
-func TestUncommittedSkipsSymlinkedStateDir(t *testing.T) {
-	cfg, _ := testConfig(t)
-	commitFile(t, cfg.Repo, ".keep", "")
-	real := filepath.Join(cfg.Repo, "state")
-	if err := os.Mkdir(real, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	link := filepath.Join(t.TempDir(), "state-link")
-	if err := os.Symlink(real, link); err != nil {
-		t.Skip(err)
-	}
-	cfg.StateDir = link
-	t.Setenv("STUB_SCRIPT", "ok")
-	res, _ := call(t, cfg, vOpts)
-	if len(res.Uncommitted) != 0 || slices.Contains(res.Flags, FlagUncommittedUnchecked) {
-		t.Fatalf("%+v", res)
 	}
 }
 
@@ -298,8 +212,7 @@ func TestStepCtxEndsOnKill(t *testing.T) {
 }
 
 // A repo call that returned null with dirt is not journaled; its re-run on
-// resume still reports the dirt, which its before-state would otherwise
-// hold. Once recorded, the kept paths are forgotten.
+// resume reuses the clone, the dirt still in it, and reports it again.
 func TestUncommittedNullReRunKeepsDirt(t *testing.T) {
 	cfg, _ := testConfig(t)
 	t.Setenv("STUB_SCRIPT", "invalid")
@@ -313,9 +226,6 @@ func TestUncommittedNullReRunKeepsDirt(t *testing.T) {
 	again, _ := call(t, cfg, vOpts)
 	if again.Replayed || !slices.Equal(again.Uncommitted, []string{"half.txt"}) {
 		t.Fatalf("re-run %+v", again)
-	}
-	if _, err := os.Stat(filepath.Join(cfg.StateDir, "journal", journalKey(vOpts.Label)+".dirt")); !os.IsNotExist(err) {
-		t.Errorf("kept paths not forgotten after the record: %v", err)
 	}
 }
 

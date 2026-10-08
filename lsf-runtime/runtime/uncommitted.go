@@ -2,12 +2,8 @@ package lsfrt
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,46 +11,30 @@ import (
 )
 
 // A call's uncommitted changes (docs/design/lsf-runtime.md, "Uncommitted at
-// return"): a call in a kept clone reports every path left modified or
-// untracked (not ignored) in it; a call in the main checkout reports the
-// paths whose status or content changed between its first admitted attempt
-// and its return. Paths under the state dir are never reported. A
-// discarded clone and an explicit Dir get no check.
+// return"): a call in a kept clone reports every path left modified, staged
+// or untracked (not ignored) in it. The clone is the call's own, so every
+// dirty path is the call's. A discarded clone and an explicit Dir get no
+// check.
 
 // FlagUncommittedUnchecked marks a call whose uncommitted check failed; the
 // record keeps Unchecked instead, so a replay checks afresh.
 
-// dirt is one porcelain entry: its XY status, the origin of a rename or
-// copy, and, for a repo call, what the path holds (content hash, symlink
-// target, mode).
-type dirt struct {
-	xy, orig, hash string
-}
-
-// snapshot is a work tree's dirty paths, relative to its toplevel.
-type snapshot map[string]dirt
-
-// snapshot reads dir's work tree. hash adds each regular file's content
-// hash, which a repo call needs to see a dirty file changed further.
-func (rt *Runtime) takeSnapshot(ctx context.Context, dir string, hash bool) (snapshot, error) {
+// dirtyPaths is dir's dirty paths, relative to its toplevel, sorted: each
+// porcelain entry once (a rename or copy by its new path).
+func (rt *Runtime) dirtyPaths(ctx context.Context, dir string) ([]string, error) {
 	gctx, cancel := rt.gitContext(ctx)
 	defer cancel()
 	top, err := gitStdout(gctx, dir, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return nil, fmt.Errorf("rev-parse --show-toplevel: %w", err)
 	}
-	root := strings.TrimSpace(string(top))
 	// No optional locks: the check must not take the index lock from an
 	// agent's own git running in parallel.
-	out, err := gitStdout(gctx, root, "--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	out, err := gitStdout(gctx, strings.TrimSpace(string(top)), "--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all")
 	if err != nil {
 		return nil, fmt.Errorf("status: %w", err)
 	}
-	skip := rt.stateDirIn(root)
-	if skip == "" && rt.mayHoldStateDir(root) {
-		return nil, fmt.Errorf("cannot place the state dir %s relative to %s", rt.cfg.StateDir, root)
-	}
-	s := snapshot{}
+	paths := []string{}
 	fields := strings.Split(string(out), "\x00")
 	for i := 0; i < len(fields); i++ {
 		f := fields[i]
@@ -64,121 +44,21 @@ func (rt *Runtime) takeSnapshot(ctx context.Context, dir string, hash bool) (sna
 		if len(f) < 4 || f[2] != ' ' {
 			return nil, fmt.Errorf("status: unparsable entry %q", f)
 		}
-		d, path := dirt{xy: f[:2]}, f[3:]
-		if strings.ContainsAny(d.xy, "RC") { // a rename or copy: its origin follows
+		if strings.ContainsAny(f[:2], "RC") { // a rename or copy: its origin follows
 			if i+1 >= len(fields) {
 				return nil, fmt.Errorf("status: %q has no origin", f)
 			}
 			i++
-			d.orig = fields[i]
 		}
-		if skip != "" && (path == skip || strings.HasPrefix(path, skip+"/")) {
-			continue
-		}
-		if hash {
-			h, err := contentOf(gctx, filepath.Join(root, path))
-			if err != nil {
-				return nil, err
-			}
-			d.hash = h
-		}
-		s[path] = d
+		paths = append(paths, f[3:])
 	}
-	return s, nil
-}
-
-// hashWhole is the largest file whose content is hashed; a larger one is
-// compared by size and modification time, so a call never reads a huge
-// unignored artefact.
-const hashWhole = 64 << 20
-
-// contentOf is what a path holds, for comparing a dirty path before and
-// after a call: a regular file's mode and content hash (size and
-// modification time past hashWhole), a symlink's target, or "missing". A
-// file that vanishes mid-read is "missing", not an error; ctx ending is.
-func contentOf(ctx context.Context, p string) (string, error) {
-	fi, err := os.Lstat(p)
-	switch {
-	case err != nil:
-		return "missing", nil
-	case fi.Mode()&os.ModeSymlink != 0:
-		t, err := os.Readlink(p)
-		if err != nil {
-			return "missing", nil
-		}
-		return "link:" + t, nil
-	case !fi.Mode().IsRegular():
-		return fi.Mode().String(), nil
-	case fi.Size() > hashWhole:
-		return fmt.Sprintf("%s:%d@%d", fi.Mode(), fi.Size(), fi.ModTime().UnixNano()), nil
-	}
-	f, err := os.Open(p)
-	if err != nil {
-		return "missing", nil
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, ctxReader{ctx, f}); err != nil {
-		if ctx.Err() != nil {
-			return "", ctx.Err()
-		}
-		return "missing", nil
-	}
-	return fi.Mode().String() + ":" + hex.EncodeToString(h.Sum(nil)), nil
-}
-
-// ctxReader ends a read when ctx does.
-type ctxReader struct {
-	ctx context.Context
-	r   io.Reader
-}
-
-func (c ctxReader) Read(p []byte) (int, error) {
-	if err := c.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return c.r.Read(p)
-}
-
-// mayHoldStateDir reports whether the state dir lies lexically under root:
-// stateDirIn's "" is then a failure to resolve it, not its absence.
-func (rt *Runtime) mayHoldStateDir(root string) bool {
-	rel, err := filepath.Rel(root, rt.cfg.StateDir)
-	return err == nil && !strings.HasPrefix(rel, "..")
-}
-
-// stateDirIn is the state dir relative to root, "" when it is outside it.
-func (rt *Runtime) stateDirIn(root string) string {
-	r, err1 := filepath.EvalSymlinks(root)
-	sd, err2 := filepath.EvalSymlinks(rt.cfg.StateDir)
-	if err1 != nil || err2 != nil {
-		return ""
-	}
-	rel, err := filepath.Rel(r, sd)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
-		return ""
-	}
-	return filepath.ToSlash(rel)
-}
-
-// changed is after's paths not in before, or in it with another status or
-// content; with before nil (which holds no path), every path in after.
-// Sorted.
-func changed(before, after snapshot) []string {
-	out := []string{}
-	for p, d := range after {
-		if b, ok := before[p]; !ok || b != d {
-			out = append(out, p)
-		}
-	}
-	slices.Sort(out)
-	return out
+	slices.Sort(paths)
+	return paths, nil
 }
 
 // afterCall is a returned call's bookkeeping (a value or a null; not a
 // stop): a kept clone's branch is fetched back and the clone checked; a
-// discarded clone is removed; a main-checkout call is checked against its
-// before-state. Only a failed fetch-back is an error, a stop.
+// discarded clone is removed. Only a failed fetch-back is an error, a stop.
 func (rt *Runtime) afterCall(ctx context.Context, c *callState, res *CallResult) error {
 	switch {
 	case !c.placed:
@@ -189,36 +69,23 @@ func (rt *Runtime) afterCall(ctx context.Context, c *callState, res *CallResult)
 			}
 			return rt.setStop(StopRuntimeError, fmt.Sprintf("%s: %v; the clone is kept", c.o.Label, err))
 		}
-		rt.checkUncommitted(ctx, c, res)
+		rt.checkUncommitted(ctx, c.o.Label, c.place.dir, res)
 	case c.place.kind == CloneDiscarded:
 		rt.discard(c.o.Label, c.place)
-	case c.place.inRepo:
-		rt.checkUncommitted(ctx, c, res)
 	}
 	return nil
 }
 
-// checkUncommitted sets res.Uncommitted, or the unchecked flag, for a call
-// that spawned in a kept clone or the main checkout. A main-checkout call
-// compares with its before-state.
-func (rt *Runtime) checkUncommitted(ctx context.Context, c *callState, res *CallResult) {
-	repo := c.place.inRepo
-	if repo && c.beforeErr != nil {
-		rt.uncheckedCall(ctx, c.o.Label, res, c.beforeErr)
-		return
-	}
-	after, err := rt.takeSnapshot(ctx, c.place.dir, repo)
+// checkUncommitted sets res.Uncommitted, or the unchecked flag, from dir.
+func (rt *Runtime) checkUncommitted(ctx context.Context, label, dir string, res *CallResult) {
+	paths, err := rt.dirtyPaths(ctx, dir)
 	if err != nil {
-		rt.uncheckedCall(ctx, c.o.Label, res, err)
+		rt.uncheckedCall(ctx, label, res, err)
 		return
 	}
-	if repo {
-		res.Uncommitted = changed(c.before, after)
-	} else {
-		res.Uncommitted = changed(nil, after)
-	}
-	if len(res.Uncommitted) > 0 {
-		rt.event("uncommitted", map[string]any{"label": c.o.Label, "count": len(res.Uncommitted)})
+	res.Uncommitted = paths
+	if len(paths) > 0 {
+		rt.event("uncommitted", map[string]any{"label": label, "count": len(paths)})
 	}
 }
 
@@ -227,66 +94,51 @@ func (rt *Runtime) checkUncommitted(ctx context.Context, c *callState, res *Call
 // when it still exists, after its branch is fetched back again, so a commit
 // the requester made there to clear the paths reaches the main repo; a
 // removed clone is clean. A worktree (a record from before clones) is
-// checked as it stands. A main-checkout call keeps the journaled paths that
-// are still dirty; after a failed check, with no before-state to compare,
-// it reports every dirty path.
+// checked as it stands. Any other record has nothing to check.
 func (rt *Runtime) recheckUncommitted(ctx context.Context, o Opts, key string, unchecked bool, res *CallResult) {
 	journaled := res.Uncommitted
 	res.Uncommitted = nil
-	if (len(journaled) == 0 && !unchecked) || rt.cfg.Repo == "" || res.Clone == CloneDiscarded || o.Dir != "" {
+	if (len(journaled) == 0 && !unchecked) || rt.cfg.Repo == "" {
 		return
 	}
-	dir := rt.cfg.Repo
-	if res.Clone == CloneKept || o.Isolation != "" {
-		sub := "wt"
-		if res.Clone == CloneKept {
-			sub = "clone"
-		}
-		dir = filepath.Join(rt.cfg.StateDir, sub, key)
-		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
-			return // the clone is gone, and its dirt with it
-		}
-		// Only the call's own clone or worktree: a bare directory left by a
-		// crash would resolve to the main checkout.
-		gctx, cancel := rt.gitContext(ctx)
-		top, err := gitStdout(gctx, dir, "rev-parse", "--show-toplevel")
-		cancel()
-		resolved, _ := filepath.EvalSymlinks(dir)
-		if err != nil || strings.TrimSpace(string(top)) != resolved {
-			rt.uncheckedCall(ctx, o.Label, res, fmt.Errorf("%s is not the call's own", dir))
+	var dir string
+	switch {
+	case res.Clone == CloneKept:
+		dir = filepath.Join(rt.cfg.StateDir, "clone", key)
+	case res.Clone == "" && o.Isolation != "" && o.Dir == "":
+		dir = filepath.Join(rt.cfg.StateDir, "wt", key)
+	default:
+		return
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return // the clone is gone, and its dirt with it
+	}
+	// Only the call's own clone or worktree: a bare directory left by a
+	// crash would resolve to an enclosing repository.
+	gctx, cancel := rt.gitContext(ctx)
+	top, err := gitStdout(gctx, dir, "rev-parse", "--show-toplevel")
+	cancel()
+	resolved, _ := filepath.EvalSymlinks(dir)
+	if err != nil || strings.TrimSpace(string(top)) != resolved {
+		rt.uncheckedCall(ctx, o.Label, res, fmt.Errorf("%s is not the call's own", dir))
+		return
+	}
+	if res.Clone == CloneKept {
+		args, err := rt.parseArgs()
+		if err != nil {
+			rt.uncheckedCall(ctx, o.Label, res, err)
 			return
 		}
-		if res.Clone == CloneKept {
-			args, err := rt.parseArgs()
-			if err != nil {
-				rt.uncheckedCall(ctx, o.Label, res, err)
-				return
-			}
-			p := placement{dir: dir, kind: CloneKept, dest: res.Branch, branch: args.IntegrationBranch}
-			if o.Isolation != "" {
-				p.branch = res.Branch
-			}
-			if err := rt.fetchBack(ctx, o.Label, p, res); err != nil {
-				rt.uncheckedCall(ctx, o.Label, res, err)
-				return
-			}
+		p := placement{dir: dir, kind: CloneKept, dest: res.Branch, branch: args.IntegrationBranch}
+		if o.Isolation != "" {
+			p.branch = res.Branch
+		}
+		if err := rt.fetchBack(ctx, o.Label, p, res); err != nil {
+			rt.uncheckedCall(ctx, o.Label, res, err)
+			return
 		}
 	}
-	now, err := rt.takeSnapshot(ctx, dir, false)
-	if err != nil {
-		rt.uncheckedCall(ctx, o.Label, res, err)
-		return
-	}
-	if dir != rt.cfg.Repo || unchecked {
-		res.Uncommitted = changed(nil, now)
-		return
-	}
-	res.Uncommitted = []string{}
-	for _, p := range journaled {
-		if _, ok := now[p]; ok {
-			res.Uncommitted = append(res.Uncommitted, p)
-		}
-	}
+	rt.checkUncommitted(ctx, o.Label, dir, res)
 }
 
 // uncheckedCall flags a failed check. A check ended by ctx or a repeated
@@ -302,51 +154,7 @@ func (rt *Runtime) uncheckedCall(ctx context.Context, label string, res *CallRes
 	rt.Log(fmt.Sprintf("%s: uncommitted check failed: %v", label, err))
 }
 
-// A repo call that returns null is not journaled, so its re-run would take
-// the dirt it left into its own before-state. The dirt is kept beside the
-// journal (<key>.dirt) until the call is recorded, and a re-run's
-// before-state leaves those paths out, so they are reported again.
-
-func (rt *Runtime) dirtPath(key string) string {
-	return filepath.Join(rt.cfg.StateDir, "journal", key+".dirt")
-}
-
-// keepDirt records a null repo call's paths for its re-run.
-func (rt *Runtime) keepDirt(key string, paths []string) {
-	if len(paths) == 0 {
-		return
-	}
-	prior := rt.priorDirt(key)
-	for _, p := range paths {
-		if !slices.Contains(prior, p) {
-			prior = append(prior, p)
-		}
-	}
-	b, _ := json.Marshal(prior)
-	if err := writeFileAtomic(rt.dirtPath(key), b); err != nil {
-		rt.Log(fmt.Sprintf("%s: keeping its uncommitted paths for a re-run failed: %v", key, err))
-	}
-}
-
-func (rt *Runtime) priorDirt(key string) []string {
-	var paths []string
-	if b, err := os.ReadFile(rt.dirtPath(key)); err == nil {
-		json.Unmarshal(b, &paths)
-	}
-	return paths
-}
-
-// forgetDirt is called once the call is recorded.
-func (rt *Runtime) forgetDirt(key string) { os.Remove(rt.dirtPath(key)) }
-
-// checkNull is afterCall for a null return: a main-checkout call keeps its
-// paths for its re-run.
+// checkNull is afterCall for a null return.
 func (rt *Runtime) checkNull(ctx context.Context, c *callState, res *CallResult) error {
-	if err := rt.afterCall(ctx, c, res); err != nil {
-		return err
-	}
-	if c.place.inRepo {
-		rt.keepDirt(c.key, res.Uncommitted)
-	}
-	return nil
+	return rt.afterCall(ctx, c, res)
 }

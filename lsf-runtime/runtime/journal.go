@@ -140,9 +140,7 @@ func (rt *Runtime) replayCall(key, hash, label string, schema json.RawMessage) (
 func (rt *Runtime) recordCall(key, hash, label string, res CallResult) {
 	flags := slices.DeleteFunc(slices.Clone(res.Flags), func(f string) bool { return f == FlagUncommittedUnchecked })
 	unchecked := len(flags) != len(res.Flags)
-	if err := rt.writeRecord(key, record{Label: label, Kind: "call", Hash: hash, Ret: res.Value, Flags: flags, Denials: res.Denials, Uncommitted: res.Uncommitted, Unchecked: unchecked, Branch: res.Branch, Clone: res.Clone, CloneHead: res.CloneHead}); err == nil {
-		rt.forgetDirt(key)
-	} else {
+	if err := rt.writeRecord(key, record{Label: label, Kind: "call", Hash: hash, Ret: res.Value, Flags: flags, Denials: res.Denials, Uncommitted: res.Uncommitted, Unchecked: unchecked, Branch: res.Branch, Clone: res.Clone, CloneHead: res.CloneHead}); err != nil {
 		rt.Log(fmt.Sprintf("%s: journal write failed, a resume will re-run the call: %v", label, err))
 	}
 }

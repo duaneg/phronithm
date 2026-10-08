@@ -299,7 +299,7 @@ func (l *launch) applyDirectEdits(ctx context.Context, at planRef, edits []direc
 		return nil, err
 	}
 	if r == nil {
-		return append(out, plan.NullReturnSignal(plan.At{Stage: "direct-edits", Wave: wave})), nil
+		return nullUnlessFaulted(out, plan.At{Stage: "direct-edits", Wave: wave}), nil
 	}
 	if !committed(r.Result.Sha) {
 		paths := []string{}
@@ -491,7 +491,7 @@ func Run(ctx context.Context, rt Runtime) (json.RawMessage, error) {
 			return nil, err
 		}
 		if rp == nil {
-			ev := plan.EvaluateWave(slices.Concat(cs, []*plan.Signal{plan.NullReturnSignal(plan.At{Stage: "decision-replan"})}))
+			ev := plan.EvaluateWave(nullUnlessFaulted(cs, plan.At{Stage: "decision-replan"}))
 			l.record(ev)
 			return l.stopped(ctx, "decision-replan", ev.Stops, nil)
 		}

@@ -31,12 +31,6 @@ func resolved(t *testing.T, p string) string {
 	return r
 }
 
-// withRepoCallsInClones runs a test with writer repo calls in kept clones.
-func withRepoCallsInClones(t *testing.T) {
-	keptRepoCallsInRepo = false
-	t.Cleanup(func() { keptRepoCallsInRepo = true })
-}
-
 func exists(p string) bool { _, err := os.Lstat(p); return err == nil }
 
 // An isolated writer runs in its own kept clone, never the main checkout or
@@ -151,13 +145,11 @@ func TestCloneDiscardedReviewer(t *testing.T) {
 	}
 }
 
-// With writer repo calls in clones, a repo writer's clone is on the
-// integration branch and its commit comes back as lsf/<plan8>/<key>, the
+// A repo writer's clone is on the integration branch and its commit comes back as lsf/<plan8>/<key>, the
 // integration branch unmoved. A dirty path is reported; a requester commit
 // in the clone reaches the main repo at the replay, which clears it. A
 // stale clone (main moved) is remade.
 func TestCloneRepoWriter(t *testing.T) {
-	withRepoCallsInClones(t)
 	cfg, stub := testConfig(t)
 	mainTip := git(t, cfg.Repo, "rev-parse", "main")
 	t.Setenv("STUB_SCRIPT", "commit:plan.md")
@@ -195,16 +187,6 @@ func TestCloneRepoWriter(t *testing.T) {
 	}
 	if git(t, clone, "rev-parse", "HEAD") != git(t, cfg.Repo, "rev-parse", "main") || countEvents(telemetry(t, cfg), "clone-stale") != 1 {
 		t.Errorf("stale clone not remade: HEAD %s", git(t, clone, "rev-parse", "HEAD"))
-	}
-}
-
-// With the switch on, a writer repo call still runs in the main checkout.
-func TestCloneSwitchKeepsRepoWriterInRepo(t *testing.T) {
-	cfg, stub := testConfig(t)
-	t.Setenv("STUB_SCRIPT", "ok")
-	res, err := call(t, cfg, Opts{Label: "replan:w1", Schema: json.RawMessage(verdictSchema)})
-	if err != nil || res.Clone != "" || res.Branch != "" || stubCwd(t, stub, 1) != resolved(t, cfg.Repo) {
-		t.Fatalf("%+v %v", res, err)
 	}
 }
 
@@ -355,10 +337,9 @@ func TestMergeCloneReuse(t *testing.T) {
 }
 
 // cloneLaunch is worktreeLaunch for clones: one launch over a repository
-// whose main branch ignores *.log, with writer repo calls in clones.
+// whose main branch ignores *.log.
 func cloneLaunch(t *testing.T, script string, body func(ctx context.Context, rt *Runtime)) Config {
 	t.Helper()
-	withRepoCallsInClones(t)
 	t.Setenv("STUB_SCRIPT", script)
 	cfg, _ := testConfig(t)
 	commitFile(t, cfg.Repo, ".gitignore", "*.log\n")
@@ -441,7 +422,6 @@ func TestRemoveCloneKeeps(t *testing.T) {
 // A hooks directory with a subdirectory is copied whole; a stale repo-call
 // clone with dirt is not removed.
 func TestCloneHooksTreeAndStaleDirt(t *testing.T) {
-	withRepoCallsInClones(t)
 	cfg, _ := testConfig(t)
 	hooks := filepath.Join(cfg.Repo, ".git", "hooks")
 	os.MkdirAll(filepath.Join(hooks, "_"), 0o755)
