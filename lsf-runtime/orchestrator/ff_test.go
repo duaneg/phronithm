@@ -27,9 +27,10 @@ func ffCase(t *testing.T, kind string, a answer) (*ret[scribeResult], []*plan.Si
 
 // ffLaunch is ffCase's launch, repeatable over the same state dir.
 type ffLaunch struct {
-	t   *testing.T
-	r   *gitRepo
-	cfg lsfrt.Config
+	t            *testing.T
+	r            *gitRepo
+	cfg          lsfrt.Config
+	label, stage string // the call's; direct-edits when empty
 }
 
 func newFFLaunch(t *testing.T, kind string, a answer) *ffLaunch {
@@ -52,7 +53,7 @@ func newFFLaunch(t *testing.T, kind string, a answer) *ffLaunch {
 		StateDir: filepath.Join(dir, "state"), Repo: r.dir, ClaudeBin: os.Args[0], Args: args,
 		Roles: map[string]lsfrt.Role{"w": {Tools: "default", PermissionMode: "dontAsk", Clone: kind}}, DefaultRole: "w",
 		Backoff: []lsfrt.Duration{lsfrt.Duration(10 * time.Millisecond)},
-	}}
+	}, "", ""}
 }
 
 func (f *ffLaunch) launch() (*ret[scribeResult], []*plan.Signal) {
@@ -70,7 +71,11 @@ func (f *ffLaunch) launch() (*ret[scribeResult], []*plan.Signal) {
 			return nil, err
 		}
 		o := newOrch(rt, c, nil)
-		res, sigs, err = call[scribeResult](ctx, o, site{at: plan.At{Stage: "direct-edits"}, writer: true}, "Make these edits", lsfrt.Opts{Label: "direct-edits", Schema: scribeSchema})
+		label, stage := "direct-edits", "direct-edits"
+		if f.label != "" {
+			label, stage = f.label, f.stage
+		}
+		res, sigs, err = call[scribeResult](ctx, o, site{at: plan.At{Stage: stage}, writer: true}, "Make these edits", lsfrt.Opts{Label: label, Schema: scribeSchema})
 		return nil, err
 	})
 	if err != nil || sum.StopReason != lsfrt.StopReturned {
@@ -274,4 +279,20 @@ func TestDiscardedIsolatedWriter(t *testing.T) {
 		t.Fatalf("%+v %v", res, kinds(sigs))
 	}
 	contains(t, sigs[0].Statement, "writer implement:A ran in a discarded clone")
+}
+
+// The re-plan's commits, too, reach the integration branch only by its ff:
+// step: its clone is on integration, which is unmoved until the step.
+func TestFastForwardReplan(t *testing.T) {
+	f := newFFLaunch(t, "kept", answer{Return: scribeHead, Shell: commitEdit + " && git -C @main log -1 --format=%s > main-at-return.txt && git add main-at-return.txt && git commit -q -m seen"})
+	f.label, f.stage = "replan:w1", "replan"
+	res, sigs := f.launch()
+	if res == nil || len(sigs) != 0 {
+		t.Fatalf("%+v %v", res, kinds(sigs))
+	}
+	eq(t, f.r.git("show", "HEAD:main-at-return.txt"), "init", "integration unmoved while the call ran")
+	eq(t, f.r.git("log", "--format=%s", "-2"), "seen\nedit", "fast-forwarded after it")
+	if !journaled(t, f.cfg.StateDir, "ff_replan_w1") {
+		t.Error("no ff: step record")
+	}
 }

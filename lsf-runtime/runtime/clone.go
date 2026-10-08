@@ -173,9 +173,18 @@ func isCloneOn(ctx context.Context, dir, branch string) error {
 // branch when it has one, else a new branch from integration. A failure
 // removes the partial directory. The caller holds wtSem.
 func (rt *Runtime) makeClone(ctx context.Context, dir, branch, integration string) (err error) {
+	// Built at dir.partial and renamed into place, so a kill mid-build
+	// leaves no directory that a relaunch would refuse to reuse; the launch
+	// removes a .partial left by one. The setup is copied before the
+	// checkout: the line-ending config shapes the work tree, and the hooks
+	// path, set to dir's own, does not yet exist, so no hook runs then.
+	tmp := dir + partialSuffix
+	if err := os.RemoveAll(tmp); err != nil {
+		return err
+	}
 	defer func() {
 		if err != nil {
-			os.RemoveAll(dir)
+			os.RemoveAll(tmp)
 		}
 	}()
 	run := func(in string, args ...string) error {
@@ -187,29 +196,36 @@ func (rt *Runtime) makeClone(ctx context.Context, dir, branch, integration strin
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 		return err
 	}
-	if err := run(rt.cfg.StateDir, "clone", "--no-local", "--no-checkout", "--no-tags", "-q", "--", rt.cfg.Repo, dir); err != nil {
+	if err := run(rt.cfg.StateDir, "clone", "--no-local", "--no-checkout", "--no-tags", "-q", "--", rt.cfg.Repo, tmp); err != nil {
 		return err
 	}
-	if err := run(dir, "fetch", "--no-tags", "--update-head-ok", "-q", rt.cfg.Repo, "+refs/heads/*:refs/heads/*"); err != nil {
+	if err := run(tmp, "fetch", "--no-tags", "--update-head-ok", "-q", rt.cfg.Repo, "+refs/heads/*:refs/heads/*"); err != nil {
 		return err
 	}
-	if gitRun(ctx, dir, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch) == nil {
-		err = run(dir, "checkout", "-q", branch, "--")
+	if err := run(tmp, "remote", "remove", "origin"); err != nil {
+		return err
+	}
+	if err := rt.copyRepoSetup(ctx, tmp, dir); err != nil {
+		return err
+	}
+	if gitRun(ctx, tmp, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch) == nil {
+		err = run(tmp, "checkout", "-q", branch, "--")
 	} else {
-		err = run(dir, "checkout", "-q", "-b", branch, integration, "--")
+		err = run(tmp, "checkout", "-q", "-b", branch, integration, "--")
 	}
 	if err != nil {
 		return err
 	}
-	if err := run(dir, "remote", "remove", "origin"); err != nil {
-		return err
-	}
-	return rt.copyRepoSetup(ctx, dir)
+	return os.Rename(tmp, dir)
 }
 
-// copyRepoSetup gives a new clone the main repo's effective hooks, the
-// configCopied values and its info/exclude and info/attributes.
-func (rt *Runtime) copyRepoSetup(ctx context.Context, dir string) error {
+// partialSuffix marks a clone being built.
+const partialSuffix = ".partial"
+
+// copyRepoSetup gives a new clone at dir, to be renamed to final, the main
+// repo's effective hooks, the configCopied values and its info/exclude and
+// info/attributes.
+func (rt *Runtime) copyRepoSetup(ctx context.Context, dir, final string) error {
 	mainPath := func(p string) (string, error) {
 		b, err := gitStdout(ctx, rt.cfg.Repo, "rev-parse", "--git-path", p)
 		if err != nil {
@@ -230,7 +246,7 @@ func (rt *Runtime) copyRepoSetup(ctx context.Context, dir string) error {
 		return err
 	}
 	// The clone runs the copies whatever a global core.hooksPath says.
-	if b, err := gitOut(ctx, dir, "config", "core.hooksPath", dst); err != nil {
+	if b, err := gitOut(ctx, dir, "config", "core.hooksPath", filepath.Join(final, ".git", "hooks")); err != nil {
 		return fmt.Errorf("config core.hooksPath: %v: %s", err, strings.TrimSpace(string(b)))
 	}
 	for _, k := range configCopied {
@@ -492,12 +508,21 @@ func checkRepo(cfg Config) error {
 	return nil
 }
 
-// wipeScratch removes discarded clones a crashed launch left. It runs after
-// orphan reaping, so no live call loses its cwd.
+// wipeScratch removes discarded clones, and clones half-built, that a
+// crashed launch left. It runs after orphan reaping, so no live call loses
+// its cwd.
 func (rt *Runtime) wipeScratch() {
 	dir := filepath.Join(rt.cfg.StateDir, "scratch")
 	if err := os.RemoveAll(dir); err != nil {
 		rt.Log("scratch: " + err.Error())
 	}
 	os.MkdirAll(dir, 0o755)
+	for _, sub := range []string{"clone", "merge"} {
+		partial, _ := filepath.Glob(filepath.Join(rt.cfg.StateDir, sub, "*"+partialSuffix))
+		for _, p := range partial {
+			if err := os.RemoveAll(p); err != nil {
+				rt.Log("half-built clone: " + err.Error())
+			}
+		}
+	}
 }

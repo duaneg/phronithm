@@ -175,10 +175,9 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 	}
 
 	// The wave gate: one question, does the wave invalidate the
-	// architecture. Merged worktrees are removed alongside it, by code
-	// (D25); the gate reads the main checkout only. Cleanup's failure is
-	// logged, not signalled: it leaves worktrees, which hold nothing
-	// unmerged.
+	// architecture. Merged units' clones are removed alongside it, by code
+	// (D25); the gate runs in a clone of its own. Cleanup's failure is
+	// logged, not signalled: it leaves clones, which hold nothing unmerged.
 	if len(merged) > 0 {
 		gt := c.tierFor("gate")
 		gl, cl := "review-gate:w"+itoa(wave), "cleanup:w"+itoa(wave)

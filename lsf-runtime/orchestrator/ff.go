@@ -93,7 +93,7 @@ func (o *orch) mainClean(ctx context.Context, g gitOps) error {
 // apply (applied, or adopted after an interrupted step). A branch that
 // moved off target's history, a checkout not on the branch or not clean,
 // and a fast-forward git refused are faults.
-func (o *orch) fastForward(ctx context.Context, g gitOps, integration, target string) error {
+func (o *orch) fastForward(ctx context.Context, g gitOps, integration, target, remedy string) error {
 	tip, err := g.out(ctx, o.repo, "rev-parse", "--verify", "--quiet", target+"^{commit}")
 	if err != nil {
 		return fmt.Errorf("fast-forward: %s does not resolve: %w", target, err)
@@ -116,7 +116,7 @@ func (o *orch) fastForward(ctx context.Context, g gitOps, integration, target st
 		return err
 	}
 	if !ahead {
-		return &ffFault{fmt.Sprintf("%s moved to %s while %s was made on an earlier tip; rebase those commits onto %s in the call's clone (under the state dir's clone/), or drop them, then relaunch", integration, head, tip, integration)}
+		return &ffFault{fmt.Sprintf("%s moved to %s while %s was made on an earlier tip; %s", integration, head, tip, remedy)}
 	}
 	// Not cancelled mid-checkout: a half-updated work tree would read as
 	// the requester's changes.
@@ -158,7 +158,8 @@ func (o *orch) ffStep(branch, cloneHead string) stageFn {
 		if err != nil {
 			return nil, err
 		}
-		if err := o.fastForward(ctx, g, o.ctx.integrationBranch, "refs/heads/"+branch); err != nil {
+		remedy := "rebase those commits onto " + o.ctx.integrationBranch + " in the call's clone (under the state dir's clone/), or drop them, then relaunch"
+		if err := o.fastForward(ctx, g, o.ctx.integrationBranch, "refs/heads/"+branch, remedy); err != nil {
 			return nil, err
 		}
 		after, err := g.head(ctx, o.repo)

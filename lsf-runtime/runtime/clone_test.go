@@ -136,12 +136,17 @@ func TestCloneDiscardedReviewer(t *testing.T) {
 			t.Errorf("%q: a branch came back: %s", iso, git(t, cfg.Repo, "branch", "--list", "lsf/*"))
 		}
 	}
-	// A crashed launch's scratch clone is wiped at the next launch.
-	left := filepath.Join(cfg.StateDir, "scratch", "left")
-	os.MkdirAll(left, 0o755)
+	// A crashed launch's scratch clone, and its half-built clones, are
+	// wiped at the next launch.
+	left := []string{filepath.Join(cfg.StateDir, "scratch", "left"), filepath.Join(cfg.StateDir, "clone", "k-1234abcd.partial"), filepath.Join(cfg.StateDir, "merge", "w2.partial")}
+	for _, d := range left {
+		os.MkdirAll(d, 0o755)
+	}
 	launch(t, cfg, func(context.Context, *Runtime) (json.RawMessage, error) { return nil, nil })
-	if exists(left) {
-		t.Error("scratch not wiped at launch")
+	for _, d := range left {
+		if exists(d) {
+			t.Errorf("%s not wiped at launch", d)
+		}
 	}
 }
 

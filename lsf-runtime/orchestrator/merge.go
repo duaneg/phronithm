@@ -573,7 +573,7 @@ func (o *orch) mergeStage(in mergeInput) stageFn {
 			if err := m.toMain(ctx, sha); err != nil {
 				return err
 			}
-			return o.fastForward(ctx, g, in.IntegrationBranch, m.xfer)
+			return o.fastForward(ctx, g, in.IntegrationBranch, m.xfer, "remove "+m.dir+" and relaunch, and the step merges again onto the new tip")
 		}
 		date := o.today()
 		bk := bookIn{Name: in.Name, ArchivePath: in.ArchivePath, LedgerPath: in.LedgerPath, Wave: in.Wave}
