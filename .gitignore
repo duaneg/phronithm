@@ -10,3 +10,6 @@ __pycache__/
 
 # vim swap files
 .*.swp
+
+# lsf-runtime test temp fallback
+lsf-runtime/.testtmp/

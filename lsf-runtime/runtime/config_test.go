@@ -1,8 +1,11 @@
 package lsfrt
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -124,5 +127,53 @@ func TestExampleConfigLoads(t *testing.T) {
 	}
 	if s := c.skillFor("critique-code:r2:u1"); s != "phronithm:critique" {
 		t.Errorf("skill %q", s)
+	}
+}
+
+// A launch refuses a repo or state dir under /tmp or /var/tmp, written
+// there or reached by a symlink, before it creates anything.
+func TestLaunchRefusesTempRoots(t *testing.T) {
+	links := t.TempDir()
+	var paths []string
+	for i, root := range []string{"/tmp", "/var/tmp"} {
+		paths = append(paths, filepath.Join(root, "lsf-refusal-test", "x"))
+		if fi, err := os.Stat(root); err != nil || !fi.IsDir() {
+			continue
+		}
+		l := filepath.Join(links, "l"+strconv.Itoa(i))
+		if err := os.Symlink(root, l); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, l, filepath.Join(l, "not-yet", "made"))
+	}
+	for _, p := range paths {
+		for _, field := range []string{"repo", "stateDir"} {
+			cfg, _ := testConfig(t)
+			if field == "repo" {
+				cfg.Repo = p
+			} else {
+				cfg.StateDir = p
+			}
+			ran := false
+			_, err := Run(context.Background(), cfg, func(context.Context, *Runtime) (json.RawMessage, error) { ran = true; return nil, nil })
+			if err == nil || ran || !strings.Contains(err.Error(), field+" ") || !strings.Contains(err.Error(), "/tmp") {
+				t.Errorf("%s %s: err %v, ran %v", field, p, err, ran)
+			}
+		}
+	}
+	if _, err := os.Stat("/tmp/lsf-refusal-test"); err == nil {
+		t.Error("the refused launch created its state dir")
+	}
+	for _, p := range []string{"/tmpx/a", "/var/tmpdir", "/srv/tmp"} {
+		if underTempRoot(p) {
+			t.Errorf("%s is not under a temp root", p)
+		}
+	}
+}
+
+// Tests run with TMPDIR outside the temp roots (testenv.Main).
+func TestTestTempDirNotUnderTempRoot(t *testing.T) {
+	if d := t.TempDir(); underTempRoot(d) {
+		t.Fatalf("t.TempDir() %s is under a temp root", d)
 	}
 }

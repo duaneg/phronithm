@@ -2,10 +2,15 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/duaneg/phronithm/lsf-runtime/internal/testenv"
 )
+
+func TestMain(m *testing.M) { os.Exit(testenv.Main(m)) }
 
 // The config keeps the example's roles and skill rules and tightens the caps.
 func TestConfig(t *testing.T) {

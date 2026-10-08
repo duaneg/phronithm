@@ -57,6 +57,11 @@ func Run(ctx context.Context, cfg Config, body func(ctx context.Context, rt *Run
 	if err := cfg.prepare(); err != nil {
 		return Summary{}, fmt.Errorf("lsf-runtime: config: %w", err)
 	}
+	for _, d := range []struct{ name, path string }{{"repo", cfg.Repo}, {"stateDir", cfg.StateDir}} {
+		if d.path != "" && underTempRoot(d.path) {
+			return Summary{}, fmt.Errorf("lsf-runtime: %s %s is under /tmp or /var/tmp, which the Bash sandbox leaves writable; move it", d.name, d.path)
+		}
+	}
 	for _, d := range []string{"", "journal", "calls", "wt", "gates/logs"} {
 		if err := os.MkdirAll(filepath.Join(cfg.StateDir, d), 0o755); err != nil {
 			return Summary{}, fmt.Errorf("lsf-runtime: state dir: %w", err)

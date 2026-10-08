@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/duaneg/phronithm/lsf-runtime/internal/testenv"
 )
 
 // Subprocess tests re-exec the test binary as a launch: LSFRT_HELPER names
@@ -21,7 +23,7 @@ func TestMain(m *testing.M) {
 	if s := os.Getenv("LSFRT_HELPER"); s != "" {
 		os.Exit(helperMain(s))
 	}
-	os.Exit(m.Run())
+	os.Exit(testenv.Main(m))
 }
 
 func helperMain(scenario string) int {
