@@ -100,7 +100,7 @@ These are recorded, not fixed. Each one fails in the false-positive direction un
   - Skill-text paths use `git rev-parse --show-toplevel`, not `$PWD`.
 
   None changed the design's approach.
-- **Size:** about 1,300 lines over 17 files, roughly two thirds of them tests and fixtures.
+- **Size:** about 2,100 lines over 19 files, including the plan documents; most of the code is tests and fixtures.
 
 ## Open questions for the requester
 
