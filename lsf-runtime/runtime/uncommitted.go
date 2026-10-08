@@ -89,16 +89,18 @@ func (rt *Runtime) checkUncommitted(ctx context.Context, label, dir string, res 
 	}
 }
 
-// recheckUncommitted is a replay's check, made when the record has paths
-// or its check failed (unchecked). A kept clone is checked as it stands,
-// when it still exists, after its branch is fetched back again, so a commit
-// the requester made there to clear the paths reaches the main repo; a
-// removed clone is clean. A worktree (a record from before clones) is
-// checked as it stands. Any other record has nothing to check.
+// recheckUncommitted is a replay's settling of its clone. A kept clone
+// that still exists has its branch fetched back again, so what the
+// requester did there since (a commit clearing the paths, a rebase onto a
+// moved integration branch) reaches the main repo; a removed clone is
+// clean. The uncommitted check is made again when the record has paths or
+// its check failed (unchecked), of a kept clone or a worktree (a record
+// from before clones) as it stands. Any other record has nothing to check.
 func (rt *Runtime) recheckUncommitted(ctx context.Context, o Opts, key string, unchecked bool, res *CallResult) {
 	journaled := res.Uncommitted
 	res.Uncommitted = nil
-	if (len(journaled) == 0 && !unchecked) || rt.cfg.Repo == "" {
+	recheck := len(journaled) > 0 || unchecked
+	if rt.cfg.Repo == "" || !recheck && res.Clone != CloneKept {
 		return
 	}
 	var dir string
@@ -138,7 +140,9 @@ func (rt *Runtime) recheckUncommitted(ctx context.Context, o Opts, key string, u
 			return
 		}
 	}
-	rt.checkUncommitted(ctx, o.Label, dir, res)
+	if recheck {
+		rt.checkUncommitted(ctx, o.Label, dir, res)
+	}
 }
 
 // uncheckedCall flags a failed check. A check ended by ctx or a repeated

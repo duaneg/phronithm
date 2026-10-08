@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,20 @@ import (
 // kind; @main in a's shell stands for the main checkout. It returns the
 // call's value, its signals, the repo and the state dir.
 func ffCase(t *testing.T, kind string, a answer) (*ret[scribeResult], []*plan.Signal, *gitRepo, string) {
+	t.Helper()
+	f := newFFLaunch(t, kind, a)
+	res, sigs := f.launch()
+	return res, sigs, f.r, f.cfg.StateDir
+}
+
+// ffLaunch is ffCase's launch, repeatable over the same state dir.
+type ffLaunch struct {
+	t   *testing.T
+	r   *gitRepo
+	cfg lsfrt.Config
+}
+
+func newFFLaunch(t *testing.T, kind string, a answer) *ffLaunch {
 	t.Helper()
 	r := newGitRepo(t)
 	a.Contains = "Make these edits"
@@ -33,14 +48,19 @@ func ffCase(t *testing.T, kind string, a answer) (*ret[scribeResult], []*plan.Si
 	t.Setenv("LSF_FAKE_CLAUDE_STATE", "")
 	t.Setenv("LSF_CLAUDE_BIN", "")
 	args, _ := plan.MarshalJS(M{"name": "f", "planSha": r.head(), "architectureDoc": "docs/architecture/f.md", "integrationBranch": "integration"}, "")
-	cfg := lsfrt.Config{
+	return &ffLaunch{t, r, lsfrt.Config{
 		StateDir: filepath.Join(dir, "state"), Repo: r.dir, ClaudeBin: os.Args[0], Args: args,
 		Roles: map[string]lsfrt.Role{"w": {Tools: "default", PermissionMode: "dontAsk", Clone: kind}}, DefaultRole: "w",
 		Backoff: []lsfrt.Duration{lsfrt.Duration(10 * time.Millisecond)},
-	}
+	}}
+}
+
+func (f *ffLaunch) launch() (*ret[scribeResult], []*plan.Signal) {
+	t := f.t
+	t.Helper()
 	var res *ret[scribeResult]
 	var sigs []*plan.Signal
-	sum, err := lsfrt.Run(context.Background(), cfg, func(ctx context.Context, rt *lsfrt.Runtime) (json.RawMessage, error) {
+	sum, err := lsfrt.Run(context.Background(), f.cfg, func(ctx context.Context, rt *lsfrt.Runtime) (json.RawMessage, error) {
 		a, err := parseArgs(rt.Args())
 		if err != nil {
 			return nil, err
@@ -56,7 +76,17 @@ func ffCase(t *testing.T, kind string, a answer) (*ret[scribeResult], []*plan.Si
 	if err != nil || sum.StopReason != lsfrt.StopReturned {
 		t.Fatalf("%v %+v", err, sum)
 	}
-	return res, sigs, r, cfg.StateDir
+	return res, sigs
+}
+
+// theClone is the call's clone directory.
+func (f *ffLaunch) theClone() *gitRepo {
+	f.t.Helper()
+	m, _ := filepath.Glob(filepath.Join(f.cfg.StateDir, "clone", lsfrtKey("direct-edits")+"*"))
+	if len(m) != 1 {
+		f.t.Fatalf("clones %v", m)
+	}
+	return &gitRepo{f.t, m[0]}
 }
 
 const commitEdit = "echo edit > e.txt && git add e.txt && git commit -q -m edit"
@@ -174,4 +204,46 @@ func TestFastForwardStepRerun(t *testing.T) {
 
 	_, err = o.ffStep("lsf/x/w", strings.Repeat("0", 40))(context.Background(), "ff:w", false)
 	errMatch(t, err, `the clone's HEAD 0{40} is not lsf/x/w's tip`)
+}
+
+// Each fault's remedy works on relaunch, the replay re-fetching the
+// clone's branch: uncommitted changes committed in the clone; a diverged
+// branch rebased there; a role changed to kept re-runs the call.
+func TestFastForwardRecovery(t *testing.T) {
+	f := newFFLaunch(t, "kept", answer{Return: scribeHead, Shell: commitEdit + " && echo x > loose.txt"})
+	res, sigs := f.launch()
+	if res != nil || !slices.Equal(kinds(sigs), []string{"uncommitted-at-return@direct-edits", "stage-fault@direct-edits"}) {
+		t.Fatalf("held: %+v %v", res, kinds(sigs))
+	}
+	contains(t, sigs[1].Statement, "its commits were not fast-forwarded to integration")
+	eq(t, f.r.git("log", "-1", "--format=%s"), "init")
+	c := f.theClone()
+	c.git("add", "loose.txt")
+	c.git("commit", "-q", "-m", "requester")
+	res, sigs = f.launch()
+	if res == nil || len(sigs) != 0 || f.r.git("log", "-1", "--format=%s") != "requester" {
+		t.Fatalf("after the commit: %+v %v", res, kinds(sigs))
+	}
+
+	f = newFFLaunch(t, "kept", answer{Return: scribeHead, Shell: commitEdit + " && git -C @main commit -q --allow-empty -m moved"})
+	if res, _ := f.launch(); res != nil {
+		t.Fatalf("diverged: %+v", res)
+	}
+	c = f.theClone()
+	c.git("fetch", "-q", f.r.dir, "integration")
+	c.git("rebase", "-q", "FETCH_HEAD")
+	res, sigs = f.launch()
+	if res == nil || len(sigs) != 0 || f.r.git("log", "--format=%s", "-2") != "edit\nmoved" {
+		t.Fatalf("after the rebase: %+v %v %q", res, kinds(sigs), f.r.git("log", "--format=%s", "-2"))
+	}
+
+	f = newFFLaunch(t, "discarded", answer{Return: scribeHead, Shell: commitEdit})
+	if res, _ := f.launch(); res != nil {
+		t.Fatalf("discarded: %+v", res)
+	}
+	f.cfg.Roles = map[string]lsfrt.Role{"w": {Tools: "default", PermissionMode: "dontAsk", Clone: "kept"}}
+	res, sigs = f.launch()
+	if res == nil || len(sigs) != 0 || f.r.git("log", "-1", "--format=%s") != "edit" {
+		t.Fatalf("after the role fix: %+v %v", res, kinds(sigs))
+	}
 }

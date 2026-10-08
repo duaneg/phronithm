@@ -18,7 +18,10 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 	skill := rt.cfg.skillFor(o.Label)
 	hash := callHash(prompt, skill, o)
 	rt.noteLabel(key, hash, o.Label)
-	if res, unchecked, ok := rt.replayCall(key, hash, o.Label, o.Schema); ok {
+	if res, unchecked, ok := rt.replayCall(key, hash, o.Label, o.Schema); ok && rt.lostToDiscard(o, res) {
+		rt.event("cache-stale", map[string]any{"label": o.Label, "reason": "discarded clone"})
+		rt.Log(o.Label + ": recorded from a discarded clone, its commits lost; its role now keeps its clone, so the call re-runs")
+	} else if ok {
 		rt.recheckUncommitted(ctx, o, key, unchecked, &res)
 		return res, nil
 	}
@@ -121,6 +124,14 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 		}
 		panic("unreachable: class " + v.class)
 	}
+}
+
+// lostToDiscard reports a repo call recorded from a discarded clone whose
+// role now keeps it: its commits were never fetched, so the record is not
+// replayed. Role is otherwise outside the record's identity.
+func (rt *Runtime) lostToDiscard(o Opts, res CallResult) bool {
+	_, role := rt.cfg.roleFor(o)
+	return o.Isolation == "" && o.Dir == "" && res.Clone == CloneDiscarded && role.Clone == CloneKept
 }
 
 // callState is one Call's fixed inputs and running result.

@@ -344,7 +344,8 @@ func callBranch[T any](ctx context.Context, o *orch, s site, prompt string, opts
 		return nil, nil, callMeta{}, err
 	}
 	v, sigs := o.callSigs(s, cr, label)
-	if opts.Isolation == "" && (v != nil || !s.writer) {
+	r := decode[T](o.rt, label, v)
+	if opts.Isolation == "" && (r != nil || !s.writer) {
 		fault, err := o.repoCallClone(ctx, s, cr, label)
 		if err != nil {
 			return nil, nil, callMeta{}, err
@@ -353,14 +354,13 @@ func callBranch[T any](ctx context.Context, o *orch, s site, prompt string, opts
 			return nil, append(sigs, stageFaultSignal(s.at, fault)), callMeta{cr.Branch, label}, nil
 		}
 	}
-	return decode[T](o.rt, label, v), sigs, callMeta{cr.Branch, label}, nil
+	return r, sigs, callMeta{cr.Branch, label}, nil
 }
 
 // repoCallClone settles a repo call's clone after its return (a writer's
-// only when non-null). A
-// writer's kept clone, clean, is fast-forwarded (ffStep) and then removed
-// with its branch; a dirty or unchecked one is left for its signal, and
-// for the requester. A writer in a discarded clone lost its commits: a
+// only when its value decodes). A writer's kept clone, clean, is
+// fast-forwarded (ffStep) and then removed with its branch; a dirty or
+// unchecked one is a fault, the clone left for the requester. A writer in a discarded clone lost its commits: a
 // fault naming the role fix. A reviewer's kept clone is removed now, as it
 // has no unit's cleanup. fault is "" when there is none; err is a stop.
 func (o *orch) repoCallClone(ctx context.Context, s site, cr lsfrt.CallResult, label string) (fault string, err error) {
@@ -371,8 +371,12 @@ func (o *orch) repoCallClone(ctx context.Context, s site, cr lsfrt.CallResult, l
 		o.rt.Log(label + ": a reviewer ran in a kept clone; give its role clone: discarded")
 		o.removeClone(ctx, label)
 		return "", nil
-	case !s.writer || cr.Branch == "" || len(cr.Uncommitted) > 0 || slices.Contains(cr.Flags, lsfrt.FlagUncommittedUnchecked):
+	case !s.writer || cr.Branch == "":
 		return "", nil
+	case len(cr.Uncommitted) > 0 || slices.Contains(cr.Flags, lsfrt.FlagUncommittedUnchecked):
+		// Its value names commits the integration branch does not have: the
+		// caller must not build on them.
+		return "its commits were not fast-forwarded to " + o.ctx.integrationBranch + ": it left uncommitted changes in its clone (see uncommitted-at-return), or they could not be checked; commit or discard them there and relaunch", nil
 	}
 	_, _, err = o.runStep(ctx, "ff:"+label, ffInput{cr.Branch, o.ctx.integrationBranch, cr.CloneHead}, o.ffStep(cr.Branch, cr.CloneHead))
 	var se *stageErr

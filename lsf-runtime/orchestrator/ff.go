@@ -45,6 +45,14 @@ func (g gitOps) trackedDirt(ctx context.Context, dir string) ([]string, error) {
 // mainOn checks the main checkout is on integration and clean; a fault
 // names what is not.
 func (o *orch) mainOn(ctx context.Context, g gitOps, integration string) error {
+	if err := o.onBranch(ctx, g, integration); err != nil {
+		return err
+	}
+	return o.mainClean(ctx, g)
+}
+
+// onBranch checks the main checkout is on integration.
+func (o *orch) onBranch(ctx context.Context, g gitOps, integration string) error {
 	ref, err := g.headRef(ctx, o.repo)
 	if err != nil {
 		return err
@@ -56,8 +64,16 @@ func (o *orch) mainOn(ctx context.Context, g gitOps, integration string) error {
 		}
 		return &ffFault{fmt.Sprintf("the main checkout is on %s, not %s", on, integration)}
 	}
-	if inMerge, err := g.status(ctx, o.repo, "rev-parse", "-q", "--verify", "MERGE_HEAD"); err != nil || inMerge {
-		return errors.Join(err, &ffFault{"a merge is in progress in the main checkout; finish or abort it and relaunch"})
+	return nil
+}
+
+// mainClean checks the main checkout has no merge, cherry-pick or revert
+// in progress and no change to a tracked file.
+func (o *orch) mainClean(ctx context.Context, g gitOps) error {
+	for _, op := range []struct{ ref, what string }{{"MERGE_HEAD", "merge"}, {"CHERRY_PICK_HEAD", "cherry-pick"}, {"REVERT_HEAD", "revert"}} {
+		if busy, err := g.status(ctx, o.repo, "rev-parse", "-q", "--verify", op.ref); err != nil || busy {
+			return errors.Join(err, &ffFault{"a " + op.what + " is in progress in the main checkout; finish or abort it and relaunch"})
+		}
 	}
 	dirt, err := g.trackedDirt(ctx, o.repo)
 	if err != nil {
@@ -79,7 +95,7 @@ func (o *orch) fastForward(ctx context.Context, g gitOps, integration, target st
 	if err != nil {
 		return fmt.Errorf("fast-forward: %s does not resolve: %w", target, err)
 	}
-	if err := o.mainOn(ctx, g, integration); err != nil {
+	if err := o.onBranch(ctx, g, integration); err != nil {
 		return err
 	}
 	head, err := g.head(ctx, o.repo)
@@ -89,12 +105,15 @@ func (o *orch) fastForward(ctx context.Context, g gitOps, integration, target st
 	if done, err := g.status(ctx, o.repo, "merge-base", "--is-ancestor", tip, head); err != nil || done {
 		return err
 	}
+	if err := o.mainClean(ctx, g); err != nil {
+		return err
+	}
 	ahead, err := g.status(ctx, o.repo, "merge-base", "--is-ancestor", head, tip)
 	if err != nil {
 		return err
 	}
 	if !ahead {
-		return &ffFault{fmt.Sprintf("%s moved to %s while %s was made on an earlier tip; rebase or drop those commits, then relaunch", integration, head, tip)}
+		return &ffFault{fmt.Sprintf("%s moved to %s while %s was made on an earlier tip; rebase those commits onto %s in the call's clone (under the state dir's clone/), or drop them, then relaunch", integration, head, tip, integration)}
 	}
 	// Not cancelled mid-checkout: a half-updated work tree would read as
 	// the requester's changes.
@@ -130,7 +149,7 @@ func (o *orch) ffStep(branch, cloneHead string) stageFn {
 			return nil, fmt.Errorf("%s does not resolve in the main repo: %w", branch, err)
 		}
 		if cloneHead != "" && cloneHead != tip {
-			return nil, fmt.Errorf("the clone's HEAD %s is not %s's tip %s, which was fetched: commit on %s in the clone, or drop the work, and relaunch", cloneHead, branch, tip, o.ctx.integrationBranch)
+			return nil, fmt.Errorf("the clone's HEAD %s is not %s's tip %s, which was fetched: in the call's clone (under the state dir's clone/), commit the work on %s or drop it, then relaunch", cloneHead, branch, tip, o.ctx.integrationBranch)
 		}
 		before, err := g.head(ctx, o.repo)
 		if err != nil {
