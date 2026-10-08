@@ -780,3 +780,22 @@ func TestMergeResumeExtraPath(t *testing.T) {
 		t.Error("merge in progress")
 	}
 }
+
+// A conflict call that changes the merge clone's git config (or hooks) is a
+// fault before the step runs any more git there, the merge left as it is
+// for the requester.
+func TestMergeConflictCallGitSetup(t *testing.T) {
+	both := map[string]map[string]string{"A": {"shared.txt": "from A\n"}, "B": {"shared.txt": "from B\n"}}
+	f := newMergeFixture(t, both, "A", "B")
+	o := mergeOrch(t, f, nil, map[string]orchtest.Handler{"merge-conflict": func(c orchtest.Call, _ *orchtest.State) any {
+		f.mc().write("shared.txt", "from A\nfrom B\n")
+		f.mc().git("add", "shared.txt")
+		f.mc().git("config", "core.fsmonitor", "touch planted")
+		return R(M{"status": "resolved", "files": []string{"shared.txt"}, "statement": "s"})
+	}})
+	_, err := runMerge(t, o, f.in("A", "B"), false)
+	errMatch(t, err, `the conflict call changed the merge clone's git config, hooks or info files; remove .* and relaunch`)
+	if !f.mc().mergeInProgress() {
+		t.Error("the merge was aborted, running git after the change")
+	}
+}

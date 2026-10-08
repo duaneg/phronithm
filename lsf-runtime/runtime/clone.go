@@ -39,8 +39,8 @@ type placement struct {
 // checkout, and the line-ending normalisation, so the work tree matches.
 var configCopied = []string{"user.name", "user.email", "core.autocrlf", "core.eol", "core.safecrlf", "commit.gpgsign", "tag.gpgsign", "user.signingkey", "gpg.format"}
 
-// usesClone reports whether a call with these options and role runs in a
-// clone the runtime makes.
+// usesClone reports whether a call with these options runs in a clone the
+// runtime makes.
 func (rt *Runtime) usesClone(o Opts) bool {
 	return o.Dir == "" && rt.cfg.Repo != ""
 }
@@ -130,12 +130,12 @@ func (rt *Runtime) reuseClone(ctx context.Context, label string, p placement, in
 		switch err := gitRun(ctx, p.dir, "merge-base", "--is-ancestor", "FETCH_HEAD", "HEAD"); {
 		case err == nil:
 		case exitStatus(err) == 1:
-			head, _ := gitStdout(ctx, p.dir, "rev-parse", "HEAD")
 			// Only a clone whose HEAD came back, with nothing uncommitted,
 			// may go: a failed fetch-back or a null's dirt would be lost.
-			fetched, _ := gitStdout(ctx, rt.cfg.Repo, "rev-parse", "-q", "--verify", "refs/heads/"+p.dest)
+			head, herr := gitStdout(ctx, p.dir, "rev-parse", "HEAD")
+			fetched, ferr := gitStdout(ctx, rt.cfg.Repo, "rev-parse", "-q", "--verify", "refs/heads/"+p.dest)
 			dirt, derr := gitStdout(ctx, p.dir, "status", "--porcelain", "--untracked-files=normal")
-			if strings.TrimSpace(string(head)) != strings.TrimSpace(string(fetched)) || derr != nil || len(dirt) > 0 {
+			if herr != nil || ferr != nil || derr != nil || strings.TrimSpace(string(head)) != strings.TrimSpace(string(fetched)) || len(dirt) > 0 {
 				return false, fmt.Errorf("%s is stale (%s moved since) but holds commits not fetched to %s or uncommitted changes; recover them, remove it and relaunch", p.dir, integration, p.dest)
 			}
 			rt.Log(fmt.Sprintf("%s: clone %s is stale (%s moved since); recreated, abandoning its HEAD %s", label, p.dir, integration, strings.TrimSpace(string(head))))
@@ -460,7 +460,7 @@ func (rt *Runtime) parseArgs() (worktreeArgs, error) {
 
 // checkRepo refuses a main repo clones are untested with: shallow, with
 // submodules (.gitmodules at the integration tip, or HEAD without args), or
-// with an LFS filter.
+// using LFS (in its local config or its .gitattributes there).
 func checkRepo(cfg Config) error {
 	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
 	defer cancel()
@@ -472,13 +472,16 @@ func checkRepo(cfg Config) error {
 	if strings.TrimSpace(string(shallow)) == "true" {
 		errs = append(errs, errors.New("is shallow"))
 	}
-	if gitRun(ctx, cfg.Repo, "config", "--get-regexp", `^filter\.lfs\.`) == nil {
-		errs = append(errs, errors.New("has an LFS filter configured"))
-	}
 	tip := "HEAD"
 	var args worktreeArgs
 	if json.Unmarshal(cfg.Args, &args) == nil && args.IntegrationBranch != "" && !strings.HasPrefix(args.IntegrationBranch, "-") {
 		tip = "refs/heads/" + args.IntegrationBranch
+	}
+	// The repo's own use of LFS: its local config, or its .gitattributes.
+	// A global `git lfs install` alone is not use.
+	attrs, _ := gitStdout(ctx, cfg.Repo, "cat-file", "-p", tip+":.gitattributes")
+	if gitRun(ctx, cfg.Repo, "config", "--local", "--get-regexp", `^filter\.lfs\.`) == nil || strings.Contains(string(attrs), "filter=lfs") {
+		errs = append(errs, errors.New("uses LFS"))
 	}
 	if gitRun(ctx, cfg.Repo, "cat-file", "-e", tip+":.gitmodules") == nil {
 		errs = append(errs, fmt.Errorf("has submodules (.gitmodules at %s)", tip))

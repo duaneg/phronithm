@@ -306,7 +306,10 @@
 //     unit), each verified and gated commit crosses to main by
 //     refs/lsf/<plan8>/xfer/w<n> and is fast-forwarded to, the conflict call
 //     runs in the clone (Opts.Dir), and the clone goes when the wave's merges
-//     finish. A requester edit in the main checkout faults at the next
+//     finish. A conflict call that changes the clone's git config, hooks or
+//     info files is a fault before any more git runs there; the step's git
+//     runs with core.fsmonitor=false. A writer, isolated or not, on a
+//     discarded role is a stage-fault. A requester edit in the main checkout faults at the next
 //     fast-forward instead of making a merge unresolvable. JS merges, and its
 //     repo stages commit, in the main checkout.
 //   - D30. The prompts describe the clones: isolated stages run in a clone

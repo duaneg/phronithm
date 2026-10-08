@@ -177,7 +177,7 @@ func TestFastForwardDiscardedWriter(t *testing.T) {
 	if res != nil || len(sigs) != 1 || sigs[0].Kind != "stage-fault" {
 		t.Fatalf("%+v %+v", res, sigs)
 	}
-	contains(t, sigs[0].Statement, "ran in a discarded clone, so its commits were not kept: give its role clone: kept")
+	contains(t, sigs[0].Statement, "writer direct-edits ran in a discarded clone, so its commits were not kept: give its role clone: kept")
 	eq(t, r.git("log", "-1", "--format=%s"), "init")
 }
 
@@ -246,4 +246,32 @@ func TestFastForwardRecovery(t *testing.T) {
 	if res == nil || len(sigs) != 0 || f.r.git("log", "-1", "--format=%s") != "edit" {
 		t.Fatalf("after the role fix: %+v %v", res, kinds(sigs))
 	}
+}
+
+// An isolated writer on a discarded role is the same fault: its commits
+// went with the clone.
+func TestDiscardedIsolatedWriter(t *testing.T) {
+	f := newFFLaunch(t, "discarded", answer{Return: scribeHead, Shell: commitEdit})
+	var sigs []*plan.Signal
+	var res *ret[scribeResult]
+	sum, err := lsfrt.Run(context.Background(), f.cfg, func(ctx context.Context, rt *lsfrt.Runtime) (json.RawMessage, error) {
+		a, err := parseArgs(rt.Args())
+		if err != nil {
+			return nil, err
+		}
+		c, err := newRunCtx(a)
+		if err != nil {
+			return nil, err
+		}
+		res, sigs, _, err = callBranch[scribeResult](ctx, newOrch(rt, c, nil), site{at: plan.At{Stage: "implement", Unit: "A"}, writer: true}, "Make these edits",
+			lsfrt.Opts{Label: "implement:A", Isolation: "worktree", Schema: scribeSchema})
+		return nil, err
+	})
+	if err != nil || sum.StopReason != lsfrt.StopReturned {
+		t.Fatalf("%v %+v", err, sum)
+	}
+	if res != nil || len(sigs) != 1 || sigs[0].Kind != "stage-fault" {
+		t.Fatalf("%+v %v", res, kinds(sigs))
+	}
+	contains(t, sigs[0].Statement, "writer implement:A ran in a discarded clone")
 }

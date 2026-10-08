@@ -189,11 +189,11 @@ func newRunCtx(a *args) (*runCtx, error) {
 	return c, nil
 }
 
-// tierFor is `ctx.tiers[role] ?? ctx.tiers.default`.
 // plan8 is the plan SHA's first eight characters, as the runtime's branch
 // names carry it.
 func (c *runCtx) plan8() string { return c.planSha[:min(8, len(c.planSha))] }
 
+// tierFor is `ctx.tiers[role] ?? ctx.tiers.default`.
 func (c *runCtx) tierFor(role string) tier {
 	if t := c.tiers[role]; t != nil {
 		return *t

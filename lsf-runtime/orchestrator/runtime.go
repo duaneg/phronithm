@@ -345,6 +345,11 @@ func callBranch[T any](ctx context.Context, o *orch, s site, prompt string, opts
 	}
 	v, sigs := o.callSigs(s, cr, label)
 	r := decode[T](o.rt, label, v)
+	if s.writer && r != nil && cr.Clone == lsfrt.CloneDiscarded {
+		// Isolated or not: its commits went with the clone, and an isolated
+		// writer's check reads an empty branch as no runtime.
+		return nil, append(sigs, stageFaultSignal(s.at, "writer "+label+" ran in a discarded clone, so its commits were not kept: give its role clone: kept")), callMeta{cr.Branch, label}, nil
+	}
 	if opts.Isolation == "" && (r != nil || !s.writer) {
 		fault, err := o.repoCallClone(ctx, s, cr, label)
 		if err != nil {
@@ -360,13 +365,12 @@ func callBranch[T any](ctx context.Context, o *orch, s site, prompt string, opts
 // repoCallClone settles a repo call's clone after its return (a writer's
 // only when its value decodes). A writer's kept clone, clean, is
 // fast-forwarded (ffStep) and then removed with its branch; a dirty or
-// unchecked one is a fault, the clone left for the requester. A writer in a discarded clone lost its commits: a
-// fault naming the role fix. A reviewer's kept clone is removed now, as it
-// has no unit's cleanup. fault is "" when there is none; err is a stop.
+// unchecked one is a fault, the clone left for the requester. A reviewer's
+// kept clone is removed now, as it has no unit's cleanup. (A writer in a
+// discarded clone is callBranch's fault.) fault is "" when there is none;
+// err is a stop.
 func (o *orch) repoCallClone(ctx context.Context, s site, cr lsfrt.CallResult, label string) (fault string, err error) {
 	switch {
-	case s.writer && cr.Clone == lsfrt.CloneDiscarded:
-		return "writer repo call " + label + " ran in a discarded clone, so its commits were not kept: give its role clone: kept", nil
 	case !s.writer && cr.Clone == lsfrt.CloneKept:
 		o.rt.Log(label + ": a reviewer ran in a kept clone; give its role clone: discarded")
 		o.removeClone(ctx, label)

@@ -126,12 +126,12 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 	}
 }
 
-// lostToDiscard reports a repo call recorded from a discarded clone whose
-// role now keeps it: its commits were never fetched, so the record is not
+// lostToDiscard reports a call recorded from a discarded clone whose role
+// now keeps it: its commits were never fetched, so the record is not
 // replayed. Role is otherwise outside the record's identity.
 func (rt *Runtime) lostToDiscard(o Opts, res CallResult) bool {
 	_, role := rt.cfg.roleFor(o)
-	return o.Isolation == "" && o.Dir == "" && res.Clone == CloneDiscarded && role.Clone == CloneKept
+	return o.Dir == "" && res.Clone == CloneDiscarded && role.Clone == CloneKept
 }
 
 // callState is one Call's fixed inputs and running result.

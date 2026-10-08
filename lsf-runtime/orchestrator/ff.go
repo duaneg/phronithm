@@ -83,7 +83,7 @@ func (o *orch) mainClean(ctx context.Context, g gitOps) error {
 		return err
 	}
 	if len(dirt) > 0 {
-		return &ffFault{fmt.Sprintf("the main checkout has uncommitted changes to %q; commit, stash or discard them and relaunch", dirt)}
+		return &ffFault{fmt.Sprintf("the main checkout has uncommitted changes to %q; stash or discard them and relaunch (a commit would move the integration branch under the run)", dirt)}
 	}
 	return nil
 }
@@ -161,6 +161,10 @@ func (o *orch) ffStep(branch, cloneHead string) stageFn {
 		if err := o.fastForward(ctx, g, o.ctx.integrationBranch, "refs/heads/"+branch); err != nil {
 			return nil, err
 		}
-		return plan.MarshalJS(map[string]any{"from": before, "to": tip}, "")
+		after, err := g.head(ctx, o.repo)
+		if err != nil {
+			return nil, err
+		}
+		return plan.MarshalJS(map[string]any{"from": before, "to": after, "applied": before != after}, "")
 	}
 }

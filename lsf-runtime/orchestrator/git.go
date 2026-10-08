@@ -40,7 +40,9 @@ func (execGit) run(ctx context.Context, dir string, args ...string) ([]byte, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, d)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", args...)
+	// The merge clone is a conflict call's cwd: no fsmonitor command it
+	// could configure runs under the step's git.
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-c", "core.fsmonitor=false"}, args...)...)
 	cmd.Dir = dir
 	// Paths are literal: a hook-touched path like `a*b` must not match others.
 	// LC_ALL=C: the merge reads git's refusal message.

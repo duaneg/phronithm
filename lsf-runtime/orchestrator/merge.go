@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -350,6 +352,44 @@ func (m mergeGit) abortOwn(ctx context.Context, pre string, paths []string) erro
 		}
 	}
 	return nil
+}
+
+// gitSetup is a digest of what in dir's .git makes git run commands: its
+// config, its hooks (names, modes, contents) and its info files.
+func gitSetup(dir string) (string, error) {
+	h := sha256.New()
+	root := filepath.Join(dir, ".git")
+	for _, sub := range []string{"config", "hooks", "info"} {
+		err := filepath.WalkDir(filepath.Join(root, sub), func(p string, d os.DirEntry, err error) error {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			fi, err := d.Info()
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(h, "%s\x00%v\x00", strings.TrimPrefix(p, root), fi.Mode())
+			if fi.Mode().IsRegular() {
+				b, err := os.ReadFile(p)
+				if err != nil {
+					return err
+				}
+				h.Write(b)
+			} else if fi.Mode()&os.ModeSymlink != 0 {
+				t, _ := os.Readlink(p)
+				h.Write([]byte(t))
+			}
+			h.Write([]byte{0})
+			return nil
+		})
+		if err != nil {
+			return "", err
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // leftStaged is an error naming what a hook staged during a merge: it is
@@ -886,6 +926,10 @@ func (o *orch) mergeOne(ctx context.Context, m mergeGit, in mergeInput, label st
 	if err != nil {
 		return fail(err)
 	}
+	setup, err := gitSetup(m.dir)
+	if err != nil {
+		return fail(err)
+	}
 	for attempt := 1; attempt <= 2; attempt++ {
 		t := o.ctx.tierFor("default")
 		cr, cl, err := o.agent(ctx, conflictPrompt(o.ctx, in, u, conflicts), lsfrt.Opts{
@@ -895,6 +939,11 @@ func (o *orch) mergeOne(ctx context.Context, m mergeGit, in mergeInput, label st
 			return fail(err)
 		}
 		cr.Uncommitted = nil // the call runs in the merge clone as found: code checks it itself
+		// Before any more git there: a config or hook the call planted would
+		// run under the step's git, outside any sandbox. No abort either.
+		if now, err := gitSetup(m.dir); err != nil || now != setup {
+			return out, errors.Join(err, fmt.Errorf("the conflict call changed the merge clone's git config, hooks or info files; remove %s and relaunch", m.dir))
+		}
 		v, sigs := o.callSigs(site{at: plan.At{Stage: "merge", Unit: u.Unit, Wave: plan.W(in.Wave)}, writer: false}, cr, cl)
 		res.Signals = append(res.Signals, sigs...)
 		r := decode[conflictResult](o.rt, cl, v)

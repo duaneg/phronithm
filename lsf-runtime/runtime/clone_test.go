@@ -249,8 +249,9 @@ func TestCloneStaleDirectoryStops(t *testing.T) {
 	}
 }
 
-// A shallow repo, one with submodules and one with an LFS filter are
-// refused at launch, by name.
+// A shallow repo, one with submodules and one using LFS (its config or its
+// .gitattributes) are refused at launch, by name; a global LFS filter alone
+// is not use.
 func TestCloneRepoPreconditions(t *testing.T) {
 	cfg, _ := testConfig(t)
 	commitFile(t, cfg.Repo, "a.txt", "a\n")
@@ -262,13 +263,22 @@ func TestCloneRepoPreconditions(t *testing.T) {
 	commitFile(t, sub.Repo, ".gitmodules", "[submodule \"x\"]\n\tpath = x\n\turl = ../x\n")
 	lfs, _ := testConfig(t)
 	git(t, lfs.Repo, "config", "filter.lfs.clean", "git-lfs clean -- %f")
-	for repo, want := range map[string]string{shallow: "is shallow", sub.Repo: "has submodules", lfs.Repo: "has an LFS filter"} {
+	attrs, _ := testConfig(t)
+	commitFile(t, attrs.Repo, ".gitattributes", "*.bin filter=lfs diff=lfs merge=lfs -text\n")
+	for repo, want := range map[string]string{shallow: "is shallow", sub.Repo: "has submodules", lfs.Repo: "uses LFS", attrs.Repo: "uses LFS"} {
 		c, _ := testConfig(t)
 		c.Repo = repo
 		_, err := Run(context.Background(), c, func(context.Context, *Runtime) (json.RawMessage, error) { return nil, nil })
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v, want %q", repo, err, want)
 		}
+	}
+	global := filepath.Join(t.TempDir(), "gitconfig")
+	os.WriteFile(global, []byte("[filter \"lfs\"]\n\tclean = git-lfs clean -- %f\n"), 0o644)
+	t.Setenv("GIT_CONFIG_GLOBAL", global)
+	c, _ := testConfig(t)
+	if _, err := Run(context.Background(), c, func(context.Context, *Runtime) (json.RawMessage, error) { return nil, nil }); err != nil {
+		t.Errorf("a global LFS filter refused the launch: %v", err)
 	}
 }
 
