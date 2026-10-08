@@ -33,8 +33,8 @@ func jsonOrNone(n int, v any) string {
 
 const returnFields = "\nBesides `result`, return `commits`: every commit you made, branch and SHA; an empty array when none. A SHA is what `git rev-parse --short HEAD` prints after the commit, copied from that output. Nothing else: no questions or remarks outside the fields named. The return is one flat object."
 
-// pauseClause: the stages that run in the main checkout at a wave boundary
-// report the pause ref; the loop acts on it at the loop top.
+// pauseClause: the stages at a wave boundary report the pause ref; the loop
+// acts on it at the loop top.
 func pauseClause(c *runCtx) string {
 	return "Run `git show-ref --verify --quiet " + c.pauseRef + " && echo present || echo absent` and return `pauseRequested` true exactly when it prints `present`. Do not create, delete, or read the ref beyond that."
 }

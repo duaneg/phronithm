@@ -163,7 +163,8 @@
 //     recorded. Without a runtime branch (a stub, a seed, a call journaled
 //     before the branch was) the SHA is checked against the reported
 //     branch as before, and an unresolvable one is silent. The readers
-//     report no branch, and the main-checkout stages have none. The
+//     report no branch; a repo writer's fetched branch is the ff: step's
+//     (D29), not this check's. The
 //     completion report's tip read faults with "does not resolve" on exit
 //     1, unless its branch's tip was journaled by a writer's check this
 //     launch (a merged unit's replay after cleanup), and with the git error
@@ -180,15 +181,16 @@
 //     merge touches, and every non-conflicted one as git's merge-tree has it,
 //     commits it, and otherwise aborts the merge (unresolvable). A conflicted
 //     file's content is the call's judgement: only its markers are checked. A
-//     call that changes the checkout outside the merge's paths (a new, deleted
-//     or reverted file, the requester's included) is a stage-fault naming
+//     call that changes the merge clone outside the merge's paths (a new,
+//     changed or deleted file) is a stage-fault naming
 //     them, the merge aborted; what it did there cannot be undone by the
 //     stage. The call's driver events travel in the value
 //     (mergeResult.Signals). A clean merge's tree must be git's merge-tree of
 //     the two; a path a hook leaves staged, and a merge git stops with nothing
 //     in conflict (a refusing pre-merge-commit hook), are faults. A merge git
-//     refuses over local changes is unresolvable, the changes untouched; any
-//     other failure is a stage-fault, with a merge this step started aborted.
+//     refuses over local changes (which the merge clone does not hold) is
+//     unresolvable; any other failure is a stage-fault, with a merge this
+//     step started aborted.
 //     Without declared gates no project gate runs and no merge is
 //     regressed; with them, see D26 and D27. The
 //     bookkeeping (bookkeeping.go) is rendered for the units still to merge
@@ -211,9 +213,9 @@
 //   - D25. Cleanup is a journaled code step (cleanup.go), run beside the wave
 //     gate. Its input is each merged unit's clone and worktree labels from the
 //     run of its stages that merged (noteWorktree: every isolated call made or
-//     replayed whose clone is not discarded, not a seeded one, whose clone is
-//     an earlier launch's, and the completion-report step's worktree, sorted
-//     so a relaunch's input is the same). Each clone or worktree is removed with every untracked, ignored and uncommitted
+//     replayed whose clone is not discarded, not a seeded one, and the
+//     completion-report step's worktree, sorted so a relaunch's input is the
+//     same; a repo call's clone is not a unit's, D29). Each clone or worktree is removed with every untracked, ignored and uncommitted
 //     file in it (lsfrt.Runtime.RemoveWorktree, which keeps one whose branch
 //     is not merged or that is not the runtime's), and its branch is deleted:
 //     the unit is complete, and its replay reads the tips the checks journaled
@@ -223,7 +225,7 @@
 //     cleanup agent matches worktree-wf_* branches the runtime never makes,
 //     and its denials and residue were ledger rows; the removed-path list
 //     takes their place. A replay after cleanup re-checks no uncommitted
-//     paths: the worktrees, and their dirt, are gone. A failed removal is not
+//     paths: the clones and worktrees, and their dirt, are gone. A failed removal is not
 //     retried.
 //
 // D26 and D27 are unit declared-gates'; D28 to D30 are unit s2-clones'.
@@ -285,9 +287,8 @@
 //     lsf/<plan8>/<key> after each return) or discarded (removed after the
 //     call, with no uncommitted check). A repo call's clone is on the
 //     integration branch, and a kept one has CallResult.Branch as an
-//     isolated call's does. The main-checkout snapshot (before-state,
-//     content hashing, .dirt) is gone: every dirty path in a kept clone is
-//     the call's. A replay re-fetches a kept clone's branch while the clone
+//     isolated call's does. The uncommitted check reads only a kept clone,
+//     every dirty path in which is the call's. A replay re-fetches a kept clone's branch while the clone
 //     exists. JS's calls run in worktrees or the main checkout.
 //   - D29. A writer repo call (direct-edits, decision-replan, replan,
 //     termination) reaches the integration branch only by the ff: step
@@ -313,6 +314,5 @@
 //     repo calls in a clone on the integration branch, fast-forwarded after
 //     they return; the commit-by-name clause has no main-checkout wording; the
 //     conflict call is in the merge clone. promptparity rewrites the JS prompts
-//     by its d30 table. The reworded prompts change those calls' input hash,
-//     so a run journaled before this unit re-runs them.
+//     by its d30 table. The wording is part of those calls' input hash.
 package orchestrator

@@ -16,9 +16,6 @@ import (
 // dirty path is the call's. A discarded clone and an explicit Dir get no
 // check.
 
-// FlagUncommittedUnchecked marks a call whose uncommitted check failed; the
-// record keeps Unchecked instead, so a replay checks afresh.
-
 // dirtyPaths is dir's dirty paths, relative to its toplevel, sorted: each
 // porcelain entry once (a rename or copy by its new path).
 func (rt *Runtime) dirtyPaths(ctx context.Context, dir string) ([]string, error) {

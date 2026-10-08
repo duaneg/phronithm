@@ -365,7 +365,7 @@ Unit `runtime-core`, plan `docs/plans/runtime-core-plan.md`. Package `lsfrt` in 
   - for a kept clone, its fetched branch and the clone's HEAD at the fetch;
   - attempts, cost, and whether it was replayed.
 
-  A replay returns the flags, denials, uncommitted paths, branch and clone journaled with the call. While a kept clone exists, the replay fetches its branch again and re-checks the paths. The orchestrator calls agents through `rt.Call` and maps these driver events to signals.
+  A replay returns the flags, denials, uncommitted paths, branch and clone journaled with the call. While a kept clone exists, the replay fetches its branch again (see Uncommitted at return). The orchestrator calls agents through `rt.Call` and maps these driver events to signals.
 - **`ValidateOutput(schema, raw)`** is the validator, exported for the returns the runtime did not see: the orchestrator's seeds. An empty schema is no check.
 - **`rt.Parallel(ctx, thunks)`** runs every thunk. A branch's error or panic becomes a nil slot. A stop in any branch is returned once all branches finish.
 - **`rt.Step(ctx, label, input, fn)`** journals a code step (see Journal).
@@ -378,19 +378,20 @@ Unit `runtime-core`, plan `docs/plans/runtime-core-plan.md`. Package `lsfrt` in 
   - a branch not merged, and a directory whose branch is gone.
 
   The ancestor check is about commits; which labels may lose uncommitted work is the caller's choice.
-- **`rt.MergeClone(ctx, name)`** is the merge clone `<stateDir>/merge/<name>` on the integration branch, made or, when it is a clone on that branch, reused as found, a merge in progress included. **`rt.RemoveMergeClone(ctx, name)`** removes it.
+- **`rt.MergeClone(ctx, name)`** is the merge clone `<stateDir>/merge/<name>` on the integration branch, made or, when it is a clone on that branch, reused as found, a merge in progress included. A directory there that is not one is an error, not a stop. **`rt.RemoveMergeClone(ctx, name)`** removes it.
 - **`rt.RunGates(ctx, label, commit, setup, gates)`** runs a plan's declared gate commands on a clean detached checkout of `commit` at `<stateDir>/gates/<key>`, which is removed afterwards. It runs `setup` first, then each gate in order. Each command runs through `sh` in its own process group, with stdin `/dev/null`, its output logged under `<stateDir>/gates/logs`, and the runtime's environment less the variables that point git elsewhere (`GIT_DIR` and the like). Setup runs under `gateTimeout`. Exit 0 is `green` and any other exit `red`. A timeout is `not-run`, and a failed setup makes every gate `not-run`. Any process a command leaves behind is killed when it ends. A stop kills the running group, and the stop is returned. Runs are bounded by `gateConcurrency`; the caller journals them.
 - **`rt.Log`** and **`rt.Args`**: `Args` is the config's `args`, passed through.
 
-`opts` mirrors the JavaScript: `label`, `phase` (telemetry only), `model`, `effort`, `agentType`, `isolation`, `schema`. It adds `dir`: an existing directory under `<stateDir>/merge/` to run in as found, with no clone, fetch-back or uncommitted check (the conflict call). `dir` is not in the call's hash.
+`opts` mirrors the JavaScript: `label`, `phase` (telemetry only), `model`, `effort`, `agentType`, `isolation`, `schema`. It adds `dir`: an existing directory under `<stateDir>/merge/` to run in as found, with no clone, fetch-back or uncommitted check (the conflict call). `dir` is not in the call's hash, and `dir` with `isolation` is a `runtime-error` stop.
 
 ### Configuration
 
 The JSON config is decoded strictly. `testdata/config.example.json` carries the spike's roles and rules as a worked example; it is not a default.
 
-- **Roles.** Each role is `tools`, `allow`, `deny`, `permissionMode` and `clone`. The first four become `--tools`, `--allowedTools`, `--disallowedTools` and `--permission-mode`. `clone` (`kept` or `discarded`, required) is the call's clone kind. The runtime has no built-in role; the Permissions section gives their content.
+- **Roles.** Each role is `tools`, `allow`, `deny`, `permissionMode` and `clone`; `tools`, `permissionMode` and `clone` are required. The first four become `--tools`, `--allowedTools`, `--disallowedTools` and `--permission-mode`. `clone` (`kept` or `discarded`) is the call's clone kind. The runtime has no built-in role; the Permissions section gives their content.
 - **`pluginDir`**, the plugin root, replaces `<plugin>` in a role's `deny` entries when argv is built. A `<plugin>` without it, or in `allow`, is a config error.
-- **Placement refusals.** A launch whose `repo` or `stateDir` is under `/tmp` or `/var/tmp` (or macOS's `/private` forms), as written or through a symlink, is refused. So is a repo that is shallow, has submodules (`.gitmodules` at the integration tip) or an LFS filter: clones are untested with them.
+- **Placement refusals.** A launch whose `repo` or `stateDir` is under `/tmp` or `/var/tmp` (or macOS's `/private` forms), as written or through a symlink, is refused: the Bash sandbox leaves both writable. So is a repo that is shallow, has submodules (`.gitmodules` at the integration tip, or at `HEAD` when `args` name no integration branch) or an LFS filter: clones are untested with them.
+- **`repo`** may be left out only by the runtime's own tests: a call then runs in the launcher's working directory with no clone and no uncommitted check, and none of the Permissions placement holds.
 - **Role rules.** `roleRules` map `agentType` and a label regex (both must match when both are set) to a role. The first match wins; otherwise `defaultRole` applies.
 - **Skills.** `skills` map a label regex to a skill. A matching call's prompt is sent as `/<skill> <prompt>`.
 - **Caps** are per launch: `maxCalls` (spawns), `maxWallClock`, `maxCostUSD` (summed `total_cost_usd`; in-flight calls can overshoot).
@@ -412,7 +413,7 @@ The prompt goes on stdin. Every call passes `-p --output-format stream-json --ve
 Order inside a call:
 
 1. The journal is checked; a replay returns at once and does not count against the caps.
-2. The stop is checked, and so are the schema (a JSON object) and an isolated call's `args`.
+2. The stop is checked, and so are the schema (a JSON object) and, for every call that uses a clone, `args`.
 3. The dry-run check runs.
 4. Each attempt waits out the session-limit gate, then takes a concurrency slot and holds it while it:
    - admits or stops in one critical section (stop, parent context, gate again, caps);
@@ -430,7 +431,7 @@ Order inside a call:
 | isolation `worktree` | `clone/<key>` (kept role) or `scratch/<key>` (discarded) | `lsf/<plan8>/<key>`: the main repo's branch if it exists, else new from the integration branch |
 | no isolation | `clone/<key>` or `scratch/<key>` | the integration branch |
 
-- **Making one.** `git clone --no-local --no-checkout --no-tags`, a fetch of every main branch as a local branch, the checkout, and the remote removed. The clone gets the main repo's effective hooks (copied, `core.hooksPath` set to the copy), its effective `user.name`, `user.email`, signing and line-ending config, and its `info/exclude` and `info/attributes`. A failure removes the partial directory and stops the run.
+- **Making one.** `git clone --no-local --no-checkout --no-tags`, a fetch of every main branch as a local branch, the checkout, and the remote removed. The clone gets the main repo's effective hooks (copied, `core.hooksPath` set to the copy), its effective `user.name`, `user.email`, signing and line-ending config, and its `info/exclude` and `info/attributes`. A failure removes the partial directory; for a call's clone it stops the run with `runtime-error`.
 - **Reuse.** A kept clone is reused when it is a clone (its `.git` a directory) at its toplevel with HEAD on its branch; anything else stops the run, naming it. Its other branches are refreshed from the main repo. A repo call's clone whose HEAD no longer descends from the main repo's integration tip is stale: it is remade, unless it holds commits not fetched or uncommitted changes, which stop the run. A discarded clone is always made afresh, and `scratch/` is wiped at launch, after orphan reaping.
 
 Classification reads the `result` event first, because the CLI can recover from a mid-stream error and still return a valid result. First match wins:
@@ -455,19 +456,20 @@ Classification reads the `result` event first, because the CLI can recover from 
 
 ### Uncommitted at return
 
-Every call in a kept clone that spawned and returns a value or a null reports the paths it left uncommitted: modified, staged or untracked, but not ignored. The check comes from `git status --porcelain=v1 -z --untracked-files=all --no-optional-locks`, run at the clone's toplevel. The clone is the call's own, so every dirty path is the call's, a failed attempt's before a retry included. No call runs in the main checkout, so there is no snapshot of it.
+Every call in a kept clone that spawned and returns a value or a null reports the paths it left uncommitted: modified, staged or untracked, but not ignored. The check comes from `git status --porcelain=v1 -z --untracked-files=all --no-optional-locks`, run at the clone's toplevel. The clone is the call's own, so every dirty path is the call's, a failed attempt's before a retry included.
 
 - **A discarded clone and an explicit `dir`** get no check.
 - **A call ended by a stop or a repeated signal, or a dry run,** gets no check. A check that the stop itself cut short is not a failure.
 - **A failed check** (git error or timeout) sets `uncommitted-unchecked`. The record keeps the failure as `unchecked`, not the flag, and a replay checks afresh.
-- **The journal** keeps the paths. A replay re-checks the clone as it now stands, after fetching its branch again; a removed clone is clean. So committing or removing the paths in the clone, then resuming, clears the signal, and the commit reaches the main repo.
+- **The journal** keeps the paths. A replay of a kept call whose clone still exists fetches its branch again; a failed fetch there sets `uncommitted-unchecked` rather than stopping. When the record has paths or `unchecked`, the replay re-checks the clone as it now stands; a removed clone is clean. A record journaled clean is not re-checked. So committing or removing the paths in the clone, then resuming, clears the signal, and the commit reaches the main repo.
+- **A record from a worktree** (an isolated call journaled before clones) is re-checked in its `wt/<key>` while that exists.
 
 ### Journal and state dir
 
 | Path | Holds |
 |---|---|
 | `lock` | the launch's `flock` |
-| `journal/<key>.json` | a completed call's or step's record: label, kind, input hash, return, flags, denials, uncommitted paths, whether the uncommitted check failed |
+| `journal/<key>.json` | a completed call's or step's record: label, kind, input hash, return, flags, denials, uncommitted paths, whether the uncommitted check failed, and a call's branch, clone kind and clone HEAD |
 | `journal/<key>.intent` | a step's input hash while it runs |
 | `calls/<key>.<launch>.a<n>.<session>.jsonl` | each attempt's stream |
 | `children.json` | session id → pid of live calls |
@@ -475,6 +477,7 @@ Every call in a kept clone that spawned and returns a value or a null reports th
 | `scratch/<key>` | discarded clones, wiped at launch |
 | `merge/w<n>` | merge clones |
 | `wt/<key>` | code steps' worktrees, on `lsf/<plan8>/<key>` |
+| `gates/<key>`, `gates/logs` | a declared gate run's checkout while it runs, and its logs |
 | `status.json`, `summary.json`, `log.txt`, `telemetry.jsonl` | launch state, the `stop_reason`, the log, one event per line |
 
 - **Keys.** `<key>` is the label made filename-safe plus 8 hex digits of its hash. Labels must be unique per call: the journal keeps one record per label, and a label reused with other inputs in one launch is logged `label-reused`.
@@ -490,7 +493,7 @@ Every call in a kept clone that spawned and returns a value or a null reports th
 - **Caps** are checked at spawn. A cap that passes during a step or a backoff stops the run at the next spawn.
 - **Orphans.** At launch, every process whose arguments carry `--session-id <id>` for an id in `children.json` is a call left by a killed launch. A gate's shell is recorded under an `lsf-gate:` marker, which it carries as `$0`, and is matched the same way. A gate command that begins with `exec` replaces that shell, so it cannot be found. Its group gets SIGTERM, then SIGKILL after `killGrace`; a zombie counts as gone. If `ps` fails, or a kill fails, those records are carried into this launch's `children.json` for the next launch to reap. A torn `children.json` is reported and treated as empty.
 - **Clones and worktrees.**
-  - Creation, fetch-back and removal are serialised. Each git command has a 5-minute timeout and ends on a repeated signal; the runtime's git runs with `core.fsmonitor=false`, since an agent can write its clone's config.
+  - Creation, fetch-back and removal are serialised. One 5-minute bound covers each whole operation (a clone's creation, a fetch-back, a removal), and its git ends on a repeated signal; the runtime's git runs with `core.fsmonitor=false`, since an agent can write its clone's config.
   - A call admitted to spawn waits for its clone without yielding to a stop set since; a fetch-back runs after a first signal, as the call's result is journaled.
   - A code step's existing `wt/<key>` is reused only if it is a worktree on its branch; otherwise the run stops with `runtime-error`. A branch whose directory is gone is re-attached, not reset.
   - Missing `planSha` or `integrationBranch` in `args` stops the run with `runtime-error`.
@@ -505,12 +508,14 @@ Every call in a kept clone that spawned and returns a value or a null reports th
 ### Known limits
 
 - **Earlier attempts' clones.** Cleanup removes the clones a merged unit's stages used, made or replayed, in the launch that merged it; a relaunch that replays a unit to its merge removes the earlier launch's clones with it. The clones of an attempt that did not merge (an aborted wave, or a unit the launch did not merge) stay, with their branches: they may hold work a stop left uncommitted. So does a seeded stage's.
-- **A repo writer's clone that never fast-forwards** (a null, a stop, a fault) stays, with its branch, until the call's re-run replaces it. No unit's cleanup removes it.
+- **A repo writer's clone that never fast-forwards** (a null, a stop, a fault) stays, with its branch; no unit's cleanup removes it. The call's re-run reuses it as found, or remakes it when the integration branch has moved, unless it then holds commits not fetched or uncommitted changes, which stop the run.
+- **The main checkout during a run.** It must stay on the integration branch with no staged or unstaged change to a tracked file and no merge, cherry-pick or revert in progress: every fast-forward checks it, and a requester edit there is a stage-fault at the next one. A fast-forward updates its work tree; git refuses one over an untracked file in the way, also a stage-fault.
+- **A merge clone after a fault or stop** stays, possibly mid-merge, for the relaunch to resume; one whose integration branch has diverged from the main repo's must be removed by hand. A failed removal after the wave's merges is only logged.
 - **A failed cleanup is not retried.** A merged unit is not revisited, so a clone or worktree whose removal failed stays, with its branch; the log names it.
-- **Clone cost.** Every call copies the repo's objects (`--no-local`) and every main branch, serialised with other clone work. On a large repo this is per-call time and disk; it is unmeasured.
+- **Clone cost.** Every call copies the repo's objects (`--no-local`) and every main branch, serialised with other clone work. On a large repo this is per-call time and disk, unmeasured; a clone that takes more than 5 minutes stops the run with `runtime-error`.
 - **A forced fetch-back.** A kept clone's branch overwrites the main repo's `lsf/<plan8>/<key>` at each return and each replay while the clone exists; a commit made on that branch in the main repo instead is kept only by the reflog.
 - **A replay that fails its schema** (a changed validator, an edited record) re-runs the call. For a writer, the re-run can repeat a commit the first run made.
-- **Large files.** A dirty file over 64 MiB is compared by size and modification time, not content.
+- **Large files.** The merge step compares a file over 64 MiB outside the merge's paths, before and after the conflict call, by size and modification time, not content.
 - **Session limits.** The shape of a session limit under `-p` is built from the binary's schema and interactive transcripts, not observed. The first real limit's stream is kept under `calls/`.
 - **Retries in a dirty clone.** A retry after a call made partial changes reruns in the same clone, a discarded one included.
 - **Group kill after reaping.** After the leader of a cancelled call is reaped, its pgid could in principle be reused before the group SIGKILL. Sequential pid allocation makes this need a wrapped pid space.

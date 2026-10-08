@@ -391,8 +391,7 @@ func (m mergeGit) outside(ctx context.Context, staged []string) (map[string]stri
 }
 
 // outsideHashMax bounds the bytes outside reads of one file; past it a
-// file is compared by size and modification time, as the runtime's
-// uncommitted check does.
+// file is compared by size and modification time.
 const outsideHashMax = 64 << 20
 
 // fileState is what outside compares of one path: its digest, its size
