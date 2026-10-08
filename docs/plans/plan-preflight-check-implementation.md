@@ -86,7 +86,7 @@
 | S2 | Zero on `lsf-improvements-breakdown.md` | pass | proven + evidenced | proven + evidenced | `TestLivePlan` (run, both halves), `TestAgreementLivePlan`; manual `go -C … run` exit 0 |
 | S3 | Both skills name the command | pass | evidenced | evidenced | diff of `a5cb6b2` + `d4a1e8c` read |
 | S4 | `go test -race ./...` and `go vet ./...` pass | pass | proven | proven | full suite run after step 3 (all packages ok); validate packages re-run after each later commit |
-| S5 | P-D4 disposition recorded | pending | evidenced | — | completion report, Phase 5 |
+| S5 | P-D4 disposition recorded | pass | evidenced | evidenced | `plan-preflight-check-completion.md`, Standing obligations |
 
 ## Remaining phases
 Complete Phase 5 (Review) as defined in the phronithm:feature skill.
