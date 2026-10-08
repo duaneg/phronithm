@@ -42,6 +42,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -384,6 +385,46 @@ func toJSKinds(g result) result {
 	return g
 }
 
+// d30 rewrites the frozen JS prompts to the Go wording for per-call clones
+// (orchestrator D30): each pair once per match, every pair required to be
+// live, so a Go change it does not name, or one it names and Go lacks,
+// still shows as a difference. Only the compared calls are rewritten.
+var d30 = []struct {
+	old  *regexp.Regexp
+	new  string
+	used int
+}{
+	{old: regexp.MustCompile(regexp.QuoteMeta("You are running in a git worktree of the repository. Before anything else run `git reset --hard ")),
+		new: "You are running in a clone of the repository, made for this stage; every branch named here is a local branch in it. Before anything else run `git reset --hard "},
+	{old: regexp.MustCompile(regexp.QuoteMeta("` so the worktree matches that branch exactly, with no leftover untracked files from an earlier attempt. Make all changes and commits here; never touch other worktrees or the main checkout.")),
+		new: "` so the clone matches that branch exactly, with no leftover untracked files from an earlier attempt. Make all changes and commits here, on the branch checked out; the runtime fetches that branch when you return."},
+	{old: regexp.MustCompile(`You are in the main checkout on ([^ ]+)\. `),
+		new: "You are in a clone of the repository on $1, made for this stage; the runtime fast-forwards $1 to your commits after you return. "},
+	{old: regexp.MustCompile(regexp.QuoteMeta("The main checkout may hold uncommitted changes that are not yours: the requester can edit it while this run is live. Commit only")),
+		new: "Commit only"},
+	{old: regexp.MustCompile(regexp.QuoteMeta("`git reset --hard` in the main checkout, and never stage")),
+		new: "`git reset --hard`, and never stage"},
+}
+
+// toD30 applies d30 to j's agent calls (not the code steps', whose JS
+// prompts only stepParity reads).
+func toD30(j jsResult) jsResult {
+	j.Calls = slices.Clone(j.Calls)
+	for i, c := range j.Calls {
+		if codeStep(c.Label) {
+			continue
+		}
+		for k := range d30 {
+			if d30[k].old.MatchString(c.Prompt) {
+				d30[k].used++
+				c.Prompt = d30[k].old.ReplaceAllString(c.Prompt, d30[k].new)
+			}
+		}
+		j.Calls[i] = c
+	}
+	return j
+}
+
 // compare returns the differences between the two sides of one scenario.
 // The JS calls Go makes as code steps are checked against the steps'
 // inputs (stepParity) and dropped.
@@ -579,7 +620,7 @@ func run(repo string, verbose bool, w io.Writer) (failed, total int, err error) 
 			base, _, _ := strings.Cut(l, "#")
 			seen[strings.Split(base, ":")[0]] = true
 		}
-		if diffs := compare(toJSKinds(goResults[i]), js[i]); len(diffs) > 0 {
+		if diffs := compare(toJSKinds(goResults[i]), toD30(js[i])); len(diffs) > 0 {
 			failed++
 			fmt.Fprintf(w, "FAIL %s\n  %s\n", sc.name, strings.Join(diffs, "\n  "))
 		} else if verbose {
@@ -589,6 +630,12 @@ func run(repo string, verbose bool, w io.Writer) (failed, total int, err error) 
 	if rewritten == 0 {
 		failed++
 		fmt.Fprintln(w, "FAIL coverage: no scenario reaches gate-omitted, so its rewrite is untested")
+	}
+	for _, r := range d30 {
+		if r.used == 0 {
+			failed++
+			fmt.Fprintf(w, "FAIL coverage: the D30 rewrite of %q matches no JS prompt\n", r.old)
+		}
 	}
 	for _, l := range labels {
 		if !seenLabel[l] {

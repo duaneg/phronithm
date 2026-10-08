@@ -1180,7 +1180,8 @@ func TestOwnFilesOnly(t *testing.T) {
 		seen[c.Prefix] = true
 		match(t, c.Prompt, "git add -- <paths>`, then `git commit -m <message> -- <paths>`, options before the `--`", c.Label)
 		match(t, c.Prompt, `never retry it without the pathspec`, c.Label)
-		match(t, c.Prompt, "Never run `git add -A`, `git add \\.`, `git add -u`, `git commit -a`, `git stash`, `git clean` or `git reset --hard` in the main checkout", c.Label)
+		match(t, c.Prompt, "Never run `git add -A`, `git add \\.`, `git add -u`, `git commit -a`, `git stash`, `git clean` or `git reset --hard`, and never stage", c.Label)
+		match(t, c.Prompt, "You are in a clone of the repository on integration, made for this stage; the runtime fast-forwards integration to your commits after you return", c.Label)
 	}
 	eq(t, len(seen), len(committing), seen)
 	at := func(prefix string) string {
