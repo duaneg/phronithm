@@ -99,13 +99,19 @@ func TestUnreadable(t *testing.T) {
 	}
 	dir := t.TempDir()
 	plan := filepath.Join(dir, "x-breakdown.md")
-	os.WriteFile(plan, []byte(readTestdata(t, "ok.plan.md")), 0o644)
+	mustWrite(t, plan, readTestdata(t, "ok.plan.md"), 0o644)
 	log := filepath.Join(dir, "x-decisions.md")
-	os.WriteFile(log, []byte(readTestdata(t, "ok.decisions.md")), 0o000)
+	mustWrite(t, log, readTestdata(t, "ok.decisions.md"), 0o000)
+	if f, err := os.Open(log); err == nil {
+		f.Close()
+		t.Skip("mode bits not enforced here")
+	}
 	if code, _, errOut := runCmd(plan); code != 2 || !strings.Contains(errOut, "permission denied") {
 		t.Errorf("unreadable sibling: exit %d stderr %q", code, errOut)
 	}
-	os.Chmod(plan, 0o000)
+	if err := os.Chmod(plan, 0o000); err != nil {
+		t.Fatal(err)
+	}
 	if code, _, errOut := runCmd("-decisions", testdata+"ok.decisions.md", plan); code != 2 || !strings.Contains(errOut, "permission denied") {
 		t.Errorf("unreadable plan: exit %d stderr %q", code, errOut)
 	}
@@ -114,12 +120,12 @@ func TestUnreadable(t *testing.T) {
 func TestDecisionLogDerivation(t *testing.T) {
 	dir := t.TempDir()
 	plan := filepath.Join(dir, "x-breakdown.md")
-	os.WriteFile(plan, []byte(readTestdata(t, "ok.plan.md")), 0o644)
+	mustWrite(t, plan, readTestdata(t, "ok.plan.md"), 0o644)
 	if code, _, errOut := runCmd(plan); code != 0 || errOut != "decision log: none\n" {
 		t.Errorf("no sibling: exit %d stderr %q", code, errOut)
 	}
 	sibling := filepath.Join(dir, "x-decisions.md")
-	os.WriteFile(sibling, []byte(readTestdata(t, "bad-clears.decisions.md")), 0o644)
+	mustWrite(t, sibling, readTestdata(t, "bad-clears.decisions.md"), 0o644)
 	code, out, errOut := runCmd(plan)
 	if code != 1 || errOut != "decision log: "+sibling+"\n" || !strings.Contains(out, "parser/tool") {
 		t.Errorf("sibling: exit %d stdout %q stderr %q", code, out, errOut)
@@ -128,9 +134,31 @@ func TestDecisionLogDerivation(t *testing.T) {
 		t.Errorf("override: exit %d stderr %q", code, errOut)
 	}
 	other := filepath.Join(dir, "x.plan.md")
-	os.WriteFile(other, []byte(readTestdata(t, "ok.plan.md")), 0o644)
+	mustWrite(t, other, readTestdata(t, "ok.plan.md"), 0o644)
 	if code, _, errOut := runCmd(other); code != 0 || errOut != "decision log: none\n" {
 		t.Errorf("not a breakdown name: exit %d stderr %q", code, errOut)
+	}
+}
+
+// A derived sibling that exists but is not a readable file is an error.
+func TestSiblingIsADirectory(t *testing.T) {
+	dir := t.TempDir()
+	plan := filepath.Join(dir, "x-breakdown.md")
+	mustWrite(t, plan, readTestdata(t, "ok.plan.md"), 0o644)
+	if err := os.Mkdir(filepath.Join(dir, "x-decisions.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, errOut := runCmd(plan); code != 2 || !strings.Contains(errOut, "is a directory") {
+		t.Errorf("exit %d stderr %q", code, errOut)
+	}
+}
+
+// A decision log without its block is input, so a problem, not an error.
+func TestMalformedDecisionLog(t *testing.T) {
+	log := writeTemp(t, "d.md", "# Decisions\n")
+	code, out, _ := runCmd("-decisions", log, testdata+"ok.plan.md")
+	if code != 1 || out != "invalid-plan [lsf-decisions]: no ```yaml lsf-decisions block found\n" {
+		t.Errorf("exit %d stdout %q", code, out)
 	}
 }
 
@@ -162,4 +190,11 @@ func writeTemp(t *testing.T, name, content string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func mustWrite(t *testing.T, path, content string, mode os.FileMode) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		t.Fatal(err)
+	}
 }
