@@ -261,12 +261,12 @@ func TestOnRuntimeLabelsUniqueAndReplay(t *testing.T) {
 		Repo:        repo,
 		ClaudeBin:   os.Args[0],
 		Args:        s.ArgsJSON,
-		Roles:       map[string]lsfrt.Role{"worker": {Tools: "default", PermissionMode: "dontAsk", Clone: "kept"}},
+		Roles:       map[string]lsfrt.Role{"worker": {Tools: "default", Clone: "kept"}},
 		DefaultRole: "worker",
 	}
 	launch := func() lsfrt.Summary {
 		t.Helper()
-		sum, err := lsfrt.Run(context.Background(), cfg, func(ctx context.Context, rt *lsfrt.Runtime) (json.RawMessage, error) {
+		sum, err := lsfrt.Run(context.Background(), withContainer(t, cfg), func(ctx context.Context, rt *lsfrt.Runtime) (json.RawMessage, error) {
 			return Run(ctx, scriptedSteps{rt, steps})
 		})
 		if err != nil {
@@ -404,8 +404,8 @@ func TestOnRuntimeCodeStages(t *testing.T) {
 	cfg := lsfrt.Config{
 		StateDir: filepath.Join(dir, "state"), Repo: r.dir, ClaudeBin: os.Args[0], Args: args,
 		Roles: map[string]lsfrt.Role{
-			"worker":   {Tools: "default", PermissionMode: "dontAsk", Clone: "kept"},
-			"reviewer": {Tools: "default", PermissionMode: "dontAsk", Clone: "discarded"},
+			"worker":   {Tools: "default", Clone: "kept"},
+			"reviewer": {Tools: "default", Clone: "discarded"},
 		},
 		DefaultRole: "worker",
 		RoleRules: []lsfrt.RoleRule{ // the design's (lsf-runtime.md, Permissions → Roles)
@@ -417,7 +417,7 @@ func TestOnRuntimeCodeStages(t *testing.T) {
 	}
 	launch := func() lsfrt.Summary {
 		t.Helper()
-		sum, err := lsfrt.Run(context.Background(), cfg, Body)
+		sum, err := lsfrt.Run(context.Background(), withContainer(t, cfg), Body)
 		if err != nil {
 			t.Fatal(err)
 		}

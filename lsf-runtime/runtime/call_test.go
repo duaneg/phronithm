@@ -15,13 +15,15 @@ import (
 // the config, prompt on stdin.
 func spawnOnce(t *testing.T, ctx context.Context, rt *Runtime, prompt string, o Opts) *attempt {
 	t.Helper()
-	_, role := rt.cfg.roleFor(o)
+	c := &callState{o: o}
+	c.roleName, c.role = rt.cfg.roleFor(o)
 	sid := newUUID()
+	cs := rt.callContainer(c, placement{dir: rt.cfg.Repo}, sid)
 	return rt.spawn(ctx, spawnSpec{
 		prompt:     withSkill(rt.cfg.skillFor(o.Label), prompt),
-		argv:       buildArgv(o, role, "", sid),
+		argv:       rt.containerArgv(cs),
 		sessionID:  sid,
-		cwd:        rt.cfg.Repo,
+		name:       cs.name,
 		transcript: filepath.Join(rt.cfg.StateDir, "calls", sid+".jsonl"),
 	})
 }
@@ -63,15 +65,15 @@ func TestArgvCarriesRoleAndSkill(t *testing.T) {
 		2: {cfg.Roles["critic"], "/phronithm:critique review the diff"},
 	} {
 		argv := stubArgv(t, stub, n)
-		if !slices.Contains(argv, "--strict-mcp-config") || !slices.Contains(argv, "-p") {
-			t.Errorf("call %d: argv %q", n, argv)
+		for _, f := range []string{"--strict-mcp-config", "-p", "--dangerously-skip-permissions"} {
+			if !slices.Contains(argv, f) {
+				t.Errorf("call %d: argv %q lacks %s", n, argv, f)
+			}
 		}
 		for flag, vals := range map[string][]string{
-			"--permission-mode": {want.role.PermissionMode},
-			"--tools":           {want.role.Tools},
-			"--allowedTools":    want.role.Allow,
-			"--disallowedTools": want.role.Deny,
-			"--json-schema":     {verdictSchema},
+			"--tools":       {want.role.Tools},
+			"--plugin-dir":  {cfg.PluginDir},
+			"--json-schema": {verdictSchema},
 		} {
 			if got := flagValues(argv, flag); !slices.Equal(got, vals) {
 				t.Errorf("call %d: %s = %q, want %q", n, flag, got, vals)
@@ -110,8 +112,8 @@ func TestGuardTimeoutKillsGroup(t *testing.T) {
 
 func TestSpawnErrorAndChildrenRecord(t *testing.T) {
 	cfg, _ := testConfig(t)
-	cfg.ClaudeBin = filepath.Join(t.TempDir(), "no-such-claude")
 	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		rt.cfg.PodmanBin = filepath.Join(t.TempDir(), "no-such-podman")
 		a := spawnOnce(t, ctx, rt, "x", Opts{Label: "implement:u1", Schema: json.RawMessage(verdictSchema)})
 		if v := classify(a, json.RawMessage(verdictSchema), "", false); v.class != classSpawnError {
 			t.Errorf("class %s", v.class)

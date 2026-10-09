@@ -15,13 +15,19 @@ import (
 )
 
 // Config is a launch's configuration. Roles, rules and skills are input: the
-// runtime has no built-in role, tool list or permission rule.
+// runtime has no built-in role or tool list.
 type Config struct {
 	StateDir  string          `json:"stateDir"`
 	Repo      string          `json:"repo"`
-	ClaudeBin string          `json:"claudeBin,omitempty"` // default "claude"; env LSF_CLAUDE_BIN overrides
-	Args      json.RawMessage `json:"args,omitempty"`      // passed through; clones read planSha, integrationBranch
-	PluginDir string          `json:"pluginDir,omitempty"` // the plugin root; replaces <plugin> in roles' deny
+	Args      json.RawMessage `json:"args,omitempty"` // passed through; clones read planSha, integrationBranch
+	PluginDir string          `json:"pluginDir"`      // the plugin root, mounted read-only at /opt/plugin
+
+	// The container a call runs in (docs/design/lsf-runtime.md, Permissions).
+	Image         string   `json:"image"`               // by digest: name@sha256:<64 hex>
+	ClaudeBin     string   `json:"claudeBin,omitempty"` // default "claude"; env LSF_CLAUDE_BIN overrides; mounted at /opt/claude/claude
+	ClaudeVersion string   `json:"claudeVersion"`       // the first field of claudeBin's --version output
+	Env           []string `json:"env,omitempty"`       // variable names passed from the runtime's environment
+	PodmanBin     string   `json:"podmanBin,omitempty"` // default "podman"
 
 	Concurrency int             `json:"concurrency,omitempty"` // default 4; bounds concurrent spawns
 	Roles       map[string]Role `json:"roles"`
@@ -39,20 +45,17 @@ type Config struct {
 	DryRun               bool         `json:"dryRun,omitempty"`
 	GateTimeout          Duration     `json:"gateTimeout,omitempty"`     // default 2h; a declared gate's own timeout overrides it
 	GateConcurrency      int          `json:"gateConcurrency,omitempty"` // default 1; bounds concurrent RunGates
-	Proxy                *ProxyConfig `json:"proxy,omitempty"`           // the credential proxy; none without it
+	Proxy                *ProxyConfig `json:"proxy"`                     // the credential proxy, a call's only route to the API
 
 	roleRes  []*regexp.Regexp // compiled RoleRules[i].Label, nil when empty
 	skillRes []*regexp.Regexp // compiled Skills[i].Label
 	prepared bool
 }
 
-// Role is the toolset and permissions a call runs with.
+// Role is the toolset a call runs with and what becomes of its clone.
 type Role struct {
-	Tools          string   `json:"tools"`           // --tools, verbatim
-	Allow          []string `json:"allow,omitempty"` // --allowedTools
-	Deny           []string `json:"deny,omitempty"`  // --disallowedTools
-	PermissionMode string   `json:"permissionMode"`  // --permission-mode
-	Clone          string   `json:"clone"`           // "kept" (fetched back) or "discarded" (removed after the call)
+	Tools string `json:"tools"` // --tools, verbatim
+	Clone string `json:"clone"` // "kept" (fetched back) or "discarded" (removed after the call)
 }
 
 // Role.Clone values.
@@ -61,8 +64,15 @@ const (
 	CloneDiscarded = "discarded"
 )
 
-// pluginToken in a role's deny entry is replaced by Config.PluginDir.
-const pluginToken = "<plugin>"
+var (
+	imageDigest = regexp.MustCompile(`^[^@\s]+@sha256:[0-9a-f]{64}$`)
+	envName     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+)
+
+// reservedEnv are names the runtime sets in the container, or that carry a
+// credential or a route; env cannot pass them. ANTHROPIC_* is reserved too.
+var reservedEnv = []string{"PATH", "HOME", "SHELL", "DISABLE_AUTOUPDATER", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+	"NO_PROXY", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy", "CLAUDE_CODE_OAUTH_TOKEN"}
 
 // RoleRule matches when every non-empty matcher matches (AND); at least one is
 // set. Express OR as two rules. Label is an RE2 regex, unanchored: anchor it
@@ -142,21 +152,11 @@ func (c *Config) prepare() error {
 	}
 	for _, name := range slices.Sorted(maps.Keys(c.Roles)) {
 		r := c.Roles[name]
-		if r.PermissionMode == "" {
-			errs = append(errs, fmt.Errorf("roles.%s: permissionMode is required", name))
-		}
 		if r.Tools == "" {
 			errs = append(errs, fmt.Errorf("roles.%s: tools is required", name))
 		}
 		if r.Clone != CloneKept && r.Clone != CloneDiscarded {
 			errs = append(errs, fmt.Errorf("roles.%s: clone must be %q or %q, not %q", name, CloneKept, CloneDiscarded, r.Clone))
-		}
-		hasToken := func(d string) bool { return strings.Contains(d, pluginToken) }
-		if c.PluginDir == "" && slices.ContainsFunc(r.Deny, hasToken) {
-			errs = append(errs, fmt.Errorf("roles.%s: deny names %s but pluginDir is not set", name, pluginToken))
-		}
-		if slices.ContainsFunc(r.Allow, hasToken) {
-			errs = append(errs, fmt.Errorf("roles.%s: %s is substituted in deny only, not allow", name, pluginToken))
 		}
 	}
 	if _, ok := c.Roles[c.DefaultRole]; !ok {
@@ -192,8 +192,35 @@ func (c *Config) prepare() error {
 		}
 		c.skillRes[i] = re
 	}
-	if c.Proxy != nil {
+	if c.Proxy == nil {
+		errs = append(errs, errors.New("proxy is required: it is a call's only route to the API"))
+	} else {
 		errs = append(errs, c.Proxy.prepare()...)
+	}
+	switch {
+	case c.Image == "":
+		errs = append(errs, errors.New("image is required"))
+	case !imageDigest.MatchString(c.Image):
+		errs = append(errs, fmt.Errorf("image %q: name it by digest, name@sha256:<64 hex digits>; a tag alone is refused", c.Image))
+	}
+	if c.ClaudeVersion == "" {
+		errs = append(errs, errors.New("claudeVersion is required"))
+	}
+	if c.PluginDir == "" {
+		errs = append(errs, errors.New("pluginDir is required: the plugin reaches claude only by --plugin-dir"))
+	}
+	for _, e := range c.Env {
+		switch {
+		case !envName.MatchString(e):
+			errs = append(errs, fmt.Errorf("env: %q is not a variable name", e))
+		case slices.Contains(reservedEnv, e) || strings.HasPrefix(e, "ANTHROPIC_"):
+			errs = append(errs, fmt.Errorf("env: %s is set by the runtime or carries a credential or route; it cannot be passed", e))
+		}
+	}
+	for _, f := range []struct{ name, path string }{{"stateDir", c.StateDir}, {"pluginDir", c.PluginDir}} {
+		if strings.Contains(f.path, ":") {
+			errs = append(errs, fmt.Errorf("%s %q: a path with ':' cannot be a bind mount's source", f.name, f.path))
+		}
 	}
 	if c.Concurrency < 0 || c.GateConcurrency < 0 || c.MaxSessionWaits < 0 || c.Caps.MaxCalls < 0 || c.Caps.MaxCostUSD < 0 {
 		errs = append(errs, errors.New("concurrency, gateConcurrency, maxSessionWaits and caps must not be negative"))
@@ -223,6 +250,9 @@ func (c *Config) prepare() error {
 	}
 	if c.ClaudeBin == "" {
 		c.ClaudeBin = "claude"
+	}
+	if c.PodmanBin == "" {
+		c.PodmanBin = "podman"
 	}
 	if v := os.Getenv("LSF_CLAUDE_BIN"); v != "" {
 		c.ClaudeBin = v

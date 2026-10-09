@@ -62,11 +62,11 @@ func TestOnRuntimeDeclaredGates(t *testing.T) {
 	args, _ := plan.MarshalJS(M{"name": "f", "planSha": planSha, "architectureDoc": "docs/architecture/f.md", "integrationBranch": "integration"}, "")
 	cfg := lsfrt.Config{
 		StateDir: filepath.Join(dir, "state"), Repo: r.dir, ClaudeBin: os.Args[0], Args: args,
-		Roles: map[string]lsfrt.Role{"worker": {Tools: "default", PermissionMode: "dontAsk", Clone: "kept"}}, DefaultRole: "worker",
+		Roles: map[string]lsfrt.Role{"worker": {Tools: "default", Clone: "kept"}}, DefaultRole: "worker",
 	}
 	launch := func() lsfrt.Summary {
 		t.Helper()
-		sum, err := lsfrt.Run(context.Background(), cfg, Body)
+		sum, err := lsfrt.Run(context.Background(), withContainer(t, cfg), Body)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -167,11 +167,11 @@ func TestOnRuntimeRegressedMergeRelaunch(t *testing.T) {
 		"decisions": []M{{"id": "d1", "question": "q", "decision": "yes"}}}, "")
 	cfg := lsfrt.Config{
 		StateDir: filepath.Join(dir, "state"), Repo: r.dir, ClaudeBin: os.Args[0], Args: args,
-		Roles: map[string]lsfrt.Role{"worker": {Tools: "default", PermissionMode: "dontAsk", Clone: "kept"}}, DefaultRole: "worker",
+		Roles: map[string]lsfrt.Role{"worker": {Tools: "default", Clone: "kept"}}, DefaultRole: "worker",
 	}
 	launch := func() view {
 		t.Helper()
-		sum, err := lsfrt.Run(context.Background(), cfg, Body)
+		sum, err := lsfrt.Run(context.Background(), withContainer(t, cfg), Body)
 		if err != nil || sum.StopReason != lsfrt.StopReturned {
 			t.Fatalf("launch: %v %+v", err, sum)
 		}

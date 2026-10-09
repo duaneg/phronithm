@@ -13,29 +13,6 @@ import (
 	"time"
 )
 
-// buildArgv is a headless call's arguments. The prompt goes on stdin, so it
-// is bounded by neither MAX_ARG_STRLEN nor a variadic flag swallowing it.
-func buildArgv(o Opts, role Role, pluginDir, sessionID string) []string {
-	a := []string{"-p", "--output-format", "stream-json", "--verbose", "--session-id", sessionID}
-	if o.Model != "" {
-		a = append(a, "--model", o.Model)
-	}
-	if o.Effort != "" {
-		a = append(a, "--effort", o.Effort)
-	}
-	a = append(a, "--strict-mcp-config", "--permission-mode", role.PermissionMode, "--tools", role.Tools)
-	if len(role.Allow) > 0 {
-		a = append(append(a, "--allowedTools"), role.Allow...)
-	}
-	if len(role.Deny) > 0 {
-		a = append(a, "--disallowedTools")
-		for _, d := range role.Deny {
-			a = append(a, strings.ReplaceAll(d, pluginToken, pluginDir))
-		}
-	}
-	return append(a, "--json-schema", string(o.Schema))
-}
-
 // withSkill is the prompt as sent: a skill's slash command puts the skill
 // body into the prompt before the model runs.
 func withSkill(skill, prompt string) string {
@@ -47,10 +24,10 @@ func withSkill(skill, prompt string) string {
 
 // spawnSpec is one attempt's inputs.
 type spawnSpec struct {
-	prompt     string // as sent (skill prefix applied)
-	argv       []string
+	prompt     string   // as sent (skill prefix applied)
+	argv       []string // podman's
 	sessionID  string
-	cwd        string
+	name       string // the container's
 	transcript string
 }
 
@@ -86,8 +63,8 @@ func (rt *Runtime) spawn(ctx context.Context, sp spawnSpec) *attempt {
 	lw := &lineWriter{file: out, acc: &a.acc}
 	stderr := &tailBuffer{max: 2048}
 
-	cmd := exec.CommandContext(actx, rt.cfg.ClaudeBin, sp.argv...)
-	cmd.Dir = sp.cwd
+	cmd := exec.CommandContext(actx, rt.cfg.PodmanBin, sp.argv...)
+	cmd.Env = rt.podmanEnv()
 	cmd.Stdin = strings.NewReader(sp.prompt)
 	cmd.Stdout = lw
 	cmd.Stderr = stderr
@@ -111,7 +88,7 @@ func (rt *Runtime) spawn(ctx context.Context, sp spawnSpec) *attempt {
 	}
 	pid := cmd.Process.Pid
 	rt.setChildPid(sp.sessionID, pid)
-	rt.event("spawn", map[string]any{"pid": pid, "session": sp.sessionID, "cwd": sp.cwd})
+	rt.event("spawn", map[string]any{"pid": pid, "session": sp.sessionID, "container": sp.name})
 	werr := cmd.Wait()
 	lw.flush()
 	if lw.fileErr != nil {

@@ -23,9 +23,13 @@ func writeConfig(t *testing.T, body string) string {
 	return p
 }
 
-const minimalConfig = `{"stateDir":"/tmp/x","defaultRole":"worker",
-	"roles":{"worker":{"tools":"default","permissionMode":"dontAsk","clone":"kept"},
-	         "critic":{"tools":"Read,Grep","allow":["Read"],"deny":["Bash(git commit*)"],"permissionMode":"dontAsk","clone":"kept"}},
+// ctrFields are a config's container settings, ending in a comma.
+const ctrFields = `"pluginDir":"/p","image":"img@sha256:0000000000000000000000000000000000000000000000000000000000000000",` +
+	`"claudeVersion":"1.0.0","proxy":{"listen":"127.0.0.1:0","credentialsFile":"/c"},`
+
+const minimalConfig = `{"stateDir":"/tmp/x",` + ctrFields + `"defaultRole":"worker",
+	"roles":{"worker":{"tools":"default","clone":"kept"},
+	         "critic":{"tools":"Read,Grep","clone":"kept"}},
 	"roleRules":[{"agentType":"phronithm:critic","role":"critic"},{"label":"^critique-","role":"critic"}],
 	"skills":[{"label":"^critique-","skill":"phronithm:critique"}],
 	"guardTimeout":"90m"}`
@@ -59,8 +63,8 @@ func TestLoadConfig(t *testing.T) {
 }
 
 func TestRoleRuleIsAnd(t *testing.T) {
-	c, err := LoadConfig(writeConfig(t, `{"stateDir":"/x","defaultRole":"w",
-		"roles":{"w":{"tools":"default","permissionMode":"dontAsk","clone":"kept"},"c":{"tools":"Read","permissionMode":"dontAsk","clone":"kept"}},
+	c, err := LoadConfig(writeConfig(t, `{"stateDir":"/x",`+ctrFields+`"defaultRole":"w",
+		"roles":{"w":{"tools":"default","clone":"kept"},"c":{"tools":"Read","clone":"kept"}},
 		"roleRules":[{"agentType":"phronithm:critic","label":"^critique-","role":"c"}]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -75,19 +79,16 @@ func TestRoleRuleIsAnd(t *testing.T) {
 
 func TestLoadConfigRejects(t *testing.T) {
 	for _, tc := range []struct{ body, want string }{
-		{`{"stateDir":"/x","defaultRole":"w","roles":{"w":{"tools":"t","permissionMode":"dontAsk","clone":"kept"}},"bogus":1}`, "unknown field"},
-		{`{"stateDir":"/x","defaultRole":"w","roles":{}}`, "at least one role"},
-		{`{"stateDir":"/x","defaultRole":"w","roles":{"w":{"tools":"t","permissionMode":"dontAsk","clone":"kept"}},"roleRules":[{"label":"x","role":"nope"}]}`, `role "nope" names no role`},
-		{`{"stateDir":"/x","defaultRole":"w","roles":{"w":{"tools":"t","permissionMode":"dontAsk","clone":"kept"}},"roleRules":[{"role":"w"}]}`, "set agentType, label or both"},
-		{`{"stateDir":"/x","defaultRole":"w","roles":{"w":{"tools":"t","permissionMode":"dontAsk","clone":"kept"}},"roleRules":[{"label":"(","role":"w"}]}`, "roleRules[0].label"},
-		{`{"stateDir":"/x","defaultRole":"w","roles":{"w":{"tools":"t","permissionMode":""}}}`, "permissionMode is required"},
-		{`{"stateDir":"/x","defaultRole":"q","roles":{"w":{"tools":"t","permissionMode":"dontAsk","clone":"kept"}}}`, `defaultRole "q"`},
-		{`{"stateDir":"/x","defaultRole":"w","roles":{"w":{"tools":"t","permissionMode":"dontAsk","clone":"kept"}},"guardTimeout":90}`, "duration must be a string"},
-		{`{"defaultRole":"w","roles":{"w":{"tools":"t","permissionMode":"dontAsk","clone":"kept"}}}`, "stateDir is required"},
-		{`{"stateDir":"/x","defaultRole":"w","roles":{"w":{"tools":"t","permissionMode":"dontAsk"}}}`, `roles.w: clone must be "kept" or "discarded", not ""`},
-		{`{"stateDir":"/x","defaultRole":"w","roles":{"w":{"tools":"t","permissionMode":"dontAsk","clone":"fetched"}}}`, `not "fetched"`},
-		{`{"stateDir":"/x","defaultRole":"w","roles":{"w":{"tools":"t","permissionMode":"dontAsk","clone":"kept","deny":["Edit(/<plugin>/**)"]}}}`, "roles.w: deny names <plugin> but pluginDir is not set"},
-		{`{"stateDir":"/x","pluginDir":"/p","defaultRole":"w","roles":{"w":{"tools":"t","permissionMode":"dontAsk","clone":"kept","allow":["Read(/<plugin>/**)"]}}}`, "roles.w: <plugin> is substituted in deny only"},
+		{`{"stateDir":"/x",` + ctrFields + `"defaultRole":"w","roles":{"w":{"tools":"t","clone":"kept"}},"bogus":1}`, "unknown field"},
+		{`{"stateDir":"/x",` + ctrFields + `"defaultRole":"w","roles":{}}`, "at least one role"},
+		{`{"stateDir":"/x",` + ctrFields + `"defaultRole":"w","roles":{"w":{"tools":"t","clone":"kept"}},"roleRules":[{"label":"x","role":"nope"}]}`, `role "nope" names no role`},
+		{`{"stateDir":"/x",` + ctrFields + `"defaultRole":"w","roles":{"w":{"tools":"t","clone":"kept"}},"roleRules":[{"role":"w"}]}`, "set agentType, label or both"},
+		{`{"stateDir":"/x",` + ctrFields + `"defaultRole":"w","roles":{"w":{"tools":"t","clone":"kept"}},"roleRules":[{"label":"(","role":"w"}]}`, "roleRules[0].label"},
+		{`{"stateDir":"/x",` + ctrFields + `"defaultRole":"q","roles":{"w":{"tools":"t","clone":"kept"}}}`, `defaultRole "q"`},
+		{`{"stateDir":"/x",` + ctrFields + `"defaultRole":"w","roles":{"w":{"tools":"t","clone":"kept"}},"guardTimeout":90}`, "duration must be a string"},
+		{`{` + ctrFields + `"defaultRole":"w","roles":{"w":{"tools":"t","clone":"kept"}}}`, "stateDir is required"},
+		{`{"stateDir":"/x",` + ctrFields + `"defaultRole":"w","roles":{"w":{"tools":"t"}}}`, `roles.w: clone must be "kept" or "discarded", not ""`},
+		{`{"stateDir":"/x",` + ctrFields + `"defaultRole":"w","roles":{"w":{"tools":"t","clone":"fetched"}}}`, `not "fetched"`},
 	} {
 		_, err := LoadConfig(writeConfig(t, tc.body))
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -108,7 +109,7 @@ func TestLaunchClaudeBinEnv(t *testing.T) {
 }
 
 func TestLoadConfigRejectsDurationsAndTrailing(t *testing.T) {
-	base := `"stateDir":"/x","defaultRole":"w","roles":{"w":{"tools":"t","permissionMode":"dontAsk","clone":"kept"}}`
+	base := `"stateDir":"/x",` + ctrFields + `"defaultRole":"w","roles":{"w":{"tools":"t","clone":"kept"}}`
 	for _, tc := range []struct{ body, want string }{
 		{`{` + base + `,"guardTimeout":"-1s"}`, "must not be negative"},
 		{`{` + base + `,"backoff":["1s","-1s"]}`, "must not be negative"},
@@ -193,21 +194,56 @@ func TestTestTempDirNotUnderTempRoot(t *testing.T) {
 	}
 }
 
-// pluginDir is made absolute, and <plugin> in a deny entry becomes it in
-// the argv.
-func TestPluginSubstitution(t *testing.T) {
-	c, err := LoadConfig(writeConfig(t, `{"stateDir":"/x","pluginDir":"/opt/phr","defaultRole":"w",
-		"roles":{"w":{"tools":"t","permissionMode":"dontAsk","clone":"kept","deny":["Edit(/<plugin>/**)","Write(/<plugin>/**)","Bash(rm*)"]}}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, r := c.roleFor(Opts{Label: "x"})
-	argv := buildArgv(Opts{Label: "x", Schema: json.RawMessage(`{}`)}, r, c.PluginDir, "sid")
-	if got, want := flagValues(argv, "--disallowedTools"), []string{"Edit(//opt/phr/**)", "Write(//opt/phr/**)", "Bash(rm*)"}; !slices.Equal(got, want) {
-		t.Errorf("deny %q, want %q", got, want)
-	}
-	rel, err := LoadConfig(writeConfig(t, `{"stateDir":"/x","pluginDir":"phr","defaultRole":"w","roles":{"w":{"tools":"t","permissionMode":"dontAsk","clone":"kept"}}}`))
+// pluginDir is made absolute.
+func TestRelativePluginDir(t *testing.T) {
+	rel, err := LoadConfig(writeConfig(t, strings.Replace(`{"stateDir":"/x",`+ctrFields+`"defaultRole":"w","roles":{"w":{"tools":"t","clone":"kept"}}}`, `"/p"`, `"phr"`, 1)))
 	if err != nil || !filepath.IsAbs(rel.PluginDir) {
 		t.Errorf("relative pluginDir: %q %v", rel.PluginDir, err)
+	}
+}
+
+// The container's settings are checked: an image by digest only, the
+// required fields, env names, a 127.0.0.1 proxy, and roles without the
+// permission fields of the pre-container design.
+func TestLoadConfigRejectsContainer(t *testing.T) {
+	roles := `"defaultRole":"w","roles":{"w":{"tools":"t","clone":"kept"}}`
+	ok := `{"stateDir":"/x",` + ctrFields + roles + `}`
+	if _, err := LoadConfig(writeConfig(t, ok)); err != nil {
+		t.Fatal(err)
+	}
+	digest := "img@sha256:" + strings.Repeat("0", 64)
+	for _, tc := range []struct{ from, to, want string }{
+		{`"image":"` + digest + `"`, `"image":"img:latest"`, "name it by digest"},
+		{`"image":"` + digest + `"`, `"image":"img@sha256:abc"`, "name it by digest"},
+		{`"image":"` + digest + `",`, ``, "image is required"},
+		{`"claudeVersion":"1.0.0",`, ``, "claudeVersion is required"},
+		{`"pluginDir":"/p",`, ``, "pluginDir is required"},
+		{`"proxy":{"listen":"127.0.0.1:0","credentialsFile":"/c"},`, ``, "proxy is required"},
+		{`127.0.0.1:0`, `0.0.0.0:0`, `the host must be 127.0.0.1, not "0.0.0.0"`},
+		{`127.0.0.1:0`, `localhost:0`, `not "localhost"`},
+		{`127.0.0.1:0`, `[::1]:0`, `not "::1"`},
+		{`"stateDir":"/x"`, `"stateDir":"/x:y"`, "cannot be a bind mount's source"},
+		{`"pluginDir":"/p"`, `"pluginDir":"/p:q"`, "cannot be a bind mount's source"},
+		{`"claudeVersion"`, `"env":["1BAD"],"claudeVersion"`, `"1BAD" is not a variable name`},
+		{`"claudeVersion"`, `"env":["GOOD","HTTPS_PROXY"],"claudeVersion"`, "HTTPS_PROXY is set by the runtime"},
+		{`"claudeVersion"`, `"env":["ANTHROPIC_API_KEY"],"claudeVersion"`, "ANTHROPIC_API_KEY is set by the runtime"},
+		{`"claudeVersion"`, `"env":["CLAUDE_CODE_OAUTH_TOKEN"],"claudeVersion"`, "CLAUDE_CODE_OAUTH_TOKEN is set by the runtime"},
+		{`"claudeVersion"`, `"env":["PATH"],"claudeVersion"`, "PATH is set by the runtime"},
+		{`"clone":"kept"`, `"clone":"kept","permissionMode":"dontAsk"`, `unknown field "permissionMode"`},
+		{`"clone":"kept"`, `"clone":"kept","allow":["Read"]`, `unknown field "allow"`},
+		{`"clone":"kept"`, `"clone":"kept","deny":["Read"]`, `unknown field "deny"`},
+	} {
+		body := strings.Replace(ok, tc.from, tc.to, 1)
+		if body == ok {
+			t.Fatalf("%q not in the config", tc.from)
+		}
+		_, err := LoadConfig(writeConfig(t, body))
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err %v, want %q", body, err, tc.want)
+		}
+	}
+	c, err := LoadConfig(writeConfig(t, strings.Replace(ok, `"claudeVersion"`, `"env":["GOPATH","my_var"],"claudeVersion"`, 1)))
+	if err != nil || !slices.Equal(c.Env, []string{"GOPATH", "my_var"}) || c.PodmanBin != "podman" {
+		t.Errorf("env %q podmanBin %q: %v", c.Env, c.PodmanBin, err)
 	}
 }

@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/duaneg/phronithm/lsf-runtime/internal/testcfg"
 )
 
 var stubBin = func() string {
@@ -20,21 +22,29 @@ var stubBin = func() string {
 	return p
 }()
 
-// testConfig is a config over the stub with two roles. STUB_STATE is set to a
-// fresh directory, returned with the config.
+// testConfig is a config over the stub claude, run through the stub podman,
+// with two roles. STUB_STATE is set to a fresh directory, returned with the
+// config; the stub podman records under its podman/.
 func testConfig(t *testing.T) (Config, string) {
 	t.Helper()
 	stub := t.TempDir()
 	t.Setenv("STUB_STATE", stub)
 	t.Setenv("LSF_CLAUDE_BIN", "")
+	tc := testcfg.New(t)
+	t.Setenv("STUB_PODMAN_STATE", filepath.Join(stub, "podman"))
 	return Config{
-		StateDir:  t.TempDir(),
-		Repo:      gitRepo(t),
-		ClaudeBin: stubBin,
-		Args:      json.RawMessage(`{"planSha":"0123456789ab","integrationBranch":"main"}`),
+		StateDir:      t.TempDir(),
+		Repo:          gitRepo(t),
+		ClaudeBin:     stubBin,
+		Args:          json.RawMessage(`{"planSha":"0123456789ab","integrationBranch":"main"}`),
+		PluginDir:     tc.PluginDir,
+		Image:         testcfg.Image,
+		ClaudeVersion: testcfg.ClaudeVersion,
+		PodmanBin:     testcfg.Podman(),
+		Proxy:         &ProxyConfig{Listen: "127.0.0.1:0", CredentialsFile: tc.Credentials},
 		Roles: map[string]Role{
-			"worker": {Tools: "default", Allow: []string{"Read", "Bash"}, Deny: []string{"Bash(git push*)"}, PermissionMode: "dontAsk", Clone: "kept"},
-			"critic": {Tools: "Read,Grep,Skill", Allow: []string{"Skill"}, Deny: []string{"Bash(git commit*)", "Edit(.git/**)"}, PermissionMode: "acceptEdits", Clone: "discarded"},
+			"worker": {Tools: "default", Clone: "kept"},
+			"critic": {Tools: "Read,Grep,Skill", Clone: "discarded"},
 		},
 		DefaultRole: "worker",
 		RoleRules:   []RoleRule{{Label: "^critique-", Role: "critic"}},
@@ -72,6 +82,16 @@ func stubCount(t *testing.T, stub string) int {
 func stubArgv(t *testing.T, stub string, n int) []string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(stub, "argv."+strconv.Itoa(n)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00")
+}
+
+// podmanRun is the stub podman's run n's arguments, "run" first.
+func podmanRun(t *testing.T, stub string, n int) []string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(stub, "podman", "run."+strconv.Itoa(n)))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -192,8 +192,8 @@ func TestGatesNotRunNotKept(t *testing.T) {
 // realGateLaunch runs body against a real runtime whose repo is r.
 func realGateLaunch(t *testing.T, r *gitRepo, state string, body func(o *orch)) {
 	t.Helper()
-	cfg := lsfrt.Config{StateDir: state, Repo: r.dir, Roles: map[string]lsfrt.Role{"w": {Tools: "Read", PermissionMode: "dontAsk", Clone: "kept"}}, DefaultRole: "w"}
-	s, err := lsfrt.Run(context.Background(), cfg, func(ctx context.Context, rt *lsfrt.Runtime) (json.RawMessage, error) {
+	cfg := lsfrt.Config{StateDir: state, Repo: r.dir, Roles: map[string]lsfrt.Role{"w": {Tools: "Read", Clone: "kept"}}, DefaultRole: "w"}
+	s, err := lsfrt.Run(context.Background(), withContainer(t, cfg), func(ctx context.Context, rt *lsfrt.Runtime) (json.RawMessage, error) {
 		body(newOrch(rt, runCtxFor(t, nil), nil))
 		return nil, nil
 	})

@@ -26,9 +26,9 @@ import (
 // rest upstream with the live OAuth access token in its place. The token is
 // re-read when the credentials file changes, and never logged.
 
-// ProxyConfig is the config's proxy block. With none, no proxy starts.
+// ProxyConfig is the config's proxy block.
 type ProxyConfig struct {
-	Listen          string `json:"listen"`             // host:port; port 0 picks one
+	Listen          string `json:"listen"`             // 127.0.0.1:port; port 0 picks one
 	CredentialsFile string `json:"credentialsFile"`    // the live session's .credentials.json
 	Upstream        string `json:"upstream,omitempty"` // default https://api.anthropic.com
 }
@@ -40,7 +40,7 @@ const (
 )
 
 // ProxyInfo is what a call is given to reach the proxy: its base URL and the
-// bearer it must present. Both are empty when no proxy runs.
+// bearer it must present.
 type ProxyInfo struct {
 	URL         string
 	Placeholder string
@@ -50,8 +50,11 @@ func (c *ProxyConfig) prepare() []error {
 	var errs []error
 	if c.Listen == "" {
 		errs = append(errs, errors.New("proxy.listen is required"))
-	} else if _, _, err := net.SplitHostPort(c.Listen); err != nil {
+	} else if host, _, err := net.SplitHostPort(c.Listen); err != nil {
 		errs = append(errs, fmt.Errorf("proxy.listen: %w", err))
+	} else if host != "127.0.0.1" {
+		// pasta splices a container's 127.0.0.1 to the host's.
+		errs = append(errs, fmt.Errorf("proxy.listen: the host must be 127.0.0.1, not %q", host))
 	}
 	if c.CredentialsFile == "" {
 		errs = append(errs, errors.New("proxy.credentialsFile is required"))
@@ -148,9 +151,6 @@ func (rt *Runtime) startProxy() (*proxy, error) {
 		}
 	}()
 	addr := ln.Addr().(*net.TCPAddr)
-	if !addr.IP.IsLoopback() {
-		rt.Log(fmt.Sprintf("proxy: listening on %s, which is not a loopback address", addr))
-	}
 	rt.Log(fmt.Sprintf("proxy: listening on %s for %s", addr, p.upstream))
 	rt.event("proxy", map[string]any{"listen": addr.String(), "upstream": p.upstream.String()})
 	return p, nil
@@ -178,7 +178,8 @@ func (p *proxy) info() ProxyInfo {
 	return ProxyInfo{URL: "http://" + p.ln.Addr().String(), Placeholder: p.placeholder}
 }
 
-// Proxy is the running proxy's URL and placeholder, empty without one.
+// Proxy is the running proxy's URL and placeholder. Run starts the proxy
+// before the body, so a body never sees the zero value.
 func (rt *Runtime) Proxy() ProxyInfo {
 	if rt.proxy == nil {
 		return ProxyInfo{}

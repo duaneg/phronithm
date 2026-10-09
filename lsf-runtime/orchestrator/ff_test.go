@@ -51,7 +51,7 @@ func newFFLaunch(t *testing.T, kind string, a answer) *ffLaunch {
 	args, _ := plan.MarshalJS(M{"name": "f", "planSha": r.head(), "architectureDoc": "docs/architecture/f.md", "integrationBranch": "integration"}, "")
 	return &ffLaunch{t, r, lsfrt.Config{
 		StateDir: filepath.Join(dir, "state"), Repo: r.dir, ClaudeBin: os.Args[0], Args: args,
-		Roles: map[string]lsfrt.Role{"w": {Tools: "default", PermissionMode: "dontAsk", Clone: kind}}, DefaultRole: "w",
+		Roles: map[string]lsfrt.Role{"w": {Tools: "default", Clone: kind}}, DefaultRole: "w",
 		Backoff: []lsfrt.Duration{lsfrt.Duration(10 * time.Millisecond)},
 	}, "", ""}
 }
@@ -61,7 +61,7 @@ func (f *ffLaunch) launch() (*ret[scribeResult], []*plan.Signal) {
 	t.Helper()
 	var res *ret[scribeResult]
 	var sigs []*plan.Signal
-	sum, err := lsfrt.Run(context.Background(), f.cfg, func(ctx context.Context, rt *lsfrt.Runtime) (json.RawMessage, error) {
+	sum, err := lsfrt.Run(context.Background(), withContainer(f.t, f.cfg), func(ctx context.Context, rt *lsfrt.Runtime) (json.RawMessage, error) {
 		a, err := parseArgs(rt.Args())
 		if err != nil {
 			return nil, err
@@ -246,7 +246,7 @@ func TestFastForwardRecovery(t *testing.T) {
 	if res, _ := f.launch(); res != nil {
 		t.Fatalf("discarded: %+v", res)
 	}
-	f.cfg.Roles = map[string]lsfrt.Role{"w": {Tools: "default", PermissionMode: "dontAsk", Clone: "kept"}}
+	f.cfg.Roles = map[string]lsfrt.Role{"w": {Tools: "default", Clone: "kept"}}
 	res, sigs = f.launch()
 	if res == nil || len(sigs) != 0 || f.r.git("log", "-1", "--format=%s") != "edit" {
 		t.Fatalf("after the role fix: %+v %v", res, kinds(sigs))
@@ -259,7 +259,7 @@ func TestDiscardedIsolatedWriter(t *testing.T) {
 	f := newFFLaunch(t, "discarded", answer{Return: scribeHead, Shell: commitEdit})
 	var sigs []*plan.Signal
 	var res *ret[scribeResult]
-	sum, err := lsfrt.Run(context.Background(), f.cfg, func(ctx context.Context, rt *lsfrt.Runtime) (json.RawMessage, error) {
+	sum, err := lsfrt.Run(context.Background(), withContainer(f.t, f.cfg), func(ctx context.Context, rt *lsfrt.Runtime) (json.RawMessage, error) {
 		a, err := parseArgs(rt.Args())
 		if err != nil {
 			return nil, err

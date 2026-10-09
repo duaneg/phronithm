@@ -2,22 +2,21 @@
   "stateDir": "/path/to/state",
   "repo": "/path/to/repo",
   "pluginDir": "/path/to/phronithm",
+  "image": "localhost/lsf-project@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "claudeBin": "/path/to/claude/versions/2.1.294",
+  "claudeVersion": "2.1.294",
+  "env": [],
+  "proxy": {"listen": "127.0.0.1:0", "credentialsFile": "/path/to/home/.claude/.credentials.json"},
   "args": {"name": "example", "planSha": "0123456789abcdef", "integrationBranch": "main", "architectureDoc": "docs/architecture/example.md"},
   "concurrency": 4,
   "defaultRole": "writer",
   "roles": {
     "writer": {
       "tools": "Read,Edit,Write,Glob,Grep,Bash,Skill",
-      "allow": ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "Skill"],
-      "deny": ["Edit(/<plugin>/**)", "Write(/<plugin>/**)", "Edit(.git/**)", "Write(.git/**)"],
-      "permissionMode": "dontAsk",
       "clone": "kept"
     },
     "reviewer": {
       "tools": "Read,Glob,Grep,Bash,Skill",
-      "allow": ["Read", "Glob", "Grep", "Bash", "Skill"],
-      "deny": ["Edit(/<plugin>/**)", "Write(/<plugin>/**)"],
-      "permissionMode": "dontAsk",
       "clone": "discarded"
     }
   },

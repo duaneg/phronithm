@@ -663,8 +663,8 @@ func TestLedgerRefusals(t *testing.T) {
 func onRuntime(t *testing.T, r *gitRepo, stateDir string, body func(ctx context.Context, o *orch)) {
 	t.Helper()
 	cfg := lsfrt.Config{StateDir: stateDir, Repo: r.dir, Args: json.RawMessage(`{"planSha":"0123456789ab","integrationBranch":"integration"}`),
-		Roles: map[string]lsfrt.Role{"worker": {Tools: "default", PermissionMode: "dontAsk", Clone: "kept"}}, DefaultRole: "worker"}
-	if _, err := lsfrt.Run(context.Background(), cfg, func(ctx context.Context, rt *lsfrt.Runtime) (json.RawMessage, error) {
+		Roles: map[string]lsfrt.Role{"worker": {Tools: "default", Clone: "kept"}}, DefaultRole: "worker"}
+	if _, err := lsfrt.Run(context.Background(), withContainer(t, cfg), func(ctx context.Context, rt *lsfrt.Runtime) (json.RawMessage, error) {
 		o := newOrch(rt, runCtxFor(t, nil), nil)
 		o.today = func() string { return "2026-10-07" }
 		body(ctx, o)

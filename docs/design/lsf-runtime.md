@@ -224,8 +224,8 @@ The container was chosen. None of its parts depends on Claude Code's sandbox int
 
 ### Placement
 
-- **No agent call runs in the main checkout or a worktree.** A worktree's `.git` is the main repo's, so its refs and config are writable through the worktree. Every call runs in its own clone under the state dir, mounted at `/work`. The main checkout, the state dir, `$HOME` and other clones are not mounted.
-- **Plain `--no-local` clones.** A clone made without `--no-local` hardlinks its objects to the main repo's, so a write through `/work` could corrupt the main store. A `--shared` clone's alternates point outside the mounts.
+- **No agent call runs in the main checkout or a worktree.** A worktree's `.git` is the main repo's, so its refs and config are writable through the worktree. Every call runs in its own clone under the state dir, mounted at its host path (see A call's launch). The main checkout, the state dir, `$HOME` and other clones are not mounted.
+- **Plain `--no-local` clones.** A clone made without `--no-local` hardlinks its objects to the main repo's, so a write through the clone's mount could corrupt the main store. A `--shared` clone's alternates point outside the mounts.
 - **Commits come back by fetch.** After a call, the runtime fetches the clone's branch into the main repo as the call's branch (`lsf/<plan8>/<key>`), without tags. Every check the orchestrator makes on a worktree branch applies unchanged. A writer's commits reach the integration branch only through an orchestrator step that checks the branch and fast-forwards to it. The fast-forward updates the main checkout, so it needs that checkout clean and at the expected tip. A requester edit there stops the run, as a requester edit during a repo call does today.
 - **Which clone each call gets.**
 
@@ -258,41 +258,43 @@ The orchestrator issues each label below with D10's `#n` suffix on a repeat. The
 ```
 
 - Every label not matched above is a writer: `plan`, `fix-plan`, `implement`, `fix-code`, `direct-edits`, `decision-replan`, `replan`, `termination`, `merge-conflict`. `plan:critique-x` and `merge-conflict:w1:review-gate` are writers, because the patterns anchor at the label's start.
-- A role is its tool set and its clone kind. The `allow`, `deny` and `permissionMode` fields go, with the `<plugin>` substitution: the mounts make the plugin and `.git`'s config read-only.
+- A role is its tool set and its clone kind. The `allow`, `deny` and `permissionMode` fields are gone, with the `<plugin>` substitution: the mounts make the plugin and `.git`'s config read-only. A config that still carries them fails strict decoding.
 
 ### A call's launch
 
 The runtime builds each call's argv and environment. The role supplies only its tools and its `clone` value.
 
 ```
-podman run --rm -i --init --name <name> --label lsf.state=<stateDir hash>
+podman run --rm -i --init --pull=never --log-driver=none --name <name> --label lsf.state=<stateDir hash>
   --userns=keep-id --cap-drop=all --security-opt no-new-privileges
   --read-only --tmpfs /tmp:rw,exec
   --network pasta:--splice-only,-T,<inject port>[,-T,<egress port>]
-  -v <clone>:/work:rw
-  -v <clone>/.git/config:/work/.git/config:ro -v <clone>/.git/hooks:/work/.git/hooks:ro -v <clone>/.git/info:/work/.git/info:ro
+  -v <clone>:<clone>:rw
+  -v <clone>/.git/config:<clone>/.git/config:ro -v <clone>/.git/hooks:<clone>/.git/hooks:ro -v <clone>/.git/info:<clone>/.git/info:ro
   -v <claude>:/opt/claude/claude:ro -v <plugin>:/opt/plugin:ro
-  -w /work -e … <image>
+  -w <clone> -e … <image>
   /opt/claude/claude -p … --plugin-dir /opt/plugin --tools <role tools> --dangerously-skip-permissions
 ```
 
-- **`<name>`** is unique to the call's attempt, so a kill can find the container (see Teardown). The label lets a launch find containers an earlier launch left behind.
+- **`<name>`** is `lsf-<hash8>-<session id>`, unique to the call's attempt, so a kill can find the container (see Teardown). The label, the first 16 hex digits of the SHA-256 of the state dir's resolved path, lets a launch find containers an earlier launch left behind.
+- **The clone is mounted at its host path** (`s2-sandbox`, a change from the probe's `/work`). Its local config holds absolute host paths: `core.hooksPath`, and `core.excludesFile` and `core.attributesFile` under `.git/lsf-global/`. At `/work` they would not exist, so git in the container would skip the hooks and the global excludes, and `git add -A` could commit files the host ignores. A `stateDir` or `pluginDir` containing `:` is refused, and so is a `claudeBin` whose resolved path does.
+- **`--pull=never`:** a missing image is a launch failure, never a registry pull. **`--log-driver=none`:** podman's default driver on the probe host was `journald`, so every probe call's stream went to the user journal; `-i` attach does not depend on the driver.
 - **`--userns=keep-id`.** Inside the container the call runs as the invoking user, so the files it writes in the clone are that user's on the host and fetch back.
 - **The read-only `.git` binds** stop an agent from writing a filter driver, `core.hooksPath` or `include.path` that the runtime's own git in the clone would later run (R34). Commits still succeed. The runtime creates `hooks` and `info` in a clone that lacks them before the launch, since a missing bind source fails it.
-- **The conflict call** gets the merge clone at `/work`, with the same binds.
+- **The conflict call** gets the merge clone at its host path, with the same binds.
 - **A reviewer's clone is mounted read-write too.** A reviewer that re-runs tests writes build output, and the clone is discarded.
 - **Environment:** replaced, not inherited.
   - `HOME=/tmp/home`, a per-call home on the tmpfs. `PATH` is the image's; `SHELL=/bin/bash`.
   - `DISABLE_AUTOUPDATER=1` and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`.
-  - `ANTHROPIC_BASE_URL=http://127.0.0.1:<inject port>` and `ANTHROPIC_AUTH_TOKEN=<placeholder>`.
+  - `ANTHROPIC_BASE_URL=http://127.0.0.1:<inject port>` and `ANTHROPIC_AUTH_TOKEN=<placeholder>`. The placeholder is given as `-e ANTHROPIC_AUTH_TOKEN`, its value in podman's environment, not its argv, which every local user can read.
   - With `hosts` set: `HTTPS_PROXY`, `HTTP_PROXY` and their lower-case forms at `http://127.0.0.1:<egress port>`, and `NO_PROXY=127.0.0.1` in both cases.
-  - The names in a config `env` passthrough list.
+  - The names in a config `env` passthrough list, each `-e NAME` taking its value from the runtime's environment. A name the runtime sets, a proxy variable, `ANTHROPIC_*` and `CLAUDE_CODE_OAUTH_TOKEN` are refused.
 - **The clone's git identity** is set in its local config before the call, from the main repo's.
 
 ### Image
 
 - **The runtime config names the image by digest** (`name@sha256:…`). A tag alone is refused. The user builds the image; phronithm ships a reference `Containerfile`, which the user extends with the project's toolchain. It is the probed image (Z1) less the fixture's toolchain: a digest-pinned Debian slim base with `bash`, `ca-certificates`, `curl`, `git`, `procps` and `ripgrep`.
-- **`claude` comes from the host.** The config names the pinned binary (for example `~/.local/share/claude/versions/2.1.294`), and it is bind-mounted read-only. The image carries no `claude`, so the pin moves without a rebuild.
+- **`claude` comes from the host.** The config names the pinned binary (`claudeBin`, for example `~/.local/share/claude/versions/2.1.294`) and its version (`claudeVersion`, required). The binary is resolved to an absolute regular file at launch and bind-mounted read-only. The image carries no `claude`, so the pin moves without a rebuild.
 - **The plugin comes from the host,** read-only at `/opt/plugin`: the whole of `pluginDir`, not narrowed. It is pinned only by how it was installed; the runtime does not verify its content.
 - **Checks at launch.** The runtime refuses to launch when:
   - `podman` or `pasta` is missing, or podman is not rootless;
@@ -333,7 +335,7 @@ podman run --rm -i --init --name <name> --label lsf.state=<stateDir hash>
   - `write-tree` and `mergeGates`;
   - the commit with its `Lsf-Unit`/`Lsf-Step` trailers;
   - `abortOwn`.
-- **The conflict call's container mounts the merge clone** at `/work`. It is the only call whose clone is not its own.
+- **The conflict call's container mounts the merge clone** at its host path. It is the only call whose clone is not its own.
 - **After each verified merge commit,** the main repo fetches it and fast-forwards the integration branch, as in Placement.
 - **The merge clone stays until the wave's merges finish.** So an interrupted step finds its merge in progress, and its adoption by trailers works as today.
 - **`refusedOverLocal` no longer arises in the merge.** The merge clone holds no requester edits. A requester edit now blocks the fast-forward and stops the run.
@@ -372,7 +374,7 @@ podman run --rm -i --init --name <name> --label lsf.state=<stateDir hash>
 
 ### Runtime changes
 
-`s2-clones` carried the clones, fetch-back, removal, the merge clone and the `clone` role field. `s2-boundary-common` carried the credential proxy, the 401 stop, `hosts`, its parser and its pin, the plain-clone gate checkout and git isolation in clones. **`s2-sandbox` carries the rest**, before `runtime-cli-drive` and `retained-artefacts-impl`:
+`s2-clones` carried the clones, fetch-back, removal, the merge clone and the `clone` role field. `s2-boundary-common` carried the credential proxy, the 401 stop, `hosts`, its parser and its pin, the plain-clone gate checkout and git isolation in clones. **`s2-sandbox` carries 1, 2, 3 for calls, 4's `listen` restriction, 6, 7 and 8; `s2-egress-gates` carries 3 for gates, 4's egress proxy and 5**, before `runtime-cli-drive` and `retained-artefacts-impl`:
 
 1. **Container config:** the image digest, the `claude` binary path, the `env` passthrough list, and the launch checks of Image.
 2. **The call's launch** as A call's launch states. Roles reduce to `tools` and `clone`; `allow`, `deny`, `permissionMode` and the `<plugin>` substitution are dropped.
@@ -401,7 +403,7 @@ podman run --rm -i --init --name <name> --label lsf.state=<stateDir hash>
 
 ## Runtime
 
-Unit `runtime-core`, plan `docs/plans/runtime-core-plan.md`. Package `lsfrt` in `lsf-runtime/runtime/`; tests run against the stub `lsf-runtime/testdata/claude` and streams recorded from Claude Code 2.1.289, and one (`auth-401.jsonl`) from 2.1.294 (`testdata/streams/`).
+Unit `runtime-core`, plan `docs/plans/runtime-core-plan.md`. Package `lsfrt` in `lsf-runtime/runtime/`; tests run the stub `lsf-runtime/testdata/claude` through the stub `lsf-runtime/testdata/podman`, which execs a container's command on the host, against streams recorded from Claude Code 2.1.289, and one (`auth-401.jsonl`) from 2.1.294 (`testdata/streams/`).
 
 ### Interface
 
@@ -432,15 +434,15 @@ Unit `runtime-core`, plan `docs/plans/runtime-core-plan.md`. Package `lsfrt` in 
   The ancestor check is about commits; which labels may lose uncommitted work is the caller's choice.
 - **`rt.MergeClone(ctx, name)`** is the merge clone `<stateDir>/merge/<name>` on the integration branch, made or, when it is a clone on that branch, reused as found, a merge in progress included. A directory there that is not one is an error, not a stop. **`rt.RemoveMergeClone(ctx, name)`** removes it.
 - **`rt.RunGates(ctx, label, commit, setup, gates)`** runs a plan's declared gate commands on a clean detached checkout of `commit` at `<stateDir>/gates/<key>`, which is removed afterwards. The checkout is a plain clone, not a worktree: `commit` is resolved in the main repo and fetched by its object ID into a new repository of the main repo's object format (no tags; a commit reachable from no branch, such as a merge candidate under `refs/lsf/`, included), which takes the clone setup (line-ending keys, the info files) before the checkout, built at `<key>.partial` and renamed into place. Its git is clone-isolated (Supervision). When the main repo lists a worktree under `gates/` (a gate worktree from before plain clones), removal prunes the stale registrations. A stale checkout that cannot be removed fails the run's checkout. It runs `setup` first, then each gate in order. Each command runs through `sh` in its own process group, with stdin `/dev/null`, its output logged under `<stateDir>/gates/logs`, and the runtime's environment less the variables that point git elsewhere (`GIT_DIR` and the like). Setup runs under `gateTimeout`. Exit 0 is `green` and any other exit `red`. A timeout is `not-run`, and a failed setup makes every gate `not-run`. Any process a command leaves behind is killed when it ends. A stop kills the running group, and the stop is returned. Runs are bounded by `gateConcurrency`; the caller journals them.
-- **`rt.Proxy()`** is the credential proxy's base URL (`http://<listen address>`) and the launch's placeholder bearer, 32 random bytes in hex; both are empty without a `proxy` config. The proxy starts after the state-dir lock, before the body, and closes when `Run` returns, its port then refusing. A bind failure or a credentials file with no access token (`claudeAiOauth.accessToken`, or a top-level `accessToken`) is a setup error. For each request it:
+- **`rt.Proxy()`** is the credential proxy's base URL (`http://<listen address>`) and the launch's placeholder bearer, 32 random bytes in hex. The proxy starts after the state-dir lock, before the body, and closes when `Run` returns, its port then refusing. A bind failure or a credentials file with no access token (`claudeAiOauth.accessToken`, or a top-level `accessToken`) is a setup error. For each request it:
   - refuses with 403 and the body `lsf-proxy: placeholder bearer required` unless there is exactly one `Authorization` header and it is `Bearer <placeholder>` (compared in constant time), and refuses `CONNECT`; no refused request reaches the upstream, and the first refusal (method and path quoted) and the launch's count are logged, never a header's value;
   - otherwise forwards to the upstream (`httputil.ReverseProxy`, flushing every write; the default transport's settings, so `HTTPS_PROXY` reaches an https upstream by a tunnel, with a 10-minute bound on response headers) with `Authorization` set to the live token, `x-api-key` and `Proxy-Authorization` dropped and `oauth-2025-04-20` added to `anthropic-beta` when absent; an upstream failure is a 502, logged;
   - re-reads the token first when the file's modification time, size or inode has changed; a failed re-read keeps the previous token and is logged once until a re-read succeeds. A rewrite in place with a token of the same length, within one tick of the filesystem's clock of the last read, is missed until the file next changes. The token is never logged.
 
   At launch end the proxy waits up to 5 s for requests in flight, then closes, before the summary is written.
 
-  No call uses the proxy yet: `s2-sandbox` points calls at it.
-- **`rt.PinHosts(hosts)`** records the gate block's `hosts` as the orchestrator pinned them from the plan at `args.planSha`, before any agent call; **`rt.Hosts()`** reads them (nil when the plan has none). Nothing confines a call by them yet: `s2-sandbox` does.
+  Every call reaches the API through it (Permissions → A call's launch), so `Run` starts it before the body and a body never sees the zero value.
+- **`rt.PinHosts(hosts)`** records the gate block's `hosts` as the orchestrator pinned them from the plan at `args.planSha`, before any agent call; **`rt.Hosts()`** reads them (nil when the plan has none). Nothing confines a call by them yet: `s2-egress-gates` does.
 - **`rt.Log`** and **`rt.Args`**: `Args` is the config's `args`, passed through.
 
 `opts` mirrors the JavaScript: `label`, `phase` (telemetry only), `model`, `effort`, `agentType`, `isolation`, `schema`. It adds `dir`: an existing directory under `<stateDir>/merge/` to run in as found, with no clone, fetch-back or uncommitted check (the conflict call). `dir` is not in the call's hash, and `dir` with `isolation` is a `runtime-error` stop.
@@ -449,10 +451,10 @@ Unit `runtime-core`, plan `docs/plans/runtime-core-plan.md`. Package `lsfrt` in 
 
 The JSON config is decoded strictly. `testdata/config.example.json` carries the spike's roles and rules as a worked example; it is not a default.
 
-- **Roles.** Each role is `tools`, `allow`, `deny`, `permissionMode` and `clone`; `tools`, `permissionMode` and `clone` are required. The first four become `--tools`, `--allowedTools`, `--disallowedTools` and `--permission-mode`. `clone` (`kept` or `discarded`) is the call's clone kind. The runtime has no built-in role; the Permissions section gives their content.
-- **`pluginDir`**, the plugin root, replaces `<plugin>` in a role's `deny` entries when argv is built. A `<plugin>` without it, or in `allow`, is a config error.
+- **Roles.** Each role is `tools` and `clone`, both required. `tools` becomes `--tools`; `clone` (`kept` or `discarded`) is the call's clone kind. The runtime has no built-in role; the Permissions section gives their content.
+- **The container** (Permissions → Image, A call's launch). `image` is required, by digest (`name@sha256:<64 hex>`), a tag alone refused. `claudeBin` defaults to `claude` (`LSF_CLAUDE_BIN` overrides it) and is resolved by `PATH` and its symlinks at launch. `claudeVersion` is required. `env` lists variable names passed through. `podmanBin` defaults to `podman`; the config is trusted input, like `claudeBin`. `pluginDir`, the plugin root, is required and mounted at `/opt/plugin`. `stateDir` and `pluginDir` may not contain `:`.
 - **Placement refusals.** A launch whose `repo` or `stateDir` is under `/tmp` or `/var/tmp` (or macOS's `/private` forms), as written or through a symlink, is refused: the Bash sandbox leaves both writable. So is a repo that is shallow, has submodules (`.gitmodules` at the integration tip, or at `HEAD` when `args` name no integration branch) or uses LFS (`filter.lfs` in its local config, or `filter=lfs` in `.gitattributes` there; a global `git lfs install` alone is not use): clones are untested with them.
-- **`repo`** may be left out only by the runtime's own tests: a call then runs in the launcher's working directory with no clone and no uncommitted check, and none of the Permissions placement holds.
+- **`repo`** may be left out only by the runtime's own tests: a call then runs in a fresh empty `scratch/<key>`, with no clone, no `.git` binds and no uncommitted check.
 - **Role rules.** `roleRules` map `agentType` and a label regex (both must match when both are set) to a role. The first match wins; otherwise `defaultRole` applies.
 - **Skills.** `skills` map a label regex to a skill. A matching call's prompt is sent as `/<skill> <prompt>`.
 - **Caps** are per launch: `maxCalls` (spawns), `maxWallClock`, `maxCostUSD` (summed `total_cost_usd`; in-flight calls can overshoot).
@@ -465,12 +467,12 @@ The JSON config is decoded strictly. `testdata/config.example.json` carries the 
   - `maxSessionWaits`: 4 per call.
   - `gateTimeout`: 2 h per declared gate without its own timeout.
 - **`gateConcurrency`**: concurrent `RunGates`, 1 by default. Gate time is wall-clock and counts toward `maxWallClock`.
-- **`proxy`**: `{listen, credentialsFile, upstream}`, the credential proxy. `listen` (`host:port`, port 0 for any) and `credentialsFile` (the live session's `.credentials.json`, no default) are required; `upstream` is an http(s) origin, `https://api.anthropic.com` by default (`http://` serves tests and is refused for a non-loopback host). Without the block no proxy starts. A `listen` address that is not loopback is logged at start.
-- **`dryRun`.** The first call that would spawn logs its argv and stops the launch with `dry-run`. A step that is not replayed stops without running. Orphans are reported, not killed.
+- **`proxy`** (required): `{listen, credentialsFile, upstream}`, the credential proxy. `listen` (`127.0.0.1:port`, port 0 for any; another host is refused) and `credentialsFile` (the live session's `.credentials.json`, no default) are required; `upstream` is an http(s) origin, `https://api.anthropic.com` by default (`http://` serves tests and is refused for a non-loopback host).
+- **`dryRun`.** The first call that would spawn logs its podman argv (`<dir>` for the clone, `<session-id>` for the session) and stops the launch with `dry-run`. A step that is not replayed stops without running. Orphans are reported, not killed.
 
 ### A call
 
-The prompt goes on stdin. Every call passes `-p --output-format stream-json --verbose --session-id <uuid> --strict-mcp-config --json-schema <schema>`, plus `--model`, `--effort` and the role's flags. Each call runs in its own process group.
+Each attempt is a `podman run` (Permissions → A call's launch) in its own process group, with the prompt on stdin. `claude` gets `-p --output-format stream-json --verbose --session-id <uuid> --strict-mcp-config --plugin-dir /opt/plugin --tools <role tools> --dangerously-skip-permissions --json-schema <schema>`, plus `--model` and `--effort`. Before each attempt in a clone, a missing `.git/hooks` or `.git/info` is made; a `.git` that is not a directory, or a missing `.git/config`, stops the run with `runtime-error`. The `spawn` telemetry event names the container.
 
 Order inside a call:
 
@@ -568,7 +570,7 @@ Every call in a kept clone that spawned and returns a value or a null reports th
 - The `Retains:` move: `retained-artefacts-impl`.
 - A stop file, status readers and detaching: `runtime-cli-drive`.
 - The roles' content: `s2-permissions-design`.
-- Pointing calls at the proxy, and confining calls and `setup` to `hosts`: `s2-sandbox`.
+- Confining calls and `setup` to `hosts`, and gates in containers: `s2-egress-gates`.
 - Presenting `auth-failed` to the requester ("renew the credential and relaunch"): `runtime-cli-drive` and `phronithm:lsf-drive`.
 
 ### Known limits
@@ -579,7 +581,8 @@ Every call in a kept clone that spawned and returns a value or a null reports th
 - **A merge clone after a fault or stop** stays, possibly mid-merge, for the relaunch to resume; one whose integration branch has diverged from the main repo's must be removed by hand. A failed removal after the wave's merges is only logged.
 - **A failed cleanup is not retried.** A merged unit is not revisited, so a clone or worktree whose removal failed stays, with its branch; the log names it.
 - **Config a clone lacks.** Only the identity, signing and line-ending keys and the global excludes and attributes files are copied: a repo's own `filter.*` or `merge.*` drivers, or `core.fileMode`, do not reach the clone, so its commits can differ from the main checkout's. Other global config (`url.*.insteadOf`, `safe.directory`, credential helpers, `init.templateDir`) does not apply to the runtime's git in a clone.
-- **Drivers an agent defines in its own clone.** The isolation drops global and system config, not the clone's local config, which an agent can write. A filter, a `core.hooksPath` or an `include.path` an agent puts in its clone's `.git/config`, selected by its `.gitattributes`, runs under the runtime's own git there (the uncommitted check's `status`, a removal's reads), as the host user. Confining what a call can write to its clone's `.git` is `s2-sandbox`'s; until then this is open.
+- **What an agent can write in its clone's `.git`.** Its `config`, `hooks` and `info` are bound read-only, so it cannot define a filter, a `core.hooksPath` or an `include.path` that the runtime's own git there would run. `.git/lsf-global/` (the copied global excludes and attributes files) stays writable: an agent can change what the clone ignores or which attributes apply, not define a driver.
+- **Hooks copied from the host run in the container.** A hook that needs a host-only tool fails there, and the agent's commit with it.
 - **Isolation needs git 2.32.** On older git `GIT_CONFIG_GLOBAL` is ignored and the runtime's git in a clone reads global config again; nothing checks the version at launch.
 - **Global `safe.directory`.** A main repo owned by another user that relies on a global `safe.directory` fails clone creation and the gate checkout (their fetch runs isolated) with a `runtime-error` stop.
 - **Hooks in a clone see no global config.** A hook the merge step's commit or merge runs in its merge clone, and whatever it spawns, inherits the isolated environment. The identity, signing and line-ending keys are local in the clone, so the step's own commits are unaffected; a hook that reads other global config does not see it.
@@ -591,7 +594,6 @@ Every call in a kept clone that spawned and returns a value or a null reports th
 - **A forced fetch-back.** A kept clone's branch overwrites the main repo's `lsf/<plan8>/<key>` at each return and each replay while the clone exists; a commit made on that branch in the main repo instead is kept only by the reflog.
 - **A replay that fails its schema** (a changed validator, an edited record) re-runs the call. For a writer, the re-run can repeat a commit the first run made.
 - **`hosts` allows private addresses.** Only loopback, unspecified and IPv4-compatible addresses are refused: link-local (`169.254.169.254`), RFC 1918 and internal names pass. `Hosts()` is nil both before the pin and for a plan with none.
-- **A wildcard `proxy.listen`.** `0.0.0.0:0` binds every interface and `rt.Proxy().URL` names `0.0.0.0`, not an address a client can dial; `s2-boundary-decision` sets the address a container reaches.
 - **Gate checkout cost.** A gate checkout fetches the commit's whole history from the main repo, once per gated tree, under the 5-minute bound of the runtime's git; on a large repo that is per-gate time and disk, unmeasured, and a checkout past the bound fails the gate run. It has no tags or branches, so a gate that runs `git describe` against tags fails there.
 - **Large files.** The merge step compares a file over 64 MiB outside the merge's paths, before and after the conflict call, by size and modification time, not content.
 - **Session limits.** The shape of a session limit under `-p` is built from the binary's schema and interactive transcripts, not observed. The first real limit's stream is kept under `calls/`.

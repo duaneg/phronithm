@@ -27,8 +27,9 @@ import (
 
 // placement is where a call runs.
 type placement struct {
-	dir    string // the call's cwd; "" without a repo
-	kind   string // CloneKept, CloneDiscarded, or "" for no clone
+	dir    string // the call's cwd: a clone, or without a repo an empty scratch directory
+	git    bool   // dir is a clone (a merge clone included)
+	kind   string // CloneKept, CloneDiscarded, or "" for no clone the call owns
 	branch string // the branch the clone has checked out
 	dest   string // the main repo's branch a kept clone is fetched to
 }
@@ -61,19 +62,28 @@ func (rt *Runtime) placeCall(ctx context.Context, o Opts, key string, role Role)
 		if err != nil {
 			return placement{}, rt.setStop(StopRuntimeError, o.Label+": "+err.Error())
 		}
-		return placement{dir: dir}, nil
+		return placement{dir: dir, git: true}, nil
 	case rt.cfg.Repo == "":
 		if o.Isolation != "" {
 			_, err := rt.cloneArgs(o)
 			return placement{}, err
 		}
-		return placement{}, nil
+		// The runtime's own tests only: an empty directory, never the
+		// launcher's.
+		dir := filepath.Join(rt.cfg.StateDir, "scratch", key)
+		if err := os.RemoveAll(dir); err != nil {
+			return placement{}, rt.setStop(StopRuntimeError, fmt.Sprintf("%s: %v", o.Label, err))
+		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return placement{}, rt.setStop(StopRuntimeError, fmt.Sprintf("%s: %v", o.Label, err))
+		}
+		return placement{dir: dir}, nil
 	}
 	args, err := rt.cloneArgs(o)
 	if err != nil {
 		return placement{}, err
 	}
-	p := placement{kind: role.Clone, dest: branchName(args, key), branch: args.IntegrationBranch}
+	p := placement{git: true, kind: role.Clone, dest: branchName(args, key), branch: args.IntegrationBranch}
 	if o.Isolation != "" {
 		p.branch = p.dest
 	}

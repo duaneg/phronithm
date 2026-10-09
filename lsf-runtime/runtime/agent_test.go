@@ -193,8 +193,13 @@ func strippedFixture(t *testing.T) string {
 
 func TestSpawnErrorIsNotRetried(t *testing.T) {
 	cfg, _ := testConfig(t)
-	cfg.ClaudeBin = filepath.Join(t.TempDir(), "missing")
-	res, err := call(t, cfg, vOpts)
+	var res CallResult
+	var err error
+	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		rt.cfg.PodmanBin = filepath.Join(t.TempDir(), "missing")
+		res, err = rt.Call(ctx, "do the thing", vOpts)
+		return nil, err
+	})
 	if err != nil || res.Value != nil || res.Attempts != 1 || res.Class != string(classSpawnError) {
 		t.Fatalf("res %+v err %v", res, err)
 	}

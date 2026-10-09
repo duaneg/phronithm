@@ -1,13 +1,26 @@
 // Command fixturerun runs the ported orchestrator end to end on the spike
 // fixture (workflows/lsf/spike/fixture.sh: one unit, add-mean, gated by
-// node --test and a linter) under the runtime and a real, pinned claude.
-// Every stage is a model call: it costs real money, so it is not part of go
-// test. Run from lsf-runtime/: go run ./tools/fixturerun.
+// node --test and a linter) under the runtime and a real, pinned claude,
+// each call in its own podman container. Every stage is a model call: it
+// costs real money, so it is not part of go test. Run from lsf-runtime/:
+//
+//	go run ./tools/fixturerun -image <name@sha256:digest>
+//
+// The image needs node for the fixture: the reference Containerfile
+// (container/Containerfile) extended with nodejs and npm, for example
+//
+//	FROM localhost/lsf-ref@sha256:<the reference image's digest>
+//	RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm && rm -rf /var/lib/apt/lists/*
+//
+// built with podman build and named by its digest (podman image inspect
+// --format '{{.Digest}}'). Calls reach the API through the credential
+// proxy, with the live session's credentials file; the plan has no hosts.
 //
 // It exits non-zero unless the launch returns status complete, no label was
 // reused, every call's transcript records the pinned Claude Code version,
-// the fixture's main has the add-mean merge, and the fixture's gates pass
-// on main. The work dir (repo and state) is kept for inspection.
+// the fixture's main has the add-mean merge, the fixture's gates pass on
+// main, and no container of the launch is left. The work dir (repo and
+// state) is kept for inspection.
 package main
 
 import (
@@ -29,12 +42,22 @@ import (
 	lsfrt "github.com/duaneg/phronithm/lsf-runtime/runtime"
 )
 
-const pin = "2.1.289"
+const pin = "2.1.294"
+
+// options are a run's inputs.
+type options struct {
+	root, dir, example string
+	claude, version    string // the binary and its pinned version
+	podman, image      string
+	credentials        string // the live session's credentials file
+	dryRun             bool
+}
 
 // config is the launch config: the example's roles and skill rules, this
-// fixture's repo, state dir and args, the plugin at root, and caps sized for one unit (about
-// fourteen calls).
-func config(examplePath, root, dir, claude, planSha string, dryRun bool) (lsfrt.Config, error) {
+// fixture's repo, state dir and args, the plugin at root, the container,
+// the proxy, and caps sized for one unit (about fourteen calls).
+func config(o options, planSha string) (lsfrt.Config, error) {
+	examplePath, root, dir := o.example, o.root, o.dir
 	b, err := os.ReadFile(examplePath)
 	if err != nil {
 		return lsfrt.Config{}, err
@@ -45,13 +68,16 @@ func config(examplePath, root, dir, claude, planSha string, dryRun bool) (lsfrt.
 	}
 	c.StateDir = filepath.Join(dir, "state")
 	c.Repo = filepath.Join(dir, "repo")
-	c.ClaudeBin = claude
+	c.ClaudeBin, c.ClaudeVersion = o.claude, o.version
+	c.PodmanBin, c.Image = o.podman, o.image
+	c.Env = nil
+	c.Proxy = &lsfrt.ProxyConfig{Listen: "127.0.0.1:0", CredentialsFile: o.credentials}
 	c.PluginDir = root
 	c.Args, _ = json.Marshal(map[string]string{
 		"name": "stats", "planSha": planSha, "architectureDoc": "docs/architecture/stats.md", "integrationBranch": "main",
 	})
 	c.Caps = lsfrt.Caps{MaxCalls: 40, MaxCostUSD: 25, MaxWallClock: lsfrt.Duration(time.Hour)}
-	c.DryRun = dryRun
+	c.DryRun = o.dryRun
 	return c, nil
 }
 
@@ -111,23 +137,33 @@ func git(repo string, args ...string) (string, error) {
 
 func main() {
 	home, _ := os.UserHomeDir()
-	root := flag.String("repo", "..", "phronithm repository root")
-	claude := flag.String("claude", filepath.Join(home, ".local", "share", "claude", "versions", pin), "claude binary (the pinned version)")
-	dirFlag := flag.String("dir", "", "work dir (default: a new dir under the user cache dir, kept; never under /tmp)")
-	example := flag.String("config", filepath.Join("testdata", "config.example.json"), "config whose roles and skill rules the launch uses")
-	dryRun := flag.Bool("dry-run", false, "stop at the first call without spawning")
+	o := options{version: pin}
+	flag.StringVar(&o.root, "repo", "..", "phronithm repository root")
+	flag.StringVar(&o.claude, "claude", filepath.Join(home, ".local", "share", "claude", "versions", pin), "claude binary (the pinned version)")
+	flag.StringVar(&o.dir, "dir", "", "work dir (default: a new dir under the user cache dir, kept)")
+	flag.StringVar(&o.example, "config", filepath.Join("testdata", "config.example.json"), "config whose roles and skill rules the launch uses")
+	flag.StringVar(&o.podman, "podman", "podman", "podman binary")
+	flag.StringVar(&o.image, "image", "", "the calls' image, by digest (required; it needs node)")
+	flag.StringVar(&o.credentials, "credentials", filepath.Join(home, ".claude", ".credentials.json"), "the live session's credentials file")
+	flag.BoolVar(&o.dryRun, "dry-run", false, "stop at the first call without spawning")
 	flag.Parse()
-	if err := run(*root, *claude, *dirFlag, *example, *dryRun); err != nil {
+	if o.image == "" {
+		fmt.Fprintln(os.Stderr, "fixturerun: -image is required")
+		os.Exit(2)
+	}
+	if err := run(o); err != nil {
 		fmt.Fprintln(os.Stderr, "fixturerun:", err)
 		os.Exit(1)
 	}
 }
 
-func run(root, claude, dir, example string, dryRun bool) error {
-	root, err := filepath.Abs(root)
+func run(o options) error {
+	root, err := filepath.Abs(o.root)
 	if err != nil {
 		return err
 	}
+	o.root = root
+	dir, claude, dryRun := o.dir, o.claude, o.dryRun
 	if dir == "" {
 		// Not os.TempDir: the runtime refuses a launch under /tmp.
 		cache, err := os.UserCacheDir()
@@ -140,6 +176,7 @@ func run(root, claude, dir, example string, dryRun bool) error {
 		if dir, err = os.MkdirTemp(filepath.Join(cache, "lsf-fixturerun"), "run-"); err != nil {
 			return err
 		}
+		o.dir = dir
 	}
 	if tmproot.Under(dir) {
 		return fmt.Errorf("work dir %s is under /tmp or /var/tmp, where the runtime refuses to launch", dir)
@@ -162,7 +199,7 @@ func run(root, claude, dir, example string, dryRun bool) error {
 	if err != nil {
 		return err
 	}
-	cfg, err := config(example, root, dir, claude, planSha, dryRun)
+	cfg, err := config(o, planSha)
 	if err != nil {
 		return err
 	}
@@ -256,6 +293,11 @@ try { mean([]); throw new Error('mean([]) did not throw'); } catch (e) { if (!(e
 		if b, err := cmd.CombinedOutput(); err != nil {
 			problems = append(problems, fmt.Sprintf("%s on main: %v\n%s", strings.Join(gate, " "), err, b))
 		}
+	}
+	if left, err := exec.Command(o.podman, "ps", "-a", "--filter", "label=lsf.state", "--format", "{{.Names}}").Output(); err != nil {
+		problems = append(problems, fmt.Sprintf("podman ps: %v", err))
+	} else if names := strings.Fields(string(left)); len(names) > 0 {
+		problems = append(problems, fmt.Sprintf("containers left: %v", names))
 	}
 	if len(problems) > 0 {
 		return errors.New(strings.Join(problems, "; "))

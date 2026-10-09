@@ -21,9 +21,10 @@ import (
 // Runtime is one launch's host runtime: the orchestrator's agent, parallel,
 // log and args, plus journaled code steps.
 type Runtime struct {
-	cfg      Config
-	launchID string // names this launch's transcripts
-	started  time.Time
+	cfg       Config
+	launchID  string // names this launch's transcripts
+	stateHash string // labels this state dir's containers
+	started   time.Time
 
 	logMu   sync.Mutex
 	logFile *os.File
@@ -88,16 +89,24 @@ func Run(ctx context.Context, cfg Config, body func(ctx context.Context, rt *Run
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		return Summary{}, fmt.Errorf("lsf-runtime: state dir %s is in use by another launch: %w", cfg.StateDir, err)
 	}
+	stateHash, err := stateHashOf(cfg.StateDir)
+	if err != nil {
+		return Summary{}, fmt.Errorf("lsf-runtime: state dir: %w", err)
+	}
+	if cfg.ClaudeBin, err = resolveBin(cfg.ClaudeBin); err != nil {
+		return Summary{}, fmt.Errorf("lsf-runtime: claudeBin: %w", err)
+	}
 	rt := &Runtime{
-		cfg:      cfg,
-		started:  time.Now(),
-		children: map[string]int{},
-		seen:     map[string]string{},
-		sem:      make(chan struct{}, cfg.Concurrency),
-		stopCh:   make(chan struct{}),
-		killCh:   make(chan struct{}),
-		wtSem:    make(chan struct{}, 1),
-		gateSem:  make(chan struct{}, cfg.GateConcurrency),
+		cfg:       cfg,
+		stateHash: stateHash,
+		started:   time.Now(),
+		children:  map[string]int{},
+		seen:      map[string]string{},
+		sem:       make(chan struct{}, cfg.Concurrency),
+		stopCh:    make(chan struct{}),
+		killCh:    make(chan struct{}),
+		wtSem:     make(chan struct{}, 1),
+		gateSem:   make(chan struct{}, cfg.GateConcurrency),
 	}
 	rt.launchID = fmt.Sprintf("%s-%d", rt.started.UTC().Format("20060102T150405"), os.Getpid())
 	open := func(name string) (*os.File, error) {
