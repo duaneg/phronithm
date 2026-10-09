@@ -21,8 +21,9 @@
 #        dirty-transient:<path> (writes <path>, then a 529) |
 #        file:<path> (cats a stream file) | exit:<n> (exits n after its first lines) |
 #        stage:<path> (writes "resolved" to <path> and git-adds it, then ok) |
-#        nested:<marker> (commits a nested repo, sub, as a gitlink, then gives
-#        it a filter that touches <marker> and dirties it, then ok) |
+#        nested:<marker> (commits a nested repo, sub, as a gitlink with a
+#        .gitmodules ignore=none, its own filter touching <marker>, then
+#        dirties it, then ok) |
 #        probe (writes probe.txt in cwd: cwd, uid, which of .git/config,
 #        .git/hooks/x, .git/info/x and the index can be written, env, and the
 #        status of a request to $ANTHROPIC_BASE_URL with the bearer, then ok)
@@ -125,7 +126,8 @@ case "$mode" in
              git init -q sub >&2
              printf '[filter "x"]\n\tclean = touch %s && cat\n' "$m" >> sub/.git/config
              echo '* filter=x' > sub/.gitattributes; echo data > sub/f
-             g -C sub add -A && g -C sub commit -q -m sub && g add sub && g commit -q -m gitlink || code=2
+             printf '[submodule "sub"]\n\tpath = sub\n\tignore = none\n' > .gitmodules
+             g -C sub add -A && g -C sub commit -q -m sub && g add sub .gitmodules && g commit -q -m gitlink || code=2
              rm -f "$m" # made by the commits above, the stub's own git
              echo more >> sub/f; touch -d 2000-01-01 sub/f
              [ "$code" = 0 ] && result_ok '{"verdict":"pass","n":3}' ;;

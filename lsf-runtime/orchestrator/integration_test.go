@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/duaneg/phronithm/lsf-runtime/internal/testenv"
 	"github.com/duaneg/phronithm/lsf-runtime/orchestrator/orchtest"
 	"github.com/duaneg/phronithm/lsf-runtime/plan"
 	lsfrt "github.com/duaneg/phronithm/lsf-runtime/runtime"
@@ -42,7 +41,7 @@ func TestMain(m *testing.M) {
 	if table := os.Getenv("LSF_FAKE_CLAUDE_TABLE"); table != "" && slices.Contains(os.Args, "--session-id") {
 		os.Exit(fakeClaude(table))
 	}
-	os.Exit(testenv.Main(m))
+	os.Exit(m.Run())
 }
 
 func fakeClaude(table string) int {

@@ -1,17 +1,12 @@
 package lsfrt
 
 import (
-	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/duaneg/phronithm/lsf-runtime/internal/tmproot"
 )
 
 func writeConfig(t *testing.T, body string) string {
@@ -151,46 +146,25 @@ func TestExampleConfigLoads(t *testing.T) {
 	}
 }
 
-// A launch refuses a repo or state dir under /tmp or /var/tmp, written
-// there or reached by a symlink, before it creates anything.
-func TestLaunchRefusesTempRoots(t *testing.T) {
-	links := t.TempDir()
-	var paths []string
-	for i, root := range []string{"/tmp", "/var/tmp"} {
-		paths = append(paths, filepath.Join(root, "lsf-refusal-test", "x"))
-		if fi, err := os.Stat(root); err != nil || !fi.IsDir() {
-			continue
-		}
-		l := filepath.Join(links, "l"+strconv.Itoa(i))
-		if err := os.Symlink(root, l); err != nil {
-			t.Fatal(err)
-		}
-		paths = append(paths, l, filepath.Join(l, "not-yet", "made"))
+// A launch whose repo and state dir are under the temp dir runs: no
+// container sees the host's /tmp, so the refusal of the Bash-sandbox design
+// is gone.
+func TestLaunchUnderTempDir(t *testing.T) {
+	cfg, stub := testConfig(t)
+	base, err := os.MkdirTemp(os.TempDir(), "lsf-tmp-launch-")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, p := range paths {
-		for _, field := range []string{"repo", "stateDir"} {
-			cfg, _ := testConfig(t)
-			if field == "repo" {
-				cfg.Repo = p
-			} else {
-				cfg.StateDir = p
-			}
-			ran := false
-			_, err := Run(context.Background(), cfg, func(context.Context, *Runtime) (json.RawMessage, error) { ran = true; return nil, nil })
-			if err == nil || ran || !strings.Contains(err.Error(), field+" "+p+" is under /tmp or /var/tmp") {
-				t.Errorf("%s %s: err %v, ran %v", field, p, err, ran)
-			}
-		}
+	t.Cleanup(func() { os.RemoveAll(base) })
+	repo := filepath.Join(base, "repo")
+	if err := os.Rename(cfg.Repo, repo); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat("/tmp/lsf-refusal-test"); err == nil {
-		t.Error("the refused launch created its state dir")
-	}
-}
-
-// Tests run with TMPDIR outside the temp roots (testenv.Main).
-func TestTestTempDirNotUnderTempRoot(t *testing.T) {
-	if d := t.TempDir(); tmproot.Under(d) {
-		t.Fatalf("t.TempDir() %s is under a temp root", d)
+	cfg.Repo, cfg.StateDir = repo, filepath.Join(base, "state")
+	t.Setenv("STUB_SCRIPT", "commit:x")
+	res, err := call(t, cfg, vOpts)
+	if err != nil || res.Value == nil || stubCount(t, stub) != 1 {
+		t.Fatalf("res %+v err %v", res, err)
 	}
 }
 

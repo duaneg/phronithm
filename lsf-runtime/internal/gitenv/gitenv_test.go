@@ -53,6 +53,11 @@ func TestCloneGitDir(t *testing.T) {
 		t.Errorf("emptied .git: %v", err)
 	}
 	os.WriteFile(filepath.Join(d, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644)
+	if err := CloneGitDir(d); err == nil || !strings.Contains(err.Error(), "no objects") {
+		t.Errorf("HEAD kept, objects gone: %v", err)
+	}
+	os.MkdirAll(filepath.Join(d, ".git", "objects"), 0o755)
+	os.MkdirAll(filepath.Join(d, ".git", "refs"), 0o755)
 	if err := CloneGitDir(d); err != nil {
 		t.Errorf("plain: %v", err)
 	}
@@ -67,5 +72,18 @@ func TestCloneGitDir(t *testing.T) {
 	os.WriteFile(filepath.Join(f, ".git"), []byte("gitdir: /x\n"), 0o644)
 	if err := CloneGitDir(f); err == nil || !strings.Contains(err.Error(), "not a directory") {
 		t.Errorf("gitfile: %v", err)
+	}
+}
+
+func TestIgnoreSubmodules(t *testing.T) {
+	for _, tc := range []struct{ in, want []string }{
+		{[]string{"--no-optional-locks", "status", "-z"}, []string{"--no-optional-locks", "status", "--ignore-submodules=all", "-z"}},
+		{[]string{"diff", "--name-only", "HEAD"}, []string{"diff", "--ignore-submodules=all", "--name-only", "HEAD"}},
+		{[]string{"rev-parse", "HEAD"}, []string{"rev-parse", "HEAD"}},
+		{[]string{"commit", "-m", "diff"}, []string{"commit", "-m", "diff"}},
+	} {
+		if got := IgnoreSubmodules(tc.in); !slices.Equal(got, tc.want) {
+			t.Errorf("%q: %q", tc.in, got)
+		}
 	}
 }

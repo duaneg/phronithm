@@ -60,7 +60,7 @@ func TestStubRun(t *testing.T) {
 	if _, _, code := podman(t, []string{"STUB_PODMAN_RUN_EXIT=127"}, "run", "--name", "c3", "img", "true"); code != 127 {
 		t.Errorf("STUB_PODMAN_RUN_EXIT: exit %d", code)
 	}
-	if out, _, code := podman(t, nil, "run", "--name", "s", "--label", "lsf.smoke=1", "-v", Claude()+":/opt/claude/claude:ro", "img", "/bin/sh", "-c", "x"); code != 0 || out != "0.0.0-stub (Claude Code)\n" {
+	if out, _, code := podman(t, nil, "run", "--name", "s", "--label", "lsf.smoke=1", "-v", Claude()+":/opt/claude/claude:ro", "img", "/bin/sh", "-c", "x"); code != 0 || out != "lsf-smoke-claude 0.0.0-stub (Claude Code)\n" {
 		t.Errorf("smoke: exit %d %q", code, out)
 	}
 }

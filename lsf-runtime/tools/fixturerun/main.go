@@ -37,7 +37,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/duaneg/phronithm/lsf-runtime/internal/tmproot"
 	"github.com/duaneg/phronithm/lsf-runtime/orchestrator"
 	lsfrt "github.com/duaneg/phronithm/lsf-runtime/runtime"
 )
@@ -165,7 +164,7 @@ func run(o options) error {
 	o.root = root
 	dir, claude, dryRun := o.dir, o.claude, o.dryRun
 	if dir == "" {
-		// Not os.TempDir: the runtime refuses a launch under /tmp.
+		// Kept for inspection: not os.TempDir, which may be cleared.
 		cache, err := os.UserCacheDir()
 		if err != nil {
 			return fmt.Errorf("no default work dir (%v): pass -dir", err)
@@ -177,9 +176,6 @@ func run(o options) error {
 			return err
 		}
 		o.dir = dir
-	}
-	if tmproot.Under(dir) {
-		return fmt.Errorf("work dir %s is under /tmp or /var/tmp, where the runtime refuses to launch", dir)
 	}
 	// A state dir from an earlier launch would replay its journal and mix
 	// its transcripts into the version check.

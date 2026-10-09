@@ -14,8 +14,6 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
-
-	"github.com/duaneg/phronithm/lsf-runtime/internal/tmproot"
 )
 
 // Runtime is one launch's host runtime: the orchestrator's agent, parallel,
@@ -65,11 +63,6 @@ type Runtime struct {
 func Run(ctx context.Context, cfg Config, body func(ctx context.Context, rt *Runtime) (json.RawMessage, error)) (Summary, error) {
 	if err := cfg.prepare(); err != nil {
 		return Summary{}, fmt.Errorf("lsf-runtime: config: %w", err)
-	}
-	for _, d := range []struct{ name, path string }{{"repo", cfg.Repo}, {"stateDir", cfg.StateDir}} {
-		if d.path != "" && tmproot.Under(d.path) {
-			return Summary{}, fmt.Errorf("lsf-runtime: %s %s is under /tmp or /var/tmp, which the Bash sandbox leaves writable; move it", d.name, d.path)
-		}
 	}
 	if cfg.Repo != "" {
 		if err := checkRepo(cfg); err != nil {
@@ -137,7 +130,7 @@ func Run(ctx context.Context, cfg Config, body func(ctx context.Context, rt *Run
 	}
 	defer rt.telFile.Close()
 
-	if err := rt.checkContainerHost(); err != nil {
+	if err := rt.checkContainerHost(ctx); err != nil {
 		rt.Log("launch check: " + err.Error())
 		return Summary{}, fmt.Errorf("lsf-runtime: launch check: %w", err)
 	}

@@ -332,11 +332,14 @@ func cloneRun(ctx context.Context, dir string, args ...string) error {
 }
 
 func cloneCmd(ctx context.Context, dir string, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "git", append(slices.Clone(gitenv.CloneArgs), args...)...)
+	cmd := exec.CommandContext(ctx, "git", append(slices.Clone(gitenv.CloneArgs), gitenv.IgnoreSubmodules(args)...)...)
 	cmd.Dir = dir
 	cmd.Env = append(gitenv.Env(true), gitenv.Ceiling(dir))
 	if len(args) == 0 || (args[0] != "clone" && args[0] != "init") { // these two make the clone, from its parent
 		cmd.Err = gitenv.CloneGitDir(dir) // Start returns it: git never runs
+		if cmd.Err == nil {
+			cmd.Err = gitenv.CloneGitlinks(dir)
+		}
 	}
 	return cmd
 }

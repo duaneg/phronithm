@@ -180,7 +180,7 @@ cmd_run() {
       [ "${rest%%:*}" = /opt/claude/claude ] && claude=${v%%:*}
     done
     [ -n "$claude" ] || die "run: smoke without a claude bind"
-    "$claude" --version </dev/null || exit 1
+    echo "lsf-smoke-claude $("$claude" --version </dev/null)" || exit 1
     exit "${STUB_PODMAN_SMOKE_EXIT:-0}"
   fi
   if [ -n "${STUB_PODMAN_RUN_EXIT:-}" ]; then

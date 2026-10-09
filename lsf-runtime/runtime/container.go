@@ -227,11 +227,12 @@ func resolveBin(name string) (string, error) {
 const smokeTimeout = 2 * time.Minute
 
 // smokeScript is the smoke container's check, run by /bin/sh in a
-// throwaway repo bound as a call's clone is: claude's version first, then
+// throwaway repo bound as a call's clone is: claude's version on a marked
+// line (podman may write warnings first), then
 // the tools a call relies on, a write to the index, and the read-only .git
 // binds and the .git mountpoint holding.
 const smokeScript = `set -e
-/opt/claude/claude --version
+echo "lsf-smoke-claude $(/opt/claude/claude --version)"
 bash -c true
 git --version >/dev/null
 rg --version >/dev/null
@@ -247,12 +248,14 @@ if mv .git .git.moved 2>/dev/null; then echo ".git can be renamed" >&2; exit 1; 
 // Permissions → Image): podman present and rootless, pasta present, the
 // image present, and a smoke container that reports the pinned claude and
 // runs bash, git and rg with a call's mounts. A dry run runs it too.
-func (rt *Runtime) checkContainerHost() error {
+func (rt *Runtime) checkContainerHost(ctx context.Context) error {
 	if _, err := exec.LookPath(rt.cfg.PodmanBin); err != nil {
 		return fmt.Errorf("podman: %w", err)
 	}
+	qctx, cancel := context.WithTimeout(ctx, rmTimeout)
+	defer cancel()
 	info := func(format string) (string, error) {
-		out, err := exec.Command(rt.cfg.PodmanBin, "info", "--format", format).Output()
+		out, err := exec.CommandContext(qctx, rt.cfg.PodmanBin, "info", "--format", format).Output()
 		if err != nil {
 			return "", fmt.Errorf("podman info: %w%s", err, stderrOf(err))
 		}
@@ -275,10 +278,10 @@ func (rt *Runtime) checkContainerHost() error {
 	if fi, err := os.Stat(pasta); err != nil || fi.IsDir() {
 		return fmt.Errorf("pasta: %s is not an executable on this host", pasta)
 	}
-	if out, err := exec.Command(rt.cfg.PodmanBin, "image", "exists", rt.cfg.Image).CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(qctx, rt.cfg.PodmanBin, "image", "exists", rt.cfg.Image).CombinedOutput(); err != nil {
 		return fmt.Errorf("image %s is not present (podman image exists: %v %s); build it and name it by digest", rt.cfg.Image, err, strings.TrimSpace(string(out)))
 	}
-	return rt.smoke()
+	return rt.smoke(ctx)
 }
 
 func stderrOf(err error) string {
@@ -290,13 +293,13 @@ func stderrOf(err error) string {
 }
 
 // smoke runs the smoke container in <stateDir>/smoke, removed afterwards.
-func (rt *Runtime) smoke() error {
+func (rt *Runtime) smoke(parent context.Context) error {
 	dir := filepath.Join(rt.cfg.StateDir, "smoke")
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("smoke: %w", err)
 	}
 	defer os.RemoveAll(dir)
-	ctx, cancel := context.WithTimeout(context.Background(), smokeTimeout)
+	ctx, cancel := context.WithTimeout(parent, smokeTimeout)
 	defer cancel()
 	init := exec.CommandContext(ctx, "git", "init", "-q", dir)
 	init.Env = gitenv.Env(true)
@@ -313,28 +316,28 @@ func (rt *Runtime) smoke() error {
 	})...)
 	cmd.Env = rt.podmanEnv()
 	cmd.WaitDelay = 5 * time.Second
-	out, err := cmd.CombinedOutput()
+	var stdout, stderr tailBuffer
+	stdout.max, stderr.max = 4096, 2048
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
 	if ctx.Err() != nil {
 		if rerr := rt.removeContainer(name); rerr != nil {
 			rt.Log("smoke: " + rerr.Error())
 		}
-		return fmt.Errorf("smoke container timed out after %v: %s", smokeTimeout, tail(out))
+		return fmt.Errorf("smoke container did not finish (%v): %s %s", context.Cause(ctx), stdout.String(), stderr.String())
 	}
 	if err != nil {
-		return fmt.Errorf("smoke container failed (%v): %s", err, tail(out))
+		return fmt.Errorf("smoke container failed (%v): %s %s", err, strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()))
 	}
-	first, _, _ := strings.Cut(string(out), "\n")
-	if f := strings.Fields(first); len(f) == 0 || f[0] != rt.cfg.ClaudeVersion {
-		return fmt.Errorf("smoke container: claude --version reported %q, not claudeVersion %s", strings.TrimSpace(first), rt.cfg.ClaudeVersion)
+	var version string
+	for _, l := range strings.Split(stdout.String(), "\n") {
+		if v, ok := strings.CutPrefix(l, "lsf-smoke-claude "); ok {
+			version = strings.TrimSpace(v)
+		}
 	}
-	rt.event("smoke", map[string]any{"claude": strings.TrimSpace(first)})
+	if f := strings.Fields(version); len(f) == 0 || f[0] != rt.cfg.ClaudeVersion {
+		return fmt.Errorf("smoke container: claude --version reported %q, not claudeVersion %s", version, rt.cfg.ClaudeVersion)
+	}
+	rt.event("smoke", map[string]any{"claude": version})
 	return nil
-}
-
-// tail is the last 2 KiB of out, trimmed.
-func tail(out []byte) string {
-	if len(out) > 2048 {
-		out = out[len(out)-2048:]
-	}
-	return strings.TrimSpace(string(out))
 }

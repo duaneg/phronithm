@@ -344,3 +344,30 @@ func TestLiveLaunchChecks(t *testing.T) {
 		})
 	}
 }
+
+// L8: with the repo and state dir under /tmp, a call's clone, bound at its
+// host path, is not shadowed by the container's --tmpfs /tmp.
+func TestLiveTmpPlacement(t *testing.T) {
+	cfg := liveConfig(t)
+	base, err := os.MkdirTemp("/tmp", "lsf-live-tmp-")
+	if err != nil {
+		t.Skip("no /tmp: ", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(base) })
+	repo := filepath.Join(base, "repo")
+	if err := os.Rename(cfg.Repo, repo); err != nil {
+		if out, cerr := exec.Command("git", "clone", "-q", cfg.Repo, repo).CombinedOutput(); cerr != nil {
+			t.Fatalf("%v %s", cerr, out)
+		}
+	}
+	cfg.Repo, cfg.StateDir = repo, filepath.Join(base, "state")
+	t.Cleanup(func() { liveReap(t, cfg) })
+	t.Setenv("STUB_SCRIPT", "commit:tmp.txt")
+	res, err := call(t, cfg, vOpts)
+	if err != nil || res.Value == nil {
+		t.Fatalf("res %+v err %v", res, err)
+	}
+	if out, err := exec.Command("git", "-C", cfg.Repo, "show", res.Branch+":tmp.txt").CombinedOutput(); err != nil {
+		t.Errorf("commit not fetched back: %v %s", err, out)
+	}
+}

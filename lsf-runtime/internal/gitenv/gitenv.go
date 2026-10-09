@@ -5,6 +5,7 @@ package gitenv
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -68,7 +69,56 @@ func CloneGitDir(dir string) error {
 	if fi, err := os.Lstat(filepath.Join(g, "HEAD")); err != nil || !fi.Mode().IsRegular() {
 		return fmt.Errorf("%s has no HEAD file; it is not the clone's git directory", g)
 	}
+	for _, d := range []string{"objects", "refs"} {
+		if fi, err := os.Lstat(filepath.Join(g, d)); err != nil || !fi.IsDir() {
+			return fmt.Errorf("%s has no %s directory; it is not the clone's git directory", g, d)
+		}
+	}
 	return nil
+}
+
+// CloneGitlinks refuses a clone whose index or HEAD holds a gitlink: a
+// repository nested in it, which an agent made (a main repo with
+// submodules is refused at launch). A command comparing the work tree
+// looks inside a gitlink, a .gitmodules ignore setting overriding the
+// config's default, and runs the nested repository's own filter on the
+// host. ls-files and ls-tree read only the index and objects.
+func CloneGitlinks(dir string) error {
+	for _, args := range [][]string{{"ls-files", "--stage", "-z"}, {"ls-tree", "-r", "-z", "HEAD"}} {
+		cmd := exec.Command("git", append(slices.Clone(CloneArgs), args...)...)
+		cmd.Dir = dir
+		cmd.Env = append(Env(true), Ceiling(dir))
+		out, err := cmd.Output()
+		if err != nil {
+			if args[0] == "ls-tree" && exec.Command("git", "-C", dir, "rev-parse", "-q", "--verify", "HEAD").Run() != nil {
+				continue // an unborn HEAD has no tree
+			}
+			return fmt.Errorf("git %s in %s: %w", args[0], dir, err)
+		}
+		for _, rec := range strings.Split(string(out), "\x00") {
+			if strings.HasPrefix(rec, "160000 ") {
+				_, path, _ := strings.Cut(rec, "\t")
+				return fmt.Errorf("%s holds a nested repository (gitlink %s); the runtime's git does not run there", dir, path)
+			}
+		}
+	}
+	return nil
+}
+
+// IgnoreSubmodules adds --ignore-submodules=all after a status or diff
+// subcommand: on the command line it overrides a .gitmodules ignore
+// setting, which the config default does not.
+func IgnoreSubmodules(args []string) []string {
+	for i, a := range args {
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		if a == "status" || a == "diff" {
+			return slices.Concat(args[:i+1], []string{"--ignore-submodules=all"}, args[i+1:])
+		}
+		return args
+	}
+	return args
 }
 
 // CloneArgs are the options the runtime's git takes in a clone, before the
