@@ -2,15 +2,15 @@
 
 ## Summary
 
-A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 40 units, eighteen complete; critical path 9 units through the S2 build, distribution and the serialised orchestrator stream. Base commit `b3dac6a`.
+A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 43 units, eighteen complete; critical path 11 units through the container probe, the boundary decision, the S2 build, distribution and the serialised orchestrator stream. Base commit `b3dac6a`.
 
 The postmortem's problems are taken as accurate for archipeligo. The proposals in [lsf-improvements](../design/lsf-improvements.md) are candidate options, not designs: every decision unit states its problem without a solution, checks whether the problem holds outside archipeligo, and weighs the proposal against alternatives that include doing nothing.
 
 The programme is complete when every row of the problem register has a disposition (fixed, with the commit; declined, with the reason; or deferred to a named successor), the `lsf-runtime` tests pass, and the shakedown fixture runs to `complete`.
 
-The substrate is S2, a host runtime running the orchestrator through headless `claude -p` calls, confirmed by `substrate-spike`. The runtime and the orchestrator are written in Go (`runtime-language-design`, requester verdict 2026-10-06; JavaScript and TypeScript excluded), for Linux and macOS; the orchestrator is ported, under `lsf-runtime/`. The Workflow script stays the supported Phase 3 path, under `lsf-substrate.md`'s interim policy, until `script-retirement`.
+The substrate is S2, a host runtime running the orchestrator through headless `claude -p` calls, confirmed by `substrate-spike`. The runtime and the orchestrator are written in Go (`runtime-language-design`, requester verdict 2026-10-06; JavaScript and TypeScript excluded), for Linux only (requester, 2026-10-09); the orchestrator is ported, under `lsf-runtime/`. The Workflow script stays the supported Phase 3 path, under `lsf-substrate.md`'s interim policy, until `script-retirement`.
 
-Key risks: the S2 build is a conjectured estimate and leads the critical path; six units wait on a requester verdict, so requester attention, not agent time, bounds the schedule; and the evidence for generality is one other project (cartomancer-v2), all code units.
+Key risks: the permission boundary is reopened (B2 or a container per call), so the rest of the S2 build waits on a probe and a verdict; the S2 build is a conjectured estimate; six units wait on a requester verdict, so requester attention, not agent time, bounds the schedule; and the evidence for generality is one other project (cartomancer-v2), all code units.
 
 Units marked **provisional** have entries the re-plan rewrites when the design unit they depend on completes. A design that declines to act retires its provisional units, with the reason in the register.
 
@@ -117,18 +117,57 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Done condition**: `docs/design/lsf-session-role.md` is committed. It decides what analysis precedes a question to the requester, when a recommendation may be made and what it must state, the model tier, the route from repeated stops to an investigation, and whether gates may be cleared ahead of the stop. It is replayed against postmortem §E's four cases (the 41-seed question, "Keep baseline", the three stage-1 stops, the three pre-clearable gates). Since P-E1, P-E3 to P-E7 and P-E9 also occurred on cartomancer-v2 in sessions driven without `phronithm:lsf-drive`, it states whether the decided role binds only `phronithm:lsf-drive` or any session driving a run. The requester's verdict is recorded.
 - **Description**: Postmortem §E "Compressed decisions", "A recommendation without its basis", "Options inside a failing frame" and "Pre-clearable gates".
 
+### container-probe
+- **Type**: design
+- **Risk**: medium — the 15-call cap gives n = 1 per paid cell; the B2 results it is weighed against are n = 1–2
+- **Clarity**: exploratory
+- **Iteration**: write-once
+- **Effort**: medium
+- **Scope**: `docs/investigations/container-probe-results.md`, `docs/investigations/container-probe`
+- **Publishes**: the container option's result per cell, the image route it exercised, and its per-call start cost
+- **Depends on**: s2-permissions-design (knowledge, the B2 probe suite, harness and fixture the cells repeat)
+- **External gates**: `podman` (environment, 6.1.3, rootless; not installed on 2026-10-09); `claude-code-headless` (environment, Claude Code 2.1.294)
+- **Done condition**: The record is committed with its cells and the cap of 15 paid calls fixed before the first call and stated as such, and the calls spent reported. Under rootless podman 6.1.3, each call runs in its own container holding only its clone read-write and the pinned `claude` and plugin read-only, with the credential held in a host proxy. In that configuration: the spike fixture's implement stage commits and its stream reaches the host's stdout intact; the B2 suite's settings, branch, egress, canary, token and engine-socket probes each run once with the outcome recorded; Bash reaches one declared package registry through an allow-list egress proxy and is refused an undeclared host; a hostile gate in a container with no network finds the environment and file canaries absent and cannot write outside its checkout; a kill of the call's process, as the runtime kills one, leaves no process or container behind; files the call writes in its clone are owned by the invoking user and fetch back; and the per-call start overhead is measured beside B2's. It exercises one route for getting the pinned `claude` and a project toolchain into the container end to end, and states the alternatives with what each costs. For each item of the Permissions section's Runtime changes, it states whether a container keeps, replaces or drops it. `phronithm:critique` passes at the gate bar.
+- **Description**: Run with `phronithm:investigate`. B2's rejection of containers rests on `ic` alone, rejected for tool-specific reasons (`s2-sandbox` completion report). The `s2-permissions` harness (`run.sh`, `inject-proxy.py`, `listener.py`, the prompts) is the reference; the proxy must listen where the container reaches it, not only on host loopback. Zero-cost cells (gate, kill, ownership, start cost) run before any paid call. Linux only (requester, 2026-10-09). **Flag:** eight cells exceed the planned-steps bound; each is a short probe in one harness repeating a reference suite, so the excess is not context.
+
+### s2-boundary-decision
+- **Type**: design
+- **Risk**: high — decides the boundary every call and gate runs in, and reverses a decided design if the container is chosen
+- **Clarity**: exploratory — one open decision: B2, or a container per call and per gate
+- **Iteration**: write-once
+- **Effort**: medium
+- **Scope**: `docs/design/lsf-runtime.md::permissions`
+- **Publishes**: the decided boundary for agent calls and declared gates, its launch, and the runtime changes it needs with their carrier
+- **Depends on**: container-probe (knowledge, the container option's results); s2-permissions-design (design, B2 and its evidence as the incumbent)
+- **External gates**: `requester-verdict` (organisational)
+- **Done condition**: The Permissions section is revised and committed. It weighs B2 against a container per call and per gate on both probes' evidence and against the requester's goal ("whatever works, is simple, and robust"). For each it counts the moving parts the runtime must own (settings, flags, masks and workarounds; or an image, the engine invocation and an egress proxy) and the known limits it leaves. For the chosen option it states the launch of an agent call and of a declared gate, the credential path, and how Bash and `setup` reach only the gate block's `hosts`; for a container, how the pinned `claude` and the project toolchain reach the container and how what they run from is pinned. It is scoped to Linux. It records the 2026-10-09 scoping decisions (the 401 stop, the plain-clone gate checkout, the `hosts` pin) as standing, lists the runtime changes left after `s2-boundary-common`, and names `s2-sandbox` as their carrier. The requester's verdict is recorded.
+- **Description**: Reopens `s2-permissions-design`'s B2 verdict (requester, 2026-10-09). The re-plan after it rewrites `s2-sandbox` for the chosen boundary and re-gates it and `shakedown-fixture`: `srt` and `bubblewrap` under B2, `podman` and the image under a container.
+
+### s2-boundary-common
+- **Type**: feature
+- **Risk**: high — the proxy holds the live credential, and a proxy fault fails every call
+- **Clarity**: specified — the 401 decision is taken (requester, 2026-10-09)
+- **Iteration**: write-once
+- **Effort**: medium
+- **Scope**: `lsf-runtime/runtime`, `lsf-runtime/orchestrator`, `lsf-runtime/plan/gates.go`, `docs/plan-graph.md::gate-block`, `skills/breakdown/SKILL.md::phase-1`, `docs/design/lsf-runtime.md::runtime`
+- **Publishes**: the credential proxy, started, held and stopped with a launch on a listen address the launch gives; the gate block's `hosts` and its launch pin; the plain-clone gate checkout; git config isolation in clones
+- **Depends on**: s2-clones (logical, the clones and the gate checkout; serialises the runtime and orchestrator files); s2-permissions-design (design, Credential proxy, Network, and Declared gates' gate block change)
+- **External gates**: `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`); `git` (environment, 2.38 or later; 2.54.0 probed)
+- **Done condition**: The credential proxy, a Go port of the `s2-permissions` harness's `inject-proxy.py`, starts, holds and stops with the launch on the listen address the launch gives. It refuses a request whose bearer is not the launch's placeholder, an absent or empty bearer included; substitutes the live token; re-reads the credentials file when it changes; and streams unbuffered. A call failing 401 on an expired token with no refresh stops the run and is not journaled, so a relaunch resumes it (requester decision, 2026-10-09). The runtime's and the orchestrator's own git in a clone run with `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`, so `.gitattributes` selects only drivers in the clone's local config; a test shows a filter defined globally and selected from a clone's `.gitattributes` does not run in the runtime's `status` (requester decision, 2026-10-09). The declared-gate checkout is a plain clone, not a worktree (requester decision, 2026-10-09). The `lsf-gates` parser takes `hosts`, alone or beside gate commands; a block holding `hosts` alone leaves gate handling as for a plan with no block; a loopback entry fails the load. `hosts` and the gate block are pinned from the plan at the launch's `args.planSha` before any agent call, and every load, the first included, compares against the pin and stops on `declared-gates-changed` (requester decision, 2026-10-09). `docs/plan-graph.md`'s Gate block and `phronithm:breakdown`'s Phase 1 gate paragraph name `hosts`, the paragraph asking for the hosts the project's builds and tests fetch from. Tests cover the proxy's refusal, substitution, re-read and streaming, the 401 stop and its resume, and the pin's first-load comparison. The tests pass.
+- **Description**: The half of the former `s2-sandbox` that either boundary needs (`s2-sandbox` completion report, Discoveries; requester decision, 2026-10-09). No call is confined by it: calls use the proxy and `hosts` once `s2-sandbox` launches them inside the boundary. The pin closes the gap where the decision re-plan could widen its own network (D27's first-load baseline); it touches `loop.go`, `gates.go`, the `Runtime` interface and `orchtest`. **Flag:** four surfaces exceed the surface bound; outside `lsf-runtime/runtime` and the orchestrator's pin, the parser change is one field and the documents a few lines each, so the excess is not context.
+
 ### s2-sandbox
 - **Type**: feature
-- **Risk**: high — the proxy holds the live credential, and a launch or proxy fault fails every call
-- **Clarity**: exploratory — one open decision: whether a call failing with 401 on an expired, unrefreshed token becomes a stop (Permissions, Credential proxy)
+- **Risk**: high — a launch fault fails every call; provisional on `s2-boundary-decision`
+- **Clarity**: exploratory
 - **Iteration**: write-once
 - **Effort**: large
-- **Scope**: `lsf-runtime/runtime`, `lsf-runtime/orchestrator/git.go`, `lsf-runtime/plan/gates.go`, `lsf-runtime/tools/fixturerun`, `docs/plan-graph.md::gate-block`, `skills/breakdown/SKILL.md::phase-1`, `docs/design/lsf-runtime.md::runtime`, `docs/design/lsf-runtime.md::permissions`
-- **Publishes**: the sandboxed call launch; the credential proxy; declared gates under `srt`; the gate block's `hosts`
-- **Depends on**: s2-clones (logical, the clones the sandbox's `denyRead` and `allowWrite` name; serialises the runtime files); s2-permissions-design (design, A call's launch, Credential proxy and Declared gates)
+- **Scope**: `lsf-runtime/runtime`, `lsf-runtime/tools/fixturerun`, `docs/design/lsf-runtime.md::runtime`, `docs/design/lsf-runtime.md::permissions`
+- **Publishes**: the bounded call launch; declared gates and `setup` inside the boundary
+- **Depends on**: s2-boundary-decision (design, the decided boundary and its launch); s2-boundary-common (logical, the proxy, `hosts` and its pin, the plain-clone gate checkout; serialises the runtime files); s2-clones (logical, the clones the boundary confines)
 - **External gates**: `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`); `claude-code-headless` (environment, Claude Code 2.1.294); `sandbox-runtime` (environment, `srt` 0.0.79); `bubblewrap` (environment, 0.13.0)
-- **Done condition**: Runtime changes 3–6 of the Permissions section, less what `s2-clones` carries. Each call gets the settings, flags and replaced environment of A call's launch, with a config `env` passthrough list and extra `denyRead` paths. The credential proxy starts, holds and stops with the launch: it refuses a request whose bearer is not the launch's placeholder, substitutes the live token, re-reads the credentials file when it changes, and streams unbuffered. The unit decides whether a 401 with no refresh becomes a stop and records it in Credential proxy. In every clone, the merge clone included, Bash sees `.git/config`, `.git/hooks` and `.git/info` read-only, and the conflict call's `allowWrite` names the merge clone. The runtime's and the orchestrator's own git in a clone run with `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`, so `.gitattributes` selects only drivers in the clone's local config (requester decision, 2026-10-09); a test shows a filter defined globally and selected from a clone's `.gitattributes` does not run in the runtime's `status`. The `deny` rules `pluginDir` is substituted into match the plugin root whatever symlinks or glob characters its path holds. Declared gates and `setup` run under `srt` 0.0.79 with the filesystem, network and environment Declared gates gives. Every agent call's Bash, writer or reviewer, and `setup` reach only the gate block's `hosts`, and gate commands none, as Network gives. The `lsf-gates` parser takes `hosts`, alone or beside gate commands; a block holding `hosts` alone leaves gate handling as for a plan with no block; a loopback entry fails the load; a change to `hosts` stops on `declared-gates-changed`. `docs/plan-graph.md`'s Gate block and `phronithm:breakdown`'s Phase 1 gate paragraph name it, the paragraph asking for the hosts the project's builds and tests fetch from. Tests cover the proxy's refusal, substitution and streaming, and each call's argv, environment and settings. `tools/fixturerun` runs the spike fixture end to end under the decided configuration on 2.1.294, and the streams in `lsf-runtime/testdata/streams/` are re-checked against 2.1.294 (R17). A live check shows sandboxed Bash fetching from a declared package registry and refused an undeclared host. The tests pass.
-- **Description**: The second half of the Permissions section's Runtime changes. The `s2-permissions` harness (`run.sh`'s launch, `inject-proxy.py`) is the reference for the launch and the proxy. Disposes of P-C5 and P-C6. The clause on clones' git comes from `s2-clones`' discoveries: an agent can select a filter from `.gitattributes`, which stays writable, and the runtime's next `git status` would run it outside any sandbox. **Flag:** six surfaces exceed the surface bound; outside `lsf-runtime/runtime`, the orchestrator change is the git helper's environment, the parser change one field, the fixture run one configuration, and the documents a few lines each, so the excess is not context.
+- **Done condition**: Every agent call, every declared gate and `setup` run inside the boundary `s2-boundary-decision` decides, launched as its Permissions section states, with a config `env` passthrough list and extra hidden paths. Each call reaches the API only through `s2-boundary-common`'s proxy, with the placeholder bearer. In every clone, the merge clone included, Bash sees `.git/config`, `.git/hooks` and `.git/info` read-only, and the conflict call can write the merge clone. No call can write the plugin root, whatever symlinks or glob characters its path holds, and every call can read it. Every agent call's Bash, writer or reviewer, and `setup` reach only the gate block's `hosts`, and gate commands none. Tests cover each call's argv, environment and boundary configuration. `tools/fixturerun` runs the spike fixture end to end under the decided boundary on 2.1.294, and the streams in `lsf-runtime/testdata/streams/` are re-checked against 2.1.294 (R17). A live check shows Bash fetching from a declared package registry and refused an undeclared host. The tests pass.
+- **Description**: **Provisional** on `s2-boundary-decision`: the re-plan after it rewrites this entry, its gates and its effort for the chosen boundary. Disposes of P-C5 and P-C6. The reference harness is `s2-permissions` under B2 and `container-probe` under a container. **Flag:** three surfaces exceed the surface bound; the fixture run is one configuration and the documents a few lines each, so the excess is not context.
 
 ### retained-artefacts-impl
 - **Type**: feature
@@ -151,7 +190,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Effort**: medium
 - **Scope**: `lsf-runtime/cli`, `skills/lsf-drive/SKILL.md::launch`, `skills/lsf-drive/SKILL.md::relaunch`, `skills/lsf-drive/SKILL.md::startup`, `docs/design/lsf-runtime.md::cli`
 - **Publishes**: the runtime CLI (launch, status, pause, resume, watch)
-- **Depends on**: s2-sandbox (logical, the sandboxed launch and the proxy a launch holds; serialises the runtime files); s2-permissions-design (design, the decided configuration); plan-preflight-check (logical, serialises `skills/lsf-drive/SKILL.md::startup`); relay-probe (knowledge, relay behaviour); runtime-core (logical, `Run` and the state-dir layout: `status.json`, `summary.json`, `lock`); orchestrator-port-loop (logical, `orchestrator.Body`; knowledge, `tools/fixturerun`'s launch sequence)
+- **Depends on**: s2-sandbox (logical, the bounded launch and the proxy a launch holds; serialises the runtime files); s2-boundary-decision (design, the decided boundary); plan-preflight-check (logical, serialises `skills/lsf-drive/SKILL.md::startup`); relay-probe (knowledge, relay behaviour); runtime-core (logical, `Run` and the state-dir layout: `status.json`, `summary.json`, `lock`); orchestrator-port-loop (logical, `orchestrator.Body`; knowledge, `tools/fixturerun`'s launch sequence)
 - **External gates**: `claude-code-headless` (environment, Claude Code 2.1.294); `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`); `git` (environment, 2.38 or later; 2.54.0 probed)
 - **Done condition**: `phronithm:lsf-drive` launches, pauses, resumes and reads the status of a run through the CLI, under the decided permission configuration. A fixture run launched from a turn in which the requester typed a message shows no agent transcript carrying a relayed message, cited by transcript (P-F1). The driver outlives the interactive session that launched it, or the skill says it runs from the requester's terminal. The Relaunch section keeps `gate-not-run`'s route: an environment or project change, not a decision, whether a stage or the runtime's own gate run raised it. It keeps the `declared-gates-changed` row: relaunch again, and the relaunch takes the changed block, or record a decision that restores it. It gives the route for a code-stage integrity stop, which repeats at every launch until a requester repair commit lands: the repair commit, and exempting the code stages' paths from any hook that rewrites or stages files. Its stop-kind table lists `uncommitted-at-return`, `skill-not-loaded`, `schema-violation`, `gate-omitted`, `stage-fault` and `branch-mismatch` with the routes `lsf-workflow.md`'s Relaunch target gives; `uncommitted-at-return` is answered by committing or removing the named paths, not by a decision, and the section says a requester edit in the main checkout stops the run at the next fast-forward. It names the merge faults the requester clears by hand, as the runtime raises them after `s2-clones` moved the merge into a merge clone, each by the remedy its statement gives: a recorded merge SHA that no longer resolves after a history rewrite, a stale `index.lock`, a foreign merge in progress in the main checkout, paths a hook staged after a merge, a `pre-merge-commit` hook included, and a red gate result that the environment caused, which replays from the journal until `journal/gates_<tree prefix>-*.json` is removed (requester decision, 2026-10-08). It names the clone faults the requester clears by hand, each by the remedy its fault text gives: a writer clone or merge clone a fault left, a merge clone whose integration branch diverged from main's, a kept clone left on another branch, and a fetch-back failed by a branch the agent renamed. Status reports the state dir's `clone/`, `scratch/`, `merge/` and `*.partial` directories and a `refs/lsf/<plan8>/xfer/w<n>` ref present in the main repo. A launch resolves `claude` once (configuration, `LSF_CLAUDE_BIN` or `PATH`) to its versioned path, records the version from the first init stream, and runs every call on that path; a test shows a binary replaced mid-launch is not used (requester decision, 2026-10-06). A launch refuses a `git` older than 2.38, naming the version found (requester decision, 2026-10-07). The tests pass.
 - **Description**: Replaces `relay-mitigation`: headless calls carry no relay (results, check 3), so P-F1 reduces to the launch path. `tools/fixturerun` is a working launch: configuration from a file, args, `DISABLE_AUTOUPDATER=1` with a versioned `claude` checked before spending, a fresh state dir, then `lsfrt.Run(ctx, cfg, orchestrator.Body)`. A code-stage stop arrives as `stage-fault` with the statement `"<stage> failed: <reason>"`. **Flag:** three surfaces exceed the surface bound; the skill and design changes are sections of text, so the excess is not context.
@@ -164,10 +203,10 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Effort**: medium
 - **Scope**: `lsf-runtime/dist`, `.github/workflows/lsf-runtime.yml`, `skills/lsf-drive/SKILL.md::launch`, `skills/lsf-drive/SKILL.md::startup`, `skills/breakdown/SKILL.md::quality-check`, `docs/design/lsf-runtime.md::distribution`
 - **Publishes**: the launcher the skills invoke; the release build
-- **Depends on**: runtime-cli-drive (logical, the CLI the launcher runs; serialises `skills/lsf-drive/SKILL.md::launch` and `::startup`); runtime-language-design (design, the routes and targets); plan-preflight-check (logical, `lsf-validate`; serialises `skills/breakdown/SKILL.md::quality-check`)
+- **Depends on**: runtime-cli-drive (logical, the CLI the launcher runs; serialises `skills/lsf-drive/SKILL.md::launch` and `::startup`); runtime-language-design (design, the routes); s2-boundary-decision (design, the boundary's prerequisites); plan-preflight-check (logical, `lsf-validate`; serialises `skills/breakdown/SKILL.md::quality-check`)
 - **External gates**: `github-actions` (environment); `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`); `git` (environment, 2.38 or later on every CI runner); `requester-verdict` (organisational)
-- **Done condition**: The Distribution section is committed, choosing D1 or D4, with the requester's verdict recorded. CI builds static binaries for linux and darwin on amd64 and arm64 with `CGO_ENABLED=0`, and runs the `lsf-runtime` tests on Linux and macOS, orphan reaping included. A launcher at `${CLAUDE_PLUGIN_ROOT}/lsf-runtime/` runs the platform's binary, and the plan-validation command through it. `phronithm:breakdown`'s quality check and `phronithm:lsf-drive`'s Startup run `lsf-validate` through the launcher, not `go run`, and tell problems from a command failure by its exit code (1 or 2), not by empty stdout. It prefers a locally built binary or one named by an environment variable, so `--plugin-dir` development and `shakedown-fixture` run the working tree. Under D1 it refuses a binary whose sha256 does not match its pin. The Distribution section says how a user gets `srt` 0.0.79 and, on Linux, `bubblewrap`, or names them as prerequisites. `phronithm:lsf-drive` invokes the runtime through the launcher; there is no top-level `bin/`. A plugin installed from a local marketplace runs the runtime on this host through the launcher. The tests pass.
-- **Description**: `lsf-runtime.md` Language, Open for the re-plan: no unit owned the route, the CI or the release, though the spike's estimate counted packaging. Windows outside WSL is out of scope (requester verdict, 2026-10-06; R16). Until this unit, both skills call `go -C ${CLAUDE_PLUGIN_ROOT}/lsf-runtime run ./validate/cmd/lsf-validate`, which needs Go and reports every non-zero exit as 1. **Flag:** four surfaces exceed the surface bound; the skill and design changes are a few lines of text each, so the excess is not context.
+- **Done condition**: The Distribution section is committed, choosing D1 or D4, with the requester's verdict recorded. CI builds static binaries for linux on amd64 and arm64 with `CGO_ENABLED=0`, and runs the `lsf-runtime` tests on Linux, orphan reaping included. A launcher at `${CLAUDE_PLUGIN_ROOT}/lsf-runtime/` runs the platform's binary, and the plan-validation command through it. `phronithm:breakdown`'s quality check and `phronithm:lsf-drive`'s Startup run `lsf-validate` through the launcher, not `go run`, and tell problems from a command failure by its exit code (1 or 2), not by empty stdout. It prefers a locally built binary or one named by an environment variable, so `--plugin-dir` development and `shakedown-fixture` run the working tree. Under D1 it refuses a binary whose sha256 does not match its pin. The Distribution section says how a user gets the prerequisites `s2-boundary-decision`'s boundary needs, or names them as prerequisites. `phronithm:lsf-drive` invokes the runtime through the launcher; there is no top-level `bin/`. A plugin installed from a local marketplace runs the runtime on this host through the launcher. The tests pass.
+- **Description**: `lsf-runtime.md` Language, Open for the re-plan: no unit owned the route, the CI or the release, though the spike's estimate counted packaging. Linux only: Windows outside WSL (requester verdict, 2026-10-06; R16) and macOS (requester, 2026-10-09) are out of scope. Until this unit, both skills call `go -C ${CLAUDE_PLUGIN_ROOT}/lsf-runtime run ./validate/cmd/lsf-validate`, which needs Go and reports every non-zero exit as 1. **Flag:** four surfaces exceed the surface bound; the skill and design changes are a few lines of text each, so the excess is not context.
 
 ### script-retirement
 - **Type**: refactor
@@ -216,9 +255,9 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Effort**: large
 - **Scope**: `docs/design/lsf-long-running.md`
 - **Publishes**: the decision on work that outlasts a stage
-- **Depends on**: substrate-spike (design, confirmed substrate); runtime-core (knowledge, the runtime's supervision of its calls); s2-permissions-design (design, per-call clones and the Bash sandbox); empirical-unit-design (design, plan-level shape); retained-artefacts-design (design, retained-artefact policy for a job's outputs); gate-results-integrity (knowledge, the `gate-not-run` stop and the long-gate recipe)
+- **Depends on**: substrate-spike (design, confirmed substrate); runtime-core (knowledge, the runtime's supervision of its calls); s2-permissions-design (design, per-call clones); s2-boundary-decision (design, the decided boundary); empirical-unit-design (design, plan-level shape); retained-artefacts-design (design, retained-artefact policy for a job's outputs); gate-results-integrity (knowledge, the `gate-not-run` stop and the long-gate recipe)
 - **External gates**: none
-- **Done condition**: `docs/design/lsf-long-running.md` is committed. It decides how work that outlasts one agent stage runs under the host runtime, and states the behaviour of the wave barrier, a re-plan while the work is in flight, resume, liveness, and a process left behind by a stopped run. On resume it distinguishes an interrupted attempt from one a re-plan or decision superseded, and states what happens to the interrupted attempt's commits and untracked outputs. It states the behaviour for a descendant that holds a call's stdout after the call exits (not group-killed; the call returns `killGrace` late) and for a retry after partial work. It states how a job runs inside a call's Bash sandbox, which reaches only the gate block's `hosts` and writes only its clone and `/tmp`, and how its outputs survive the clone, which stays until its unit's cleanup. It states the route for a project gate that cannot finish within one stage even with the long-gate recipe, which in a plan with no `lsf-gates` block stops with `gate-not-run` and has no exit through the workflow. For a declared plan, it states how gate runs count against `maxWallClock`: every gate checkout is a cold build, every merge but a wave's first reruns the gates, units gate one after another under `gateConcurrency` 1, a broken environment costs each waiting unit its full timeout, and a stop kills an in-flight gate, which reruns on relaunch (requester decision, 2026-10-08). It states how a job's outputs fall under the retained-artefact classes: cited by recipe if regenerable, otherwise declared by `Retains:` and moved to the store. `phronithm:critique` (critique-design) passes at the gate bar.
+- **Done condition**: `docs/design/lsf-long-running.md` is committed. It decides how work that outlasts one agent stage runs under the host runtime, and states the behaviour of the wave barrier, a re-plan while the work is in flight, resume, liveness, and a process left behind by a stopped run. On resume it distinguishes an interrupted attempt from one a re-plan or decision superseded, and states what happens to the interrupted attempt's commits and untracked outputs. It states the behaviour for a descendant that holds a call's stdout after the call exits (not group-killed; the call returns `killGrace` late) and for a retry after partial work. It states how a job runs inside a call's boundary as `s2-boundary-decision` decides it, which reaches only the gate block's `hosts`, and how its outputs survive the clone, which stays until its unit's cleanup. It states the route for a project gate that cannot finish within one stage even with the long-gate recipe, which in a plan with no `lsf-gates` block stops with `gate-not-run` and has no exit through the workflow. For a declared plan, it states how gate runs count against `maxWallClock`: every gate checkout is a cold build, every merge but a wave's first reruns the gates, units gate one after another under `gateConcurrency` 1, a broken environment costs each waiting unit its full timeout, and a stop kills an in-flight gate, which reruns on relaunch (requester decision, 2026-10-08). It states how a job's outputs fall under the retained-artefact classes: cited by recipe if regenerable, otherwise declared by `Retains:` and moved to the store. `phronithm:critique` (critique-design) passes at the gate bar.
 - **Description**: Postmortem §A: 18 campaign stages took 39.7 of 62.1 implement agent-hours; one campaign outlived its stage and left an orphan process.
 
 ### long-running-impl
@@ -603,12 +642,47 @@ units:
       - name: git
         kind: environment
         pin: ">= 2.38"
-  - id: s2-sandbox
+  - id: container-probe
+    type: design
+    complete: false
+    dependencies: [s2-permissions-design]
+    scope: [docs/investigations/container-probe-results.md, docs/investigations/container-probe]
+    publishes: [container probe results]
+    gates:
+      - name: podman
+        kind: environment
+        pin: "6.1.3"
+      - name: claude-code-headless
+        kind: environment
+        pin: "2.1.294"
+  - id: s2-boundary-decision
+    type: design
+    complete: false
+    dependencies: [container-probe, s2-permissions-design]
+    scope: [docs/design/lsf-runtime.md::permissions]
+    publishes: [decided boundary and its runtime changes]
+    gates:
+      - name: requester-verdict
+        kind: organisational
+  - id: s2-boundary-common
     type: feature
     complete: false
     dependencies: [s2-clones, s2-permissions-design]
-    scope: [lsf-runtime/runtime, lsf-runtime/orchestrator/git.go, lsf-runtime/plan/gates.go, lsf-runtime/tools/fixturerun, docs/plan-graph.md::gate-block, skills/breakdown/SKILL.md::phase-1, docs/design/lsf-runtime.md::runtime, docs/design/lsf-runtime.md::permissions]
-    publishes: [sandboxed call launch, credential proxy, srt gate runs, hosts gate field]
+    scope: [lsf-runtime/runtime, lsf-runtime/orchestrator, lsf-runtime/plan/gates.go, docs/plan-graph.md::gate-block, skills/breakdown/SKILL.md::phase-1, docs/design/lsf-runtime.md::runtime]
+    publishes: [credential proxy, hosts gate field and launch pin, plain-clone gate checkout, clone git config isolation]
+    gates:
+      - name: lsf-toolchain
+        kind: environment
+        pin: "1.27.1"
+      - name: git
+        kind: environment
+        pin: ">= 2.38"
+  - id: s2-sandbox
+    type: feature
+    complete: false
+    dependencies: [s2-boundary-decision, s2-boundary-common, s2-clones]
+    scope: [lsf-runtime/runtime, lsf-runtime/tools/fixturerun, docs/design/lsf-runtime.md::runtime, docs/design/lsf-runtime.md::permissions]
+    publishes: [bounded call launch, bounded gate runs]
     gates:
       - name: lsf-toolchain
         kind: environment
@@ -635,7 +709,7 @@ units:
   - id: runtime-cli-drive
     type: integration
     complete: false
-    dependencies: [s2-sandbox, s2-permissions-design, plan-preflight-check, relay-probe, runtime-core, orchestrator-port-loop]
+    dependencies: [s2-sandbox, s2-boundary-decision, plan-preflight-check, relay-probe, runtime-core, orchestrator-port-loop]
     scope: [lsf-runtime/cli, skills/lsf-drive/SKILL.md::launch, skills/lsf-drive/SKILL.md::relaunch, skills/lsf-drive/SKILL.md::startup, docs/design/lsf-runtime.md::cli]
     publishes: [runtime CLI]
     gates:
@@ -651,7 +725,7 @@ units:
   - id: runtime-distribution
     type: integration
     complete: false
-    dependencies: [runtime-cli-drive, runtime-language-design, plan-preflight-check]
+    dependencies: [runtime-cli-drive, runtime-language-design, s2-boundary-decision, plan-preflight-check]
     scope: [lsf-runtime/dist, .github/workflows/lsf-runtime.yml, skills/lsf-drive/SKILL.md::launch, skills/lsf-drive/SKILL.md::startup, skills/breakdown/SKILL.md::quality-check, docs/design/lsf-runtime.md::distribution]
     publishes: [runtime launcher, release build]
     gates:
@@ -695,7 +769,7 @@ units:
   - id: long-running-design
     type: design
     complete: false
-    dependencies: [substrate-spike, runtime-core, s2-permissions-design, empirical-unit-design, retained-artefacts-design, gate-results-integrity]
+    dependencies: [substrate-spike, runtime-core, s2-permissions-design, s2-boundary-decision, empirical-unit-design, retained-artefacts-design, gate-results-integrity]
     scope: [docs/design/lsf-long-running.md]
     publishes: [long-running work decision]
     gates: []
@@ -779,7 +853,7 @@ units:
     scope: [docs/design/lsf-problem-register.md, docs/design/lsf-improvements.md, docs/design/lsf-workflow.md::status, CLAUDE.md]
     publishes: []
     gates: []
-execution_order: [problem-register, relay-probe, arch-pin-refresh, gate-results-integrity, substrate-options, significant-precision-sample, empirical-criteria-design, retained-artefacts-design, substrate-spike, empirical-unit-design, findings-consumer-design, drive-decision-design, runtime-language-design, runtime-core, s2-permissions-design, orchestrator-port-plan, plan-preflight-check, orchestrator-port-loop, code-stage-interface, runtime-signals, code-merge-cleanup, declared-gates, s2-clones, s2-sandbox, retained-artefacts-impl, runtime-cli-drive, runtime-distribution, script-retirement, empirical-script-support, findings-consumer-impl, long-running-design, long-running-impl, empirical-criteria-impl, phase2-gate-discipline, empirical-unit-impl, programme-close-out, drive-presentation-impl, drive-mechanics, shakedown-fixture, programme-close]
+execution_order: [problem-register, relay-probe, arch-pin-refresh, gate-results-integrity, substrate-options, significant-precision-sample, empirical-criteria-design, retained-artefacts-design, substrate-spike, empirical-unit-design, findings-consumer-design, drive-decision-design, runtime-language-design, runtime-core, s2-permissions-design, orchestrator-port-plan, plan-preflight-check, orchestrator-port-loop, code-stage-interface, runtime-signals, code-merge-cleanup, declared-gates, s2-clones, container-probe, s2-boundary-common, s2-boundary-decision, s2-sandbox, retained-artefacts-impl, runtime-cli-drive, runtime-distribution, script-retirement, empirical-script-support, findings-consumer-impl, long-running-design, long-running-impl, empirical-criteria-impl, phase2-gate-discipline, empirical-unit-impl, programme-close-out, drive-presentation-impl, drive-mechanics, shakedown-fixture, programme-close]
 ```
 
 ## Dependency Graph
@@ -793,6 +867,7 @@ graph TD
   CH([claude-code-headless 2.1.294; 2.1.289 for units complete before s2-permissions-design])
   SRT([sandbox-runtime 0.0.79])
   BW([bubblewrap 0.13.0])
+  PM([podman 6.1.3])
 
   PR[problem-register: complete]
   RP[relay-probe: complete]
@@ -817,7 +892,10 @@ graph TD
   RS[runtime-signals: complete]
   DG[declared-gates: complete]
   SC[s2-clones: complete]
-  SX[s2-sandbox]
+  CP[container-probe]
+  SBD[s2-boundary-decision]
+  SBC[s2-boundary-common]
+  SX[s2-sandbox: provisional]
   RAI[retained-artefacts-impl]
   RCD[runtime-cli-drive]
   RD[runtime-distribution]
@@ -855,9 +933,15 @@ graph TD
   SS -.-> LRD
   SS -.-> DM
   APR --> GRI
-  OPL --> CSI --> RS --> CMC --> DG --> SC --> SX --> RCD
+  OPL --> CSI --> RS --> CMC --> DG --> SC --> SBC --> SX --> RCD
+  SC --> SX
   SPD -.-> SC
-  SPD -.-> SX
+  SPD -.-> CP -.-> SBD -.-> SX
+  SPD -.-> SBD
+  SPD -.-> SBC
+  SBD -.-> RCD
+  SBD -.-> RD
+  SBD -.-> LRD
   CMC --> SC
   SPD -.-> LRD
   CSI --> CMC
@@ -876,7 +960,6 @@ graph TD
   SC --> RAI
   SX --> RAI --> SR
   RAI -. testing .-> EUI
-  SPD -.-> RCD
   PPC --> RCD
   RP -.-> RCD
   RC -.-> LRD
@@ -925,6 +1008,7 @@ graph TD
   RV --> RLD
   RV --> RD
   RV --> P2G
+  RV --> SBD
   CC --> RP
   CC --> SS
   CH --> SS
@@ -932,6 +1016,8 @@ graph TD
   CH --> RC
   CH --> OPL
   CH --> SX
+  CH --> CP
+  PM --> CP
   CH --> RCD
   CH --> SF
   SRT --> SX
@@ -940,6 +1026,7 @@ graph TD
   BW --> SF
   GA([github-actions]) --> RD
   GIT([git >= 2.38]) --> SC
+  GIT --> SBC
   GIT --> RCD
   GIT --> RD
 ```
@@ -951,7 +1038,7 @@ graph TD
 3. `empirical-criteria-design`, `retained-artefacts-design`, `substrate-spike`.
 4. `empirical-unit-design`, `findings-consumer-design`, `drive-decision-design`, `runtime-language-design`. Each design decision lands before any unit it governs starts.
 5. `runtime-core`, `s2-permissions-design`, `orchestrator-port-plan`, `plan-preflight-check`, `orchestrator-port-loop`. The permissions design states its options in the runtime's role shape. The runtime and the port; the plan model and the runtime can run side by side, and the pre-flight command uses the ported parser.
-6. `code-stage-interface`, `runtime-signals`, `code-merge-cleanup`, `declared-gates`, `s2-clones`, `s2-sandbox`, `retained-artefacts-impl`, `runtime-cli-drive`, `runtime-distribution`, `script-retirement`. The rest of the S2 build, serial on `lsf-runtime/`. The permission boundary lands before the CLI, so every launch through `phronithm:lsf-drive` runs under it. It leads the orchestrator stream so later units are built and tested on the runtime, not the Workflow script. `retained-artefacts-impl` runs beside `runtime-cli-drive` and `runtime-distribution`, which write none of its files, and lands before `script-retirement` makes the runtime the only path.
+6. `code-stage-interface`, `runtime-signals`, `code-merge-cleanup`, `declared-gates`, `s2-clones`, `container-probe`, `s2-boundary-common`, `s2-boundary-decision`, `s2-sandbox`, `retained-artefacts-impl`, `runtime-cli-drive`, `runtime-distribution`, `script-retirement`. The rest of the S2 build, serial on `lsf-runtime/`. The probe runs before any boundary decision (requester, 2026-10-09), beside `s2-boundary-common`, which writes only what either boundary needs. The permission boundary lands before the CLI, so every launch through `phronithm:lsf-drive` runs under it. It leads the orchestrator stream so later units are built and tested on the runtime, not the Workflow script. `retained-artefacts-impl` runs beside `runtime-cli-drive` and `runtime-distribution`, which write none of its files, and lands before `script-retirement` makes the runtime the only path.
 7. `empirical-script-support`, `findings-consumer-impl`. The rest of the orchestrator stream, serial on `lsf-runtime/plan` and `lsf-runtime/orchestrator`.
 8. `long-running-design`, `long-running-impl`. Last in the stream: the least certain unit, and the one most likely to be re-planned.
 9. `empirical-criteria-impl`, `phase2-gate-discipline`, `empirical-unit-impl`, `programme-close-out`, `drive-presentation-impl`, `drive-mechanics`. Skill text, each after its decision.
@@ -966,9 +1053,9 @@ No unit edits the JavaScript orchestrator: it stays the Workflow script's source
 - **Worker 1, decisions and skill text.** `empirical-criteria-design` → `retained-artefacts-design` → `substrate-options` → `empirical-unit-design` → `findings-consumer-design` → `drive-decision-design` → `s2-permissions-design` → `runtime-language-design` → the skill-text units of step 9. Writes `docs/design/` decision records and `skills/`.
 - **Worker 2, orchestrator and runtime.** `relay-probe` → `significant-precision-sample` → `substrate-spike` → the stream of steps 5–8. Writes `lsf-runtime/`, deletes `workflows/`, and writes sections of `docs/design/lsf-workflow.md` and `docs/design/lsf-runtime.md`.
 
-Synchronisation points: `relay-probe` before `substrate-options`; `substrate-options` before `substrate-spike`; `empirical-unit-design` before `retained-artefacts-impl`; `runtime-core` before `s2-permissions-design`; `s2-permissions-design` before `s2-clones`; `runtime-language-design` before `runtime-core` and the port; each design unit before the unit it governs; both workers before `shakedown-fixture`.
+Synchronisation points: `relay-probe` before `substrate-options`; `substrate-options` before `substrate-spike`; `empirical-unit-design` before `retained-artefacts-impl`; `runtime-core` before `s2-permissions-design`; `s2-permissions-design` before `s2-clones`; `s2-boundary-decision` and `s2-boundary-common` before `s2-sandbox`; `runtime-language-design` before `runtime-core` and the port; each design unit before the unit it governs; both workers before `shakedown-fixture`.
 
-Shared files are split by section. `docs/design/lsf-workflow.md`, `skills/lsf-drive/SKILL.md`, `skills/large-scale-feature/SKILL.md` and `skills/breakdown/SKILL.md` are each owned per section, written in Scope as `file::section`. `docs/design/lsf-empirical-work.md` is owned per section by its three design units, and `docs/design/lsf-runtime.md` by `s2-permissions-design`, `runtime-language-design`, `runtime-core`, `s2-clones`, `s2-sandbox`, `runtime-cli-drive` and `runtime-distribution`. `lsf-runtime/` is owned per subdirectory; every writer of one is on a single serial chain. A unit that writes a whole shared file (`drive-mechanics`, `empirical-unit-impl`) has an edge from every unit that writes a section of it.
+Shared files are split by section. `docs/design/lsf-workflow.md`, `skills/lsf-drive/SKILL.md`, `skills/large-scale-feature/SKILL.md` and `skills/breakdown/SKILL.md` are each owned per section, written in Scope as `file::section`. `docs/design/lsf-empirical-work.md` is owned per section by its three design units, and `docs/design/lsf-runtime.md` by `s2-permissions-design`, `runtime-language-design`, `runtime-core`, `s2-clones`, `s2-boundary-decision`, `s2-boundary-common`, `s2-sandbox`, `runtime-cli-drive` and `runtime-distribution`. `lsf-runtime/` is owned per subdirectory; every writer of one is on a single serial chain. A unit that writes a whole shared file (`drive-mechanics`, `empirical-unit-impl`) has an edge from every unit that writes a section of it.
 
 ### N workers
 
@@ -979,16 +1066,16 @@ Shared files are split by section. `docs/design/lsf-workflow.md`, `skills/lsf-dr
 | 3 | substrate-spike, drive-decision-design, phase2-gate-discipline, programme-close-out |
 | 4 | runtime-language-design, drive-presentation-impl |
 | 5 | runtime-core, orchestrator-port-plan, then s2-permissions-design, plan-preflight-check and long-running-design |
-| 6 onward | the orchestrator stream, one unit at a time except retained-artefacts-impl beside runtime-cli-drive and runtime-distribution, with empirical-unit-impl and drive-mechanics as their edges clear |
+| 6 onward | the orchestrator stream, one unit at a time except container-probe and s2-boundary-decision beside s2-boundary-common, and retained-artefacts-impl beside runtime-cli-drive and runtime-distribution, with empirical-unit-impl and drive-mechanics as their edges clear |
 | last | shakedown-fixture, programme-close |
 
 Phases 1–3 each need requester verdicts on two or three design units at once. More than two workers gains little: the script stream is serial and the design units wait on one requester.
 
 ## Critical Path
 
-`s2-sandbox` → `runtime-cli-drive` → `runtime-distribution` → `script-retirement` → `empirical-script-support` → `findings-consumer-impl` → `long-running-impl` → `shakedown-fixture` → `programme-close`.
+`container-probe` → `s2-boundary-decision` → `s2-sandbox` → `runtime-cli-drive` → `runtime-distribution` → `script-retirement` → `empirical-script-support` → `findings-consumer-impl` → `long-running-impl` → `shakedown-fixture` → `programme-close`.
 
-9 units: two large, six medium, one small. One chain ties with it into `script-retirement`: `empirical-criteria-design` → `empirical-unit-design` → `retained-artefacts-impl`. `s2-sandbox` is ready once `srt` is installed (R31); `empirical-criteria-design` waits on a requester verdict. The S2 build's size is a conjectured estimate, and the runtime and the port each exceeded it (R1).
+11 units: two large, eight medium, one small. `s2-boundary-common` runs beside the probe and the decision, one unit shorter than they are. `container-probe` is ready once podman is installed (R32); `s2-boundary-decision` and `empirical-criteria-design` wait on requester verdicts. `s2-sandbox`'s effort is rewritten at the decision's re-plan. The S2 build's size is a conjectured estimate, and the runtime and the port each exceeded it (R1).
 
 ## Meta-Tasks
 
@@ -1025,7 +1112,7 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 
   A design unit's row passes to its implementing unit when the design decides to act. A provisional unit the substrate decision retires passes its rows to the units that replace it.
 - **Generality stated.** Every design unit's record states, for the option it chooses, the evidence that the problem holds outside archipeligo, or that it does not and the change is scoped to programmes like it. For a row qualified `not testable`, the record says no second project could show it and states whether the change is adopted generally or scoped. A record citing P-A1, P-A2, P-E4 or P-E9 as generality evidence carries the row's analogue or partial qualifier. Carried by `substrate-options`, `empirical-criteria-design`, `empirical-unit-design`, `retained-artefacts-design`, `findings-consumer-design`, `drive-decision-design`, `long-running-design`, `phase2-gate-discipline`.
-- **Headless pin.** A unit gated on `claude-code-headless` checks it against `~/.local/share/claude/versions/2.1.294` run with `DISABLE_AUTOUPDATER=1`, or cites the `version` of a transcript it produced; `claude --version` does not discharge it, since the installed default auto-updates. Carried by `s2-sandbox`, `runtime-cli-drive`, `shakedown-fixture`.
+- **Headless pin.** A unit gated on `claude-code-headless` checks it against `~/.local/share/claude/versions/2.1.294` run with `DISABLE_AUTOUPDATER=1`, or cites the `version` of a transcript it produced; `claude --version` does not discharge it, since the installed default auto-updates. Carried by `container-probe`, `s2-sandbox`, `runtime-cli-drive`, `shakedown-fixture`.
 - **Design of record.** A unit that changes behaviour the design describes amends its own section of `docs/design/lsf-workflow.md` in the same commit. Carried by every unit with a `lsf-workflow.md::` or `lsf-runtime.md::` Scope entry.
 
 ## Risk Registry
@@ -1054,17 +1141,35 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 - R23 runtime-cli-drive — a red gate result the environment caused (exit 126 or 127, a missing service, an OOM kill) replays from the journal for the same tree and declaration until its record is removed by hand (requester decision, 2026-10-08).
 - R24 runtime-distribution — until the launcher ships, the plan-validation command needs a Go toolchain and compiles on each call; without Go, `phronithm:breakdown` and `phronithm:lsf-drive` fall back to manual checks (P-D4's residual).
 - R25 cross-cutting — `lsf-validate`'s pin check is substring containment and one-directional (requester decision, 2026-10-08: left as is); a pin token inside a longer version, or an entry pin absent from the block, passes.
-- R26 s2-sandbox — the native sandbox is unprobed on macOS (Seatbelt), and the `/tmp` and mount-point findings and the temp-root refusal's `/private` forms are Linux-only or unprobed; `runtime-distribution`'s macOS CI is the first run there.
 - R27 cross-cutting — agent Bash and `setup` can send what they read in a clone to any host in the gate block's `hosts`; a host that accepts writes, such as GitHub, can receive the repo. A tool that ignores the sandbox's proxy variables gets no network even to an allowed host.
 - R28 cross-cutting — every call copies the repo (`--no-local`), serialised; the cost is unmeasured, and a clone over 5 minutes stops the run.
-- R29 cross-cutting — a clone gets only the identity, signing and line-ending config: a repo's own `filter.*` or `merge.*` drivers and `core.fileMode` do not reach it, so its commits can differ from the main checkout's; once `s2-sandbox` lands, the runtime's git in a clone reads no global `core.excludesFile` either.
+- R29 cross-cutting — a clone gets only the identity, signing and line-ending config: a repo's own `filter.*` or `merge.*` drivers and `core.fileMode` do not reach it, so its commits can differ from the main checkout's; once `s2-boundary-common` lands, the runtime's git in a clone reads no global `core.excludesFile` either.
 - R30 cross-cutting — the merge step's kill-and-resume evidence uses built states and injected git failures; no test kills a step while a real conflict call is pending.
-- R31 s2-sandbox — `srt` 0.0.79 is not installed on this host (2026-10-09): the `s2-permissions` probes ran a copy in a scratch directory through `LSF_SRT_BIN`. The gate is unmet until it is installed.
-- R16 script-retirement — the runtime targets Linux and macOS only (requester verdict, 2026-10-06). Once the Workflow script is deleted, Phase 3 has no Windows path outside WSL until a unit adds a non-POSIX kill path.
+- R16 script-retirement — the runtime targets Linux only (requester verdicts, 2026-10-06 and 2026-10-09). Once the Workflow script is deleted, Phase 3 has no macOS path, and no Windows path outside WSL.
+- R32 container-probe — podman 6.1.3 is not installed on this host (2026-10-09); the gate is unmet until it is.
+- R33 s2-boundary-decision — the container cells are n = 1 under the 15-call cap, against B2's n = 1–2; a cell that differs between the options on one run decides nothing alone.
 
 ## Plan Maintenance
 
 On each unit completion, run the re-plan step before starting its dependants.
+
+### 2026-10-09 — s2-sandbox stopped
+Report: docs/plans/s2-sandbox-completion.md @ 63fc7e8.
+unit-added container-probe — rootless podman 6.1.3, one container per call and per gate, at most 15 paid calls, before any boundary decision (requester decisions)
+unit-added s2-boundary-decision — B2 or a container; reopens s2-permissions-design's verdict; Linux only; requester verdict
+unit-added s2-boundary-common — the half of s2-sandbox either boundary needs: proxy with empty-bearer refusal, the 401 stop, `hosts` and its `planSha` pin, plain-clone gate checkout, git config isolation (requester decision: split)
+done-condition s2-sandbox — provisional on s2-boundary-decision; keeps the boundary's launch, read-only `.git` paths, the plugin root, the network rule and the fixture run; the 401 decision taken (requester, 2026-10-09)
+scope-reassignment s2-sandbox — `orchestrator/git.go`, `plan/gates.go`, `plan-graph.md::gate-block` and breakdown's Phase 1 to s2-boundary-common, with the pin's orchestrator files; three-surface flag
+new-edge s2-boundary-decision, s2-boundary-common → s2-sandbox — the boundary; the proxy, `hosts` and serialisation of the runtime files
+new-edge s2-boundary-decision → runtime-cli-drive — replaces its edge on s2-permissions-design
+new-edge s2-boundary-decision → runtime-distribution, long-running-design — the boundary's prerequisites; a job inside the boundary
+done-condition runtime-distribution — linux builds and Linux CI only; prerequisites are the decided boundary's (requester decision: Linux only, programme-wide)
+done-condition long-running-design — a job inside the decided boundary, not the Bash sandbox
+execution-order container-probe, s2-boundary-common, s2-boundary-decision — before s2-sandbox
+check s2-sandbox, shakedown-fixture — `srt` and `bubblewrap` gates kept until the decision's re-plan re-gates them
+check register — P-C5, P-C6 stay with s2-sandbox
+check R26 closed (macOS out of scope); R31 closed (`srt` 0.0.79 installed); R16, R29 restated; R32, R33 added
+check critical path — 11 units
 
 ### 2026-10-09 — decisions git-containment
 done-condition s2-sandbox — the runtime's and the orchestrator's git in a clone ignore global and system config, so `.gitattributes` selects only the clone's local drivers; the 401 stop stays its one open decision (requester decision)
