@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/duaneg/phronithm/lsf-runtime/internal/gitenv"
 )
 
 // Every agent call runs in its own plain clone of the main repo under the
@@ -413,6 +415,10 @@ func (rt *Runtime) fetchBack(ctx context.Context, label string, p placement, res
 			rt.Log(fmt.Sprintf("%s: the replay moved %s from %s to %s, its clone's tip", label, p.dest, w, n))
 		}
 	}()
+	// The fetch runs upload-pack in the clone under the host's config.
+	if err := gitenv.CloneGitDir(p.dir); err != nil {
+		return fmt.Errorf("fetching %s from its clone: %w", p.branch, err)
+	}
 	if b, err := gitOut(gctx, rt.cfg.Repo, "fetch", "--no-tags", "-q", p.dir, "+refs/heads/"+p.branch+":refs/heads/"+p.dest); err != nil {
 		return fmt.Errorf("fetching %s from its clone %s: %v: %s", p.branch, p.dir, err, strings.TrimSpace(string(b)))
 	}

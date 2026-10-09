@@ -269,7 +269,7 @@ podman run --rm -i --init --pull=never --log-driver=none --name <name> --label l
   --userns=keep-id --cap-drop=all --security-opt no-new-privileges
   --read-only --tmpfs /tmp:rw,exec
   --network pasta:--splice-only,-T,<inject port>[,-T,<egress port>]
-  -v <clone>:<clone>:rw
+  -v <clone>:<clone>:rw -v <clone>/.git:<clone>/.git:rw
   -v <clone>/.git/config:<clone>/.git/config:ro -v <clone>/.git/hooks:<clone>/.git/hooks:ro -v <clone>/.git/info:<clone>/.git/info:ro
   -v <claude>:/opt/claude/claude:ro -v <plugin>:/opt/plugin:ro
   -w <clone> -e … <image>
@@ -281,6 +281,7 @@ podman run --rm -i --init --pull=never --log-driver=none --name <name> --label l
 - **`--pull=never`:** a missing image is a launch failure, never a registry pull. **`--log-driver=none`:** podman's default driver on the probe host was `journald`, so every probe call's stream went to the user journal; `-i` attach does not depend on the driver.
 - **`--userns=keep-id`.** Inside the container the call runs as the invoking user, so the files it writes in the clone are that user's on the host and fetch back.
 - **The read-only `.git` binds** stop an agent from writing a filter driver, `core.hooksPath` or `include.path` that the runtime's own git in the clone would later run (R34). Commits still succeed. The runtime creates `hooks` and `info` in a clone that lacks them before the launch, since a missing bind source fails it.
+- **`.git` is bound over itself** (`s2-sandbox`, found in its step 2a critique and confirmed live): without it an agent could rename `.git` away and put a `.git` of its own, config included, in its place; a mountpoint cannot be renamed. The rest of `.git` stays writable, so an agent could also write `.git/commondir`, which points git's config lookup at a directory it wrote. The runtime's and orchestrator's git refuses to run in a clone whose `.git` is not a directory or holds a `commondir`, and so does the fetch-back, whose `upload-pack` runs in the clone under host config; the run stops with `runtime-error`.
 - **The conflict call** gets the merge clone at its host path, with the same binds.
 - **A reviewer's clone is mounted read-write too.** A reviewer that re-runs tests writes build output, and the clone is discarded.
 - **Environment:** replaced, not inherited.
@@ -300,15 +301,16 @@ podman run --rm -i --init --pull=never --log-driver=none --name <name> --label l
   - `podman` or `pasta` is missing, or podman is not rootless;
   - the image is absent;
   - a smoke container, launched as a call is but with `--network none`, fails to run `claude --version` reporting the pin, or `bash`, `git` and `rg`.
-- **A failed launch is not a model fault.** A `podman run` that exits 125, 126 or 127 before the stream starts (an image, mount, `pasta` or name fault) stops the run with `runtime-error`; it is not retried as `transient`.
+- **A failed launch is not a model fault.** A `podman run` that exits 125, 126 or 127 before the stream starts (no line of it decoded: an image, mount, `pasta` or name fault) stops the run with `runtime-error`, quoting podman's stderr; it is not retried as `transient` and not journaled, so a relaunch re-runs the call. The same exit after the stream began is classified as any other.
 
 ### Teardown
 
 - **A cancel** sends SIGTERM to the `podman run` process group, as the runtime cancels any call. `--init` passes the signal to the container's processes.
-- **After `killGrace`,** the runtime runs `podman rm -f <name>`. SIGKILL to the `podman run` client would leave the container running, since its processes run under `conmon`, not the client (F3).
+- **After `killGrace`,** the client gets SIGKILL and the runtime runs `podman rm -f -t 0 --ignore <name>`: SIGKILL to the client alone would leave the container running, since its processes run under `conmon`, not the client (F3). `-t 0` because SIGTERM and the grace have already passed. The removal runs whatever the call's context, under its own 60 s bound, and also after any non-zero exit, since a client killed mid-cleanup can leave its container. These are `s2-sandbox` additions.
+- **A failed removal** (an error or the 60 s bound) stops the run with `runtime-error` before anything reads the clone: no fetch-back, no uncommitted check, no discard and no journal record. The next launch's reaping removes the container.
 - **Gate containers** (`setup` and each gate command) are named and labelled the same way, and a timeout or a stop removes them the same way.
 - **Nothing reads a clone or checkout until its container is gone.** Fetch-back, the uncommitted check and removal wait for `podman rm -f` to return.
-- **Orphan reaping** at launch removes every container carrying this state dir's label. The `lsf-gate:` marker and `--session-id` matching no longer find anything: no call or gate command runs as a host process.
+- **Orphan reaping** at launch removes every container carrying this state dir's label (`podman rm -f -t 0`). `--session-id` matching is gone; the `lsf-gate:` marker stays until gate commands run in containers (`s2-egress-gates`).
 
 ### Credential proxy
 
@@ -504,7 +506,8 @@ Classification reads the `result` event first, because the CLI can recover from 
 |---|---|---|
 | `stopped` | a repeated signal cancelled the attempt | the stop |
 | `timeout` | the guard timeout fired before a valid result; one after it keeps the value, flagged `guard-killed-after-result` | null |
-| `spawn-error` | the process did not start | null |
+| (launch failure) | `podman run` exited 125, 126 or 127 before any stream line (Permissions → Image) | the run stops with `runtime-error`, unjournaled |
+| `spawn-error` | the podman process did not start | null |
 | `ok` | valid `structured_output`; skill loaded or none required | the value |
 | `skill-missing` | as `ok`, but no skill load | retry; on the second miss, the value, flagged `skill-not-loaded` |
 | `invalid` | clean result, `structured_output` missing, null or failing the schema | retry, then null |
@@ -517,7 +520,7 @@ Classification reads the `result` event first, because the CLI can recover from 
 - A session limit moves a runtime-wide gate that every call waits on. It is assumed to apply across models. It does not spend the transient budget.
 - The schema validator covers the subset the stage schemas use: `type`, `properties`, `required`, `items` and `enum`, with JavaScript's integer and number-equality semantics.
 - **Skill load.** A slash-command expansion is not echoed on stdout. In probes, the init event's `slash_commands` listed the command exactly when it expanded, and an unknown command was sent as plain text. So a prefixed call loaded its skill if the init event lists it. A `Skill` tool call naming it also counts.
-- **Guard timeout, or a second signal.** The process group gets SIGTERM, the leader SIGKILL after `killGrace`, and the group SIGKILL once the leader is reaped. This reaches a grandchild that ignores SIGTERM. A call that exits normally is not group-killed.
+- **Guard timeout, or a second signal.** The `podman run` process group gets SIGTERM, which `--init` and podman's signal proxy carry into the container, and the client SIGKILL after `killGrace`. Then the container is removed (Permissions → Teardown), and the group gets SIGKILL once the leader is reaped, which reaches a client-side survivor. A call that exits 0 is neither removed (`--rm` did) nor group-killed. A removal that fails stops the run, the clone unread.
 
 ### Uncommitted at return
 
@@ -537,7 +540,7 @@ Every call in a kept clone that spawned and returns a value or a null reports th
 | `journal/<key>.json` | a completed call's or step's record: label, kind, input hash, return, flags, denials, uncommitted paths, whether the uncommitted check failed, and a call's branch, clone kind and clone HEAD |
 | `journal/<key>.intent` | a step's input hash while it runs |
 | `calls/<key>.<launch>.a<n>.<session>.jsonl` | each attempt's stream |
-| `children.json` | session id → pid of live calls |
+| `children.json` | gate marker → pid of running gate commands (calls are found by their containers' label) |
 | `clone/<key>` | kept clones |
 | `scratch/<key>` | discarded clones, wiped at launch |
 | `merge/w<n>` | merge clones |
@@ -550,13 +553,14 @@ Every call in a kept clone that spawned and returns a value or a null reports th
 - **Step records.** A step writes an intent, runs, records its return (null included) and removes the intent. A step that errors keeps its intent, so the next run of that step, in this launch or a later one, gets `interrupted=true` for its own effect check. An unreadable record of a step stops the run with `runtime-error` rather than rerun it blind.
 - **Replays.** A replayed value is byte-identical to the live one (compacted JSON).
 - **File writes.** Records, intents, `children.json`, the status and the summary are written by temp file and rename.
+- **Mode.** A state dir the launch creates is `0700`: a transcript can carry the placeholder bearer (an agent's `env`), which spends the credential through the proxy. One made beforehand keeps its mode. The launch resolves the state dir's symlinks once and uses that path throughout.
 
 ### Supervision
 
 - **Signals.** The first SIGINT or SIGTERM sets the sticky stop `signal-SIGINT` or `signal-SIGTERM`. In-flight attempts finish and their results are journaled. Retries, backoff and gate waits are abandoned, and every later boundary returns the stop. A second signal cancels in-flight attempts and ends the ctx a running code step was given, so its git stops too. A journal replay is still served after a stop, since it costs nothing; the stop returns at the first call that would spawn.
 - **`stop_reason` precedence.** A stop the runtime recorded wins, even if the body swallowed it. Then a `StopError` from the body, then `cancelled` (the parent context), then `crashed` (a body error or panic), then `returned`.
 - **Caps** are checked at spawn. A cap that passes during a step or a backoff stops the run at the next spawn.
-- **Orphans.** At launch, every process whose arguments carry `--session-id <id>` for an id in `children.json` is a call left by a killed launch. A gate's shell is recorded under an `lsf-gate:` marker, which it carries as `$0`, and is matched the same way. A gate command that begins with `exec` replaces that shell, so it cannot be found. Its group gets SIGTERM, then SIGKILL after `killGrace`; a zombie counts as gone. If `ps` fails, or a kill fails, those records are carried into this launch's `children.json` for the next launch to reap. A torn `children.json` is reported and treated as empty.
+- **Orphans.** At launch, before `scratch/` is wiped, every container carrying the state dir's label is a call left by a killed launch, and is removed with `podman rm -f -t 0`. A failed `podman ps` is logged and the launch goes on; the next launch finds the containers by their label. A gate's shell is recorded in `children.json` under an `lsf-gate:` marker, which it carries as `$0`, and is found by it in `ps`. A gate command that begins with `exec` replaces that shell, so it cannot be found. Its group gets SIGTERM, then SIGKILL after `killGrace`; a zombie counts as gone. If `ps` fails, or a kill fails, those records are carried into this launch's `children.json` for the next launch to reap. An entry that is not a gate marker (a call an earlier runtime recorded) is logged and dropped, not killed. A torn `children.json` is reported and treated as empty. In a dry run, orphans are reported, not removed.
 - **Clones and worktrees.**
   - Creation, fetch-back and removal are serialised. One 5-minute bound covers each whole operation (a clone's creation, a fetch-back, a removal), and its git ends on a repeated signal; the runtime's git runs with `core.fsmonitor=false`, since an agent can write its clone's config.
   - **Git config isolation.** The runtime's and the orchestrator's own git in a clone (its creation, the uncommitted check, a removal's reads, the merge step in its merge clone, the gate checkout) runs with `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`, and without config from the environment (`GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT` and its keys). A driver a clone's `.gitattributes` selects (a filter, a diff or merge driver) therefore runs only if the clone's local config defines it, and an agent cannot select a host-defined one there (outside clones, see Known limits). This needs git 2.32 or later for `GIT_CONFIG_GLOBAL`; the runtime does not check the version. Git in the main checkout and in code steps' worktrees keeps the host config: commits there need the user's identity, and a worktree shares the main repo's config. A clone takes, besides the `configCopied` keys (identity, signing including the `gpg.*program` keys, line endings), a copy of the files the main repo's `core.excludesFile` and `core.attributesFile` name, under `.git/lsf-global/` and set as the clone's own `core.excludesFile` and `core.attributesFile`, so they keep their place below `.gitignore` and `.gitattributes`.
@@ -598,6 +602,7 @@ Every call in a kept clone that spawned and returns a value or a null reports th
 - **Large files.** The merge step compares a file over 64 MiB outside the merge's paths, before and after the conflict call, by size and modification time, not content.
 - **Session limits.** The shape of a session limit under `-p` is built from the binary's schema and interactive transcripts, not observed. The first real limit's stream is kept under `calls/`.
 - **Retries in a dirty clone.** A retry after a call made partial changes reruns in the same clone, a discarded one included.
+- **One podman launch failure ends a run.** A sporadic 125 or 126 (a transient `pasta` or storage fault) is not retried; the relaunch resumes from the journal.
 - **Group kill after reaping.** After the leader of a cancelled call is reaped, its pgid could in principle be reused before the group SIGKILL. Sequential pid allocation makes this need a wrapped pid space.
 - **Orphan grandchildren.** An orphan whose group leader is gone is not signalled.
 - **Descendants of a normal exit.** A call that exits normally while a descendant holds its stdout returns `killGrace` later. The descendant is not killed; what happens to processes a stage detaches is `long-running-design`'s question.

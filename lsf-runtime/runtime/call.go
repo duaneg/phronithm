@@ -31,10 +31,16 @@ type spawnSpec struct {
 	transcript string
 }
 
-// spawn runs one attempt and waits for it. A guard timeout or a repeated
-// signal cancels it: SIGTERM to its process group, SIGKILL to the leader
-// after KillGrace, then SIGKILL to the group once the leader is reaped, which
-// reaches survivors such as a TERM-ignoring grandchild. While a member lives
+// spawn runs one attempt, a podman run, and waits for it. A guard timeout or
+// a repeated signal cancels it: SIGTERM to its process group, which --init
+// and podman's signal proxy carry into the container, and SIGKILL to the
+// leader after KillGrace. The container's processes run under conmon, not
+// the client, so the SIGKILL leaves them running: after a cancel, or any
+// non-zero exit (a client killed mid-cleanup can leave its container), the
+// container is removed with podman rm -f before spawn returns, and only then
+// does anything read the clone. A failed removal is the attempt's rmErr.
+// The group gets SIGKILL last, once the leader is reaped, which reaches a
+// client survivor such as a TERM-ignoring grandchild. While a member lives
 // the pgid cannot be reused; if none does, the pid is free and a new group
 // leader could take it between Wait and the kill. That window is accepted:
 // pids are allocated in sequence, so reuse within it needs a wrapped pid space.
@@ -76,8 +82,6 @@ func (rt *Runtime) spawn(ctx context.Context, sp spawnSpec) *attempt {
 	}
 	cmd.WaitDelay = rt.cfg.KillGrace.D()
 
-	rt.addChild(sp.sessionID)
-	defer rt.removeChild(sp.sessionID)
 	if err := cmd.Start(); err != nil {
 		if actx.Err() != nil { // cancelled before it started: not a spawn failure
 			a.cause = context.Cause(actx)
@@ -87,12 +91,14 @@ func (rt *Runtime) spawn(ctx context.Context, sp spawnSpec) *attempt {
 		return a
 	}
 	pid := cmd.Process.Pid
-	rt.setChildPid(sp.sessionID, pid)
 	rt.event("spawn", map[string]any{"pid": pid, "session": sp.sessionID, "container": sp.name})
 	werr := cmd.Wait()
 	lw.flush()
 	if lw.fileErr != nil {
 		rt.Log(fmt.Sprintf("transcript %s: %v", sp.transcript, lw.fileErr))
+	}
+	if cmd.ProcessState == nil || cmd.ProcessState.ExitCode() != 0 || cancelledRunning.Load() {
+		a.rmErr = rt.removeContainer(sp.name)
 	}
 	if cancelledRunning.Load() {
 		a.cause = context.Cause(actx)

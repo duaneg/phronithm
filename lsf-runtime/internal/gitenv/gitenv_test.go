@@ -1,6 +1,8 @@
 package gitenv
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -40,5 +42,24 @@ func TestEnv(t *testing.T) {
 	}
 	if last(clone, "GIT_CONFIG_GLOBAL") != "/dev/null" || last(clone, "GIT_CONFIG_NOSYSTEM") != "1" {
 		t.Errorf("clone env: %v", clone)
+	}
+}
+
+func TestCloneGitDir(t *testing.T) {
+	d := t.TempDir()
+	sub := filepath.Join(d, "a", "b")
+	os.MkdirAll(filepath.Join(d, ".git"), 0o755)
+	os.MkdirAll(sub, 0o755)
+	if err := CloneGitDir(sub); err != nil {
+		t.Errorf("plain: %v", err)
+	}
+	os.WriteFile(filepath.Join(d, ".git", "commondir"), []byte("x\n"), 0o644)
+	if err := CloneGitDir(sub); err == nil || !strings.Contains(err.Error(), "commondir exists") {
+		t.Errorf("commondir: %v", err)
+	}
+	f := t.TempDir()
+	os.WriteFile(filepath.Join(f, ".git"), []byte("gitdir: /x\n"), 0o644)
+	if err := CloneGitDir(f); err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Errorf("gitfile: %v", err)
 	}
 }

@@ -3,7 +3,9 @@
 package gitenv
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -43,4 +45,28 @@ func Env(clone bool) []string {
 		env = append(env, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
 	}
 	return env
+}
+
+// CloneGitDir checks the git directory a clone's git would use from dir:
+// the first .git at or above dir must be a directory with no commondir.
+// An agent can write its clone's .git, though not its config, hooks or
+// info; a commondir there would point git at a config the agent wrote,
+// and a .git file at a directory it made, whose drivers the runtime's git
+// would then run on the host.
+func CloneGitDir(dir string) error {
+	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
+		fi, err := os.Lstat(filepath.Join(d, ".git"))
+		if err == nil {
+			if !fi.IsDir() {
+				return fmt.Errorf("%s/.git is not a directory; the runtime's git does not follow it", d)
+			}
+			if _, err := os.Lstat(filepath.Join(d, ".git", "commondir")); err == nil {
+				return fmt.Errorf("%s/.git/commondir exists; the runtime's git does not follow it", d)
+			}
+			return nil
+		}
+		if d == filepath.Dir(d) {
+			return nil
+		}
+	}
 }

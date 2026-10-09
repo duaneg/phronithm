@@ -66,6 +66,7 @@ type streamAcc struct {
 	// of a failed authentication, before any result.
 	AuthRetries int
 	BadLines    int
+	Lines       int // lines decoded as events: 0 means the stream never started
 }
 
 func (a *streamAcc) add(line []byte) {
@@ -77,6 +78,7 @@ func (a *streamAcc) add(line []byte) {
 		a.BadLines++
 		return
 	}
+	a.Lines++
 	switch e.Type {
 	case "system":
 		switch {

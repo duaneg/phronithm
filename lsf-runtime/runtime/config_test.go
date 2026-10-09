@@ -224,6 +224,7 @@ func TestLoadConfigRejectsContainer(t *testing.T) {
 		{`127.0.0.1:0`, `[::1]:0`, `not "::1"`},
 		{`"stateDir":"/x"`, `"stateDir":"/x:y"`, "cannot be a bind mount's source"},
 		{`"pluginDir":"/p"`, `"pluginDir":"/p:q"`, "cannot be a bind mount's source"},
+		{`"image":"img@`, `"image":"-v/:/h@`, "name it by digest"},
 		{`"claudeVersion"`, `"env":["1BAD"],"claudeVersion"`, `"1BAD" is not a variable name`},
 		{`"claudeVersion"`, `"env":["GOOD","HTTPS_PROXY"],"claudeVersion"`, "HTTPS_PROXY is set by the runtime"},
 		{`"claudeVersion"`, `"env":["ANTHROPIC_API_KEY"],"claudeVersion"`, "ANTHROPIC_API_KEY is set by the runtime"},

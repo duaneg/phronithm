@@ -76,7 +76,23 @@ func Run(ctx context.Context, cfg Config, body func(ctx context.Context, rt *Run
 			return Summary{}, fmt.Errorf("lsf-runtime: %w", err)
 		}
 	}
-	for _, d := range []string{"", "journal", "calls", "wt", "clone", "scratch", "merge", "gates/logs"} {
+	// The state dir is the user's alone when made here: its transcripts can
+	// carry the placeholder bearer, which spends the credential through the
+	// proxy.
+	if err := os.MkdirAll(cfg.StateDir, 0o700); err != nil {
+		return Summary{}, fmt.Errorf("lsf-runtime: state dir: %w", err)
+	}
+	// Resolved once, so a clone's config, its mount and a merge clone's
+	// resolved path name it alike.
+	resolved, err := filepath.EvalSymlinks(cfg.StateDir)
+	if err != nil {
+		return Summary{}, fmt.Errorf("lsf-runtime: state dir: %w", err)
+	}
+	if strings.Contains(resolved, ":") {
+		return Summary{}, fmt.Errorf("lsf-runtime: state dir %s: a path with ':' cannot be a bind mount's source", resolved)
+	}
+	cfg.StateDir = resolved
+	for _, d := range []string{"journal", "calls", "wt", "clone", "scratch", "merge", "gates/logs"} {
 		if err := os.MkdirAll(filepath.Join(cfg.StateDir, d), 0o755); err != nil {
 			return Summary{}, fmt.Errorf("lsf-runtime: state dir: %w", err)
 		}

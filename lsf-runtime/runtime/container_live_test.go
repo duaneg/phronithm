@@ -13,6 +13,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // Live tests run each call in a real rootless podman container, with the
@@ -100,7 +101,9 @@ func TestLiveCall(t *testing.T) {
 	}
 	if _, err := exec.LookPath("journalctl"); err != nil {
 		t.Log("journalctl absent: the journal check is skipped")
-	} else if out, _ := exec.Command("journalctl", "--user", "-q", "-o", "cat", "CONTAINER_NAME="+names[0]).Output(); len(strings.TrimSpace(string(out))) > 0 {
+	} else if out, err := exec.Command("journalctl", "--user", "-q", "-o", "cat", "CONTAINER_NAME="+names[0]).Output(); err != nil {
+		t.Errorf("journalctl: %v", err)
+	} else if len(strings.TrimSpace(string(out))) > 0 {
 		t.Errorf("the call's stream is in the journal: %.200s", out)
 	}
 	if left := liveContainers(t, cfg); len(left) > 0 {
@@ -133,7 +136,7 @@ func checkProbe(t *testing.T, p map[string][]string, dir string) {
 	if got := p["cwd"]; len(got) != 1 || (got[0] != dir && got[0] != resolved) {
 		t.Errorf("cwd %q, want %s", got, dir)
 	}
-	if got := strings.Join(p["readonly"], " "); got != ".git/config .git/hooks/x .git/info/x" {
+	if got := strings.Join(p["readonly"], " "); got != ".git-rename .git/config .git/hooks/x .git/info/x" {
 		t.Errorf("read-only %q; writable %q", got, p["writable"])
 	}
 	if got := p["index"]; len(got) != 1 || got[0] != "writable" {
@@ -262,4 +265,60 @@ func TestLiveMergeClone(t *testing.T) {
 		t.Errorf("staged f.txt %q", b)
 	}
 	checkProbe(t, probe(t, merge), merge)
+}
+
+// L3: a call whose container ignores SIGTERM, killed by the guard timeout
+// on the grace-expiry path, leaves no container behind.
+func TestLiveGraceExpiry(t *testing.T) {
+	cfg := liveConfig(t)
+	cfg.GuardTimeout = Duration(2 * time.Second)
+	cfg.KillGrace = Duration(time.Second)
+	t.Setenv("STUB_SCRIPT", "hang-ignore-term")
+	start := time.Now()
+	res, err := call(t, cfg, vOpts)
+	if err != nil || res.Class != string(classTimeout) {
+		t.Fatalf("res %+v err %v", res, err)
+	}
+	if left := liveContainers(t, cfg); len(left) > 0 {
+		t.Errorf("containers left after %v: %q", time.Since(start), left)
+	}
+}
+
+// L4: an image that is not present fails the launch (podman exits 125
+// under --pull=never): runtime-error, after one attempt.
+func TestLiveLaunchFailure(t *testing.T) {
+	cfg := liveConfig(t)
+	t.Setenv("STUB_SCRIPT", "ok")
+	var res CallResult
+	var err error
+	s := launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		rt.cfg.Image = "localhost/lsf-absent@sha256:" + strings.Repeat("0", 64)
+		res, err = rt.Call(ctx, "x", vOpts)
+		return nil, err
+	})
+	if err == nil || s.StopReason != StopRuntimeError || !strings.Contains(s.Detail, "podman run exited 125 before the stream") || res.Attempts != 1 {
+		t.Errorf("res %+v err %v summary %+v", res, err, s)
+	}
+}
+
+// L6: a container carrying the state dir's label, left by an earlier
+// launch, is gone after the next launch starts.
+func TestLiveReaping(t *testing.T) {
+	cfg := liveConfig(t)
+	h := mustHash(t, cfg.StateDir)
+	name := "lsf-" + h[:8] + "-orphan"
+	if out, err := exec.Command(cfg.PodmanBin, "run", "-d", "--pull=never", "--log-driver=none", "--name", name, "--label", "lsf.state="+h,
+		cfg.Image, "sleep", "300").CombinedOutput(); err != nil {
+		t.Fatalf("podman run -d: %v %s", err, out)
+	}
+	if left := liveContainers(t, cfg); len(left) != 1 {
+		t.Fatalf("precondition: %q", left)
+	}
+	launch(t, cfg, func(context.Context, *Runtime) (json.RawMessage, error) { return nil, nil })
+	if left := liveContainers(t, cfg); len(left) > 0 {
+		t.Errorf("containers left: %q", left)
+	}
+	if countEvents(telemetry(t, cfg), "orphan-terminated") != 1 {
+		t.Error("no orphan-terminated event")
+	}
 }

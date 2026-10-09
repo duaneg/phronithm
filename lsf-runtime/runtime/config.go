@@ -65,7 +65,7 @@ const (
 )
 
 var (
-	imageDigest = regexp.MustCompile(`^[^@\s]+@sha256:[0-9a-f]{64}$`)
+	imageDigest = regexp.MustCompile(`^[^-@\s][^@\s]*@sha256:[0-9a-f]{64}$`)
 	envName     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
@@ -217,11 +217,6 @@ func (c *Config) prepare() error {
 			errs = append(errs, fmt.Errorf("env: %s is set by the runtime or carries a credential or route; it cannot be passed", e))
 		}
 	}
-	for _, f := range []struct{ name, path string }{{"stateDir", c.StateDir}, {"pluginDir", c.PluginDir}} {
-		if strings.Contains(f.path, ":") {
-			errs = append(errs, fmt.Errorf("%s %q: a path with ':' cannot be a bind mount's source", f.name, f.path))
-		}
-	}
 	if c.Concurrency < 0 || c.GateConcurrency < 0 || c.MaxSessionWaits < 0 || c.Caps.MaxCalls < 0 || c.Caps.MaxCostUSD < 0 {
 		errs = append(errs, errors.New("concurrency, gateConcurrency, maxSessionWaits and caps must not be negative"))
 	}
@@ -243,6 +238,11 @@ func (c *Config) prepare() error {
 				errs = append(errs, err)
 			}
 			*p = abs
+		}
+	}
+	for _, f := range []struct{ name, path string }{{"stateDir", c.StateDir}, {"pluginDir", c.PluginDir}} {
+		if strings.Contains(f.path, ":") {
+			errs = append(errs, fmt.Errorf("%s %q: a path with ':' cannot be a bind mount's source", f.name, f.path))
 		}
 	}
 	if err := errors.Join(errs...); err != nil {

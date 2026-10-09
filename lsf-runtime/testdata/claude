@@ -19,7 +19,7 @@
 #        dirty:<path> (writes <path> in cwd, then ok) | modify:<path> (appends to it, then ok) |
 #        commit:<path> (writes <path>, commits it and tags the commit t-<path>, then ok) |
 #        dirty-transient:<path> (writes <path>, then a 529) |
-#        file:<path> (cats a stream file) |
+#        file:<path> (cats a stream file) | exit:<n> (exits n after its first lines) |
 #        stage:<path> (writes "resolved" to <path> and git-adds it, then ok) |
 #        probe (writes probe.txt in cwd: cwd, uid, which of .git/config,
 #        .git/hooks/x, .git/info/x and the index can be written, env, and the
@@ -117,11 +117,13 @@ case "$mode" in
              echo '{"type":"result","subtype":"success","is_error":true,"api_error_status":529,"total_cost_usd":0}'; code=1 ;;
   fixture:*) cat "$here/streams/${mode#fixture:}.jsonl" ;;
   file:*)    cat "${mode#file:}" ;;
+  exit:*)    code=${mode#exit:} ;;
   stage:*)   f=${mode#stage:}; echo resolved > "$f"
              if git add -- "$f" >&2; then result_ok '{"verdict":"pass","n":3}'; else code=2; fi ;;
   probe)     {
                echo "cwd=$(pwd -P)"
                echo "uid=$(id -u)"
+               if mv .git .git.moved 2>/dev/null; then mv .git.moved .git; echo "writable=.git-rename"; else echo "readonly=.git-rename"; fi
                for p in .git/config .git/hooks/x .git/info/x; do
                  if (echo x >> "$p") 2>/dev/null; then echo "writable=$p"; else echo "readonly=$p"; fi
                done

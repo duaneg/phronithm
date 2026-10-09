@@ -3,11 +3,16 @@ package lsfrt
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/duaneg/phronithm/lsf-runtime/internal/testcfg"
 )
 
 // wantArgv is the podman argv the design gives a call (lsf-runtime.md,
@@ -18,6 +23,7 @@ func wantArgv(rt *Runtime, cfg Config, name, dir string, git bool, o Opts, tools
 		"--userns=keep-id", "--cap-drop=all", "--security-opt", "no-new-privileges", "--read-only", "--tmpfs", "/tmp:rw,exec",
 		"--network", "pasta:--splice-only,-T," + port, "-v", dir + ":" + dir + ":rw"}
 	if git {
+		a = append(a, "-v", dir+"/.git:"+dir+"/.git:rw")
 		for _, g := range []string{"config", "hooks", "info"} {
 			p := dir + "/.git/" + g
 			a = append(a, "-v", p+":"+p+":ro")
@@ -99,6 +105,12 @@ func TestCallContainerArgv(t *testing.T) {
 		filepath.Join(cfg.StateDir, "telemetry.jsonl"), filepath.Join(cfg.StateDir, "log.txt")} {
 		if b, _ := os.ReadFile(f); placeholder == "" || strings.Contains(string(b), placeholder) {
 			t.Errorf("%s carries the placeholder bearer", f)
+		}
+	}
+	// podman's own environment carries it, for -e ANTHROPIC_AUTH_TOKEN.
+	for _, n := range runs {
+		if b, _ := os.ReadFile(filepath.Join(stub, "podman", fmt.Sprintf("token.%d", n))); string(b) != placeholder {
+			t.Errorf("run %d: podman's ANTHROPIC_AUTH_TOKEN %q, want the placeholder", n, b)
 		}
 	}
 	// The stub claude ran in the clone with the plugin dir substituted.
@@ -193,4 +205,115 @@ func TestDryRunArgv(t *testing.T) {
 		return
 	}
 	t.Error("no dry-run event")
+}
+
+// A podman run exiting 125, 126 or 127 before its stream stops the run with
+// runtime-error after one attempt, unjournaled; the same exit after the
+// stream began is the model's, classified as any other.
+func TestLaunchFailureStops(t *testing.T) {
+	for _, code := range []string{"125", "126", "127"} {
+		t.Run(code, func(t *testing.T) {
+			cfg, stub := testConfig(t)
+			t.Setenv("STUB_PODMAN_RUN_EXIT", code)
+			res, err := call(t, cfg, vOpts)
+			s := readSummary(t, cfg)
+			if err == nil || s.StopReason != StopRuntimeError || !strings.Contains(s.Detail, "podman run exited "+code+" before the stream") ||
+				!strings.Contains(s.Detail, "stub podman run failed") || res.Attempts != 1 {
+				t.Errorf("res %+v err %v summary %+v", res, err, s)
+			}
+			if n := stubCount(t, stub); n != 0 {
+				t.Errorf("claude ran %d times", n)
+			}
+			if b, _ := filepath.Glob(filepath.Join(cfg.StateDir, "journal", "*.json")); len(b) != 0 {
+				t.Errorf("journaled %q", b)
+			}
+		})
+	}
+	cfg, _ := testConfig(t)
+	t.Setenv("STUB_SCRIPT", "exit:125")
+	res, err := call(t, cfg, vOpts)
+	if err != nil || res.Class != string(classTransient) {
+		t.Errorf("an exit 125 after the stream began: res %+v err %v", res, err)
+	}
+}
+
+// A call killed on the grace-expiry path (a TERM-ignoring container, the
+// client SIGKILLed) leaves no container: podman rm -f ends it before Call
+// returns, and its processes with it.
+func TestGraceExpiryRemovesContainer(t *testing.T) {
+	cfg, stub := testConfig(t)
+	cfg.GuardTimeout = Duration(time.Second)
+	cfg.KillGrace = Duration(300 * time.Millisecond)
+	t.Setenv("STUB_PODMAN_DETACH", "1")
+	t.Setenv("STUB_SCRIPT", "hang-ignore-term")
+	res, err := call(t, cfg, vOpts)
+	if err != nil || res.Class != string(classTimeout) {
+		t.Fatalf("res %+v err %v", res, err)
+	}
+	for _, pid := range stubPids(t, stub, 1) {
+		if alive(pid) {
+			t.Errorf("pid %d outlived Call", pid)
+		}
+	}
+	out, _ := exec.Command(testcfg.Podman(), "ps", "-a", "--filter", "label=lsf.state="+mustHash(t, cfg.StateDir), "--format", "{{.Names}}").Output()
+	if len(out) > 0 {
+		t.Errorf("containers left: %q", out)
+	}
+	if countEvents(telemetry(t, cfg), "container-removed") != 1 {
+		t.Error("no container-removed event")
+	}
+}
+
+// A failed removal stops the run before anything reads the clone: no
+// fetch-back, no journal record, and a discarded clone is not removed.
+func TestFailedRemovalLeavesCloneUnread(t *testing.T) {
+	for _, label := range []string{vOpts.Label, "critique-code:r1:u1"} {
+		t.Run(label, func(t *testing.T) {
+			cfg, _ := testConfig(t)
+			t.Setenv("STUB_SCRIPT", "transient")
+			t.Setenv("STUB_PODMAN_RM_EXIT", "1")
+			o := vOpts
+			o.Label = label
+			_, err := call(t, cfg, o)
+			s := readSummary(t, cfg)
+			if err == nil || s.StopReason != StopRuntimeError || !strings.Contains(s.Detail, "not removed") {
+				t.Fatalf("err %v summary %+v", err, s)
+			}
+			if b, _ := filepath.Glob(filepath.Join(cfg.StateDir, "journal", "*.json")); len(b) != 0 {
+				t.Errorf("journaled %q", b)
+			}
+			if out, _ := exec.Command("git", "-C", cfg.Repo, "branch", "--list", "lsf/*").Output(); len(out) > 0 {
+				t.Errorf("fetched back: %s", out)
+			}
+			sub := "clone"
+			if label != vOpts.Label {
+				sub = "scratch"
+			}
+			if _, err := os.Stat(filepath.Join(cfg.StateDir, sub, journalKey(label))); err != nil {
+				t.Errorf("clone gone: %v", err)
+			}
+		})
+	}
+}
+
+func mustHash(t *testing.T, stateDir string) string {
+	t.Helper()
+	h, err := stateHashOf(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+// A call that redirects its clone's git directory (a commondir naming a
+// config it wrote) gets no host git run there: the fetch-back is refused
+// and the run stops.
+func TestRedirectedGitDirRefused(t *testing.T) {
+	cfg, _ := testConfig(t)
+	t.Setenv("STUB_SCRIPT", "dirty:.git/commondir")
+	_, err := call(t, cfg, vOpts)
+	s := readSummary(t, cfg)
+	if err == nil || s.StopReason != StopRuntimeError || !strings.Contains(s.Detail, "commondir exists") {
+		t.Errorf("err %v summary %+v", err, s)
+	}
 }

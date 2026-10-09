@@ -9,7 +9,9 @@
 # STUB_PODMAN_STATE      directory for records (default $STUB_STATE/podman):
 #                        count, run.<n> (the run's argv, NUL-separated),
 #                        name.<name> (pid, then one label per line), calls
-#                        (one line per non-run invocation). Records are
+#                        (one line per non-run invocation), token.<n> (run
+#                        n's ANTHROPIC_AUTH_TOKEN, which -e passes on by
+#                        name; absent when unset). Records are
 #                        written whole (a temp file renamed into place).
 # A run's command keeps the client's pid, and rm -f signals that pid's
 # process group: the caller must start podman in its own group (Setpgid),
@@ -220,6 +222,7 @@ case "$sub" in
     n=$(( $(cat "$state/count" 2>/dev/null || echo 0) + 1 ))
     echo "$n" > "$state/count.tmp" && mv -f "$state/count.tmp" "$state/count"
     printf '%s\0' run "$@" > "$state/run.$n"
+    [ -n "${ANTHROPIC_AUTH_TOKEN:-}" ] && printf '%s' "$ANTHROPIC_AUTH_TOKEN" > "$state/token.$n"
     unlock
     cmd_run "$@" ;;
   info)  note info "$@"; cmd_info "$@" ;;

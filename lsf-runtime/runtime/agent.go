@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -48,7 +49,7 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 	// A discarded clone goes whatever the call's end; afterCall removes it
 	// on a return, this on a stop.
 	defer func() {
-		if c.placed && c.place.kind == CloneDiscarded {
+		if c.placed && c.place.kind == CloneDiscarded && !c.containerLeft {
 			rt.discard(o.Label, c.place)
 		}
 	}()
@@ -152,7 +153,10 @@ type callState struct {
 	role       Role
 	place      placement // resolved at the first admitted attempt
 	placed     bool
-	res        CallResult
+	// containerLeft: an attempt's container was not removed, so its
+	// clone is not read or discarded.
+	containerLeft bool
+	res           CallResult
 }
 
 // attempt takes a concurrency slot, admits, spawns and classifies one
@@ -201,8 +205,19 @@ func (rt *Runtime) attempt(ctx context.Context, c *callState) (*attempt, verdict
 		}
 		rt.addCost(r.CostUSD)
 	}
+	if a.rmErr != nil {
+		// Nothing may read the clone while its container may run: no
+		// fetch-back, uncommitted check, discard or journal record. The next
+		// launch's reaping removes the container.
+		c.containerLeft = true
+		return a, verdict{}, rt.setStop(StopRuntimeError, fmt.Sprintf("%s: container %s not removed: %v; its clone is left unread", c.o.Label, cs.name, a.rmErr))
+	}
 	if a.cause != nil && !errors.Is(a.cause, errGuard) && !errors.Is(a.cause, errKilled) {
 		return a, verdict{}, &StopError{Reason: StopCancelled}
+	}
+	if launchFailed(a) {
+		// An image, mount, pasta or name fault, not the model's: not retried.
+		return a, verdict{}, rt.setStop(StopRuntimeError, fmt.Sprintf("%s: podman run exited %d before the stream: %s", c.o.Label, a.exitCode, strings.TrimSpace(a.stderr)))
 	}
 	v := classify(a, c.o.Schema, c.skill, c.skill != "")
 	if v.class == classSessionLimit {
@@ -217,6 +232,12 @@ func (rt *Runtime) attempt(ctx context.Context, c *callState) (*attempt, verdict
 	c.res.Class = string(v.class)
 	rt.recordAttempt(c.o, c.roleName, sid, c.res.Attempts-1, a, v, time.Since(t0))
 	return a, v, nil
+}
+
+// launchFailed reports a podman run that failed before its stream started:
+// podman's own error (125), or a command that could not be run (126, 127).
+func launchFailed(a *attempt) bool {
+	return a.spawnErr == nil && a.acc.Lines == 0 && (a.exitCode == 125 || a.exitCode == 126 || a.exitCode == 127)
 }
 
 // Agent is Call's value: the orchestrator's agent(). (nil, nil) is null.

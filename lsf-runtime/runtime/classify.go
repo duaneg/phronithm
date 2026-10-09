@@ -44,6 +44,7 @@ type attempt struct {
 	exitCode int
 	stderr   string // tail
 	acc      streamAcc
+	rmErr    error // the container's removal failed: it may still run in the clone
 }
 
 // verdict is an attempt's classification with what the retry loop needs.

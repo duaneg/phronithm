@@ -1,6 +1,7 @@
 package lsfrt
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,17 +13,20 @@ import (
 	"time"
 )
 
-// reapOrphans terminates calls a previous launch left running: a SIGKILLed
-// launch's children keep running and would race its successor (spike run 4).
-// A process whose arguments carry "--session-id <id>" for an id recorded in
-// children.json is a call; it leads its own process group, which gets SIGTERM
-// and, after KillGrace, SIGKILL. A gate process (RunGates) is recorded under
-// its marker, the "lsf-gate:" argument its shell carries as $0. Matching the
-// session id or marker, not the pid, covers a child recorded before Start
-// and rules out a reused pid. If ps fails,
-// children.json is kept for the next launch. In a dry run, orphans are
-// reported, not killed.
+// reapOrphans removes what a previous launch left running: a SIGKILLed
+// launch's calls keep running and would race its successor (spike run 4).
+// A call is a container carrying this state dir's label; each is removed
+// with podman rm -f. If podman ps fails, the failure is logged and the
+// launch goes on: the containers are found by label, so the next launch
+// finds them still. A gate process (RunGates) is recorded in children.json
+// under its marker, the "lsf-gate:" argument its shell carries as $0, and
+// matched by it, not by pid, which covers one recorded before Start and
+// rules out a reused pid; its group gets SIGTERM and, after KillGrace,
+// SIGKILL. If ps fails, children.json is kept for the next launch. Another
+// entry there is a call recorded by an earlier runtime, logged and dropped.
+// In a dry run, orphans are reported, not removed.
 func (rt *Runtime) reapOrphans() {
+	rt.reapContainers()
 	path := filepath.Join(rt.cfg.StateDir, "children.json")
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -33,31 +37,38 @@ func (rt *Runtime) reapOrphans() {
 		rt.Log("children.json unreadable, treated as empty: " + err.Error())
 		rt.event("children-unreadable", map[string]any{"error": err.Error()})
 	}
+	for marker, pid := range recorded {
+		if !strings.HasPrefix(marker, gateMarkerPrefix) {
+			rt.Log(fmt.Sprintf("children.json: %s (pid %d) is not a gate marker; dropped, not killed", marker, pid))
+			rt.event("children-dropped", map[string]any{"entry": marker, "pid": pid})
+			delete(recorded, marker)
+		}
+	}
 	if len(recorded) > 0 {
 		procs, err := processes()
 		if err != nil {
-			rt.Log("orphan check failed; the recorded calls are carried forward for the next launch: " + err.Error())
+			rt.Log("orphan check failed; the recorded gates are carried forward for the next launch: " + err.Error())
 			rt.event("orphan-check-failed", map[string]any{"error": err.Error()})
 			rt.carryForward(recorded)
 			return
 		}
 		for pid, args := range procs {
-			for session := range recorded {
-				if !matchesChild(args, session) {
+			for marker := range recorded {
+				if !matchesChild(args, marker) {
 					continue
 				}
 				if rt.cfg.DryRun {
-					rt.event("orphan-found", map[string]any{"pid": pid, "session": session})
-					rt.Log(fmt.Sprintf("dry run: orphaned call pid %d (session %s) left running", pid, session))
+					rt.event("orphan-found", map[string]any{"pid": pid, "gate": marker})
+					rt.Log(fmt.Sprintf("dry run: orphaned gate pid %d (%s) left running", pid, marker))
 					continue
 				}
 				if err := killGroup(pid, rt.cfg.KillGrace.D()); err != nil {
-					rt.Log(fmt.Sprintf("orphaned call pid %d (session %s), carried forward: %v", pid, session, err))
-					rt.carryForward(map[string]int{session: pid})
+					rt.Log(fmt.Sprintf("orphaned gate pid %d (%s), carried forward: %v", pid, marker, err))
+					rt.carryForward(map[string]int{marker: pid})
 					continue
 				}
-				rt.event("orphan-terminated", map[string]any{"pid": pid, "session": session})
-				rt.Log(fmt.Sprintf("terminated orphaned call pid %d (session %s) left by a previous launch", pid, session))
+				rt.event("orphan-terminated", map[string]any{"pid": pid, "gate": marker})
+				rt.Log(fmt.Sprintf("terminated orphaned gate pid %d (%s) left by a previous launch", pid, marker))
 			}
 		}
 	}
@@ -68,16 +79,37 @@ func (rt *Runtime) reapOrphans() {
 	}
 }
 
-// matchesChild reports whether a process's arguments are the recorded child's:
-// a call's --session-id, or a gate shell's marker.
-func matchesChild(args, session string) bool {
-	if strings.HasPrefix(session, gateMarkerPrefix) {
-		return strings.Contains(" "+args+" ", " "+session+" ")
+// reapContainers removes the containers carrying this state dir's label.
+func (rt *Runtime) reapContainers() {
+	ctx, cancel := context.WithTimeout(context.Background(), rmTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, rt.cfg.PodmanBin, "ps", "-a", "--filter", "label="+labelState+"="+rt.stateHash, "--format", "{{.Names}}").Output()
+	if err != nil {
+		rt.Log("orphan check failed (podman ps); a later launch finds the containers by label: " + err.Error())
+		rt.event("orphan-check-failed", map[string]any{"error": err.Error()})
+		return
 	}
-	return strings.Contains(" "+args+" ", " --session-id "+session+" ")
+	for _, name := range strings.Fields(string(out)) {
+		if rt.cfg.DryRun {
+			rt.event("orphan-found", map[string]any{"container": name})
+			rt.Log("dry run: orphaned container " + name + " left running")
+			continue
+		}
+		if err := rt.removeContainer(name); err != nil {
+			rt.Log(fmt.Sprintf("orphaned container %s not removed: %v", name, err))
+			continue
+		}
+		rt.event("orphan-terminated", map[string]any{"container": name})
+		rt.Log("removed orphaned container " + name + " left by a previous launch")
+	}
 }
 
-// carryForward keeps recorded calls in this launch's children.json, which
+// matchesChild reports whether a process's arguments carry a gate's marker.
+func matchesChild(args, marker string) bool {
+	return strings.Contains(" "+args+" ", " "+marker+" ")
+}
+
+// carryForward keeps recorded gates in this launch's children.json, which
 // every spawn rewrites, so a later launch can still reap them.
 func (rt *Runtime) carryForward(recorded map[string]int) {
 	rt.childMu.Lock()
@@ -139,8 +171,9 @@ func running(pid int) bool {
 	return err != nil || !strings.HasPrefix(strings.TrimSpace(string(out)), "Z")
 }
 
-// children.json holds the session ids of live calls (pid 0 before Start), so
-// a later launch can terminate calls a killed launch left running.
+// children.json holds the markers of running gate commands (pid 0 before
+// Start), so a later launch can terminate gates a killed launch left
+// running. Calls are found by their containers' label.
 
 func (rt *Runtime) addChild(sessionID string) {
 	rt.childMu.Lock()

@@ -315,7 +315,8 @@ func gitCmd(ctx context.Context, dir string, args ...string) *exec.Cmd {
 // cloneStdout, cloneOut, cloneRun and cloneCmd are the git helpers for a
 // clone the runtime made (gitenv.Env(true)): no global or system config, so
 // a driver the clone's .gitattributes selects runs only if its local
-// config defines one.
+// config defines one, and none at all in a clone whose git directory an
+// agent redirected (gitenv.CloneGitDir).
 func cloneStdout(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	return cloneCmd(ctx, dir, args...).Output()
 }
@@ -330,7 +331,9 @@ func cloneRun(ctx context.Context, dir string, args ...string) error {
 }
 
 func cloneCmd(ctx context.Context, dir string, args ...string) *exec.Cmd {
-	return newGitCmd(ctx, dir, true, args)
+	cmd := newGitCmd(ctx, dir, true, args)
+	cmd.Err = gitenv.CloneGitDir(dir) // Start returns it: git never runs
+	return cmd
 }
 
 func newGitCmd(ctx context.Context, dir string, clone bool, args []string) *exec.Cmd {

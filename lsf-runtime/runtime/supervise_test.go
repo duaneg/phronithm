@@ -90,21 +90,18 @@ func startHelper(t *testing.T, cfg Config, scenario string) *exec.Cmd {
 	return cmd
 }
 
-// liveChildren is children.json's entries that have a pid.
-func liveChildren(t *testing.T, cfg Config) map[string]int {
+// liveCalls are the stub podman's containers whose process is alive.
+func liveCalls(t *testing.T, stub string) []string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(cfg.StateDir, "children.json"))
-	if err != nil {
-		return nil
-	}
-	var m map[string]int
-	json.Unmarshal(b, &m)
-	for k, v := range m {
-		if v == 0 {
-			delete(m, k)
+	files, _ := filepath.Glob(filepath.Join(stub, "podman", "name.*"))
+	var names []string
+	for _, f := range files {
+		b, _ := os.ReadFile(f)
+		if pid, err := strconv.Atoi(strings.SplitN(string(b), "\n", 2)[0]); err == nil && alive(pid) {
+			names = append(names, strings.TrimPrefix(filepath.Base(f), "name."))
 		}
 	}
-	return m
+	return names
 }
 
 func waitExit(t *testing.T, cmd *exec.Cmd, within time.Duration) {
@@ -127,7 +124,7 @@ func TestSignalStopsAtNextBoundary(t *testing.T) {
 			cfg, stub := testConfig(t)
 			t.Setenv("STUB_SCRIPT", "slow:1.5")
 			cmd := startHelper(t, cfg, "two-calls")
-			waitFor(t, 5*time.Second, "the first call to start", func() bool { return len(liveChildren(t, cfg)) == 1 })
+			waitFor(t, 5*time.Second, "the first call to start", func() bool { return len(liveCalls(t, stub)) == 1 })
 			cmd.Process.Signal(sig)
 			waitExit(t, cmd, 10*time.Second)
 			s := readSummary(t, cfg)
@@ -148,7 +145,7 @@ func TestSignalDuringBackoff(t *testing.T) {
 	t.Setenv("STUB_SCRIPT", "transient,ok")
 	cmd := startHelper(t, cfg, "two-calls")
 	waitFor(t, 5*time.Second, "the first attempt to fail", func() bool {
-		return stubCount(t, stub) == 1 && len(liveChildren(t, cfg)) == 0 && strings.Contains(readFile(t, cfg, "log.txt"), "retrying in")
+		return stubCount(t, stub) == 1 && len(liveCalls(t, stub)) == 0 && strings.Contains(readFile(t, cfg, "log.txt"), "retrying in")
 	})
 	start := time.Now()
 	cmd.Process.Signal(syscall.SIGINT)
@@ -180,10 +177,10 @@ func TestSecondSignalKillsInFlight(t *testing.T) {
 }
 
 func TestSwallowedStopIsRecorded(t *testing.T) {
-	cfg, _ := testConfig(t)
+	cfg, stub := testConfig(t)
 	t.Setenv("STUB_SCRIPT", "slow:1")
 	cmd := startHelper(t, cfg, "swallow")
-	waitFor(t, 5*time.Second, "the first call to start", func() bool { return len(liveChildren(t, cfg)) == 1 })
+	waitFor(t, 5*time.Second, "the first call to start", func() bool { return len(liveCalls(t, stub)) == 1 })
 	cmd.Process.Signal(syscall.SIGINT)
 	waitExit(t, cmd, 10*time.Second)
 	s := readSummary(t, cfg)
@@ -203,7 +200,7 @@ func TestOrphansReapedByNextLaunch(t *testing.T) {
 				return false
 			}
 		}
-		return len(liveChildren(t, cfg)) == 3
+		return len(liveCalls(t, stub)) == 3
 	})
 	cmd.Process.Signal(syscall.SIGKILL)
 	cmd.Wait()
@@ -443,7 +440,7 @@ func orphanLaunch(t *testing.T, cfg Config, stub, mode string) []int {
 				return false
 			}
 		}
-		return len(liveChildren(t, cfg)) == 3
+		return len(liveCalls(t, stub)) == 3
 	})
 	cmd.Process.Signal(syscall.SIGKILL)
 	cmd.Wait()
@@ -468,13 +465,12 @@ func TestReaperEscalatesToSigkill(t *testing.T) {
 	}
 }
 
-func TestPsFailureCarriesOrphansForward(t *testing.T) {
+func TestPsFailureLeavesOrphansForLater(t *testing.T) {
 	cfg, stub := testConfig(t)
 	pids := orphanLaunch(t, cfg, stub, "hang")
-	// A launch whose ps fails keeps the records, even after it spawns.
-	bin := t.TempDir()
-	os.WriteFile(filepath.Join(bin, "ps"), []byte("#!/bin/sh\nexit 1\n"), 0o755)
-	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	// A launch whose podman ps fails goes on; the containers keep their
+	// label, so the next launch finds them.
+	t.Setenv("STUB_PODMAN_PS_EXIT", "1")
 	t.Setenv("STUB_SCRIPT", "ok")
 	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
 		o := vOpts
@@ -484,9 +480,26 @@ func TestPsFailureCarriesOrphansForward(t *testing.T) {
 	if n := countEvents(telemetry(t, cfg), "orphan-check-failed"); n != 1 {
 		t.Fatalf("orphan-check-failed events %d", n)
 	}
-	t.Setenv("PATH", strings.TrimPrefix(os.Getenv("PATH"), bin+":"))
+	for _, pid := range pids {
+		if !alive(pid) {
+			t.Fatalf("pid %d reaped though ps failed", pid)
+		}
+	}
+	t.Setenv("STUB_PODMAN_PS_EXIT", "")
 	launch(t, cfg, func(context.Context, *Runtime) (json.RawMessage, error) { return nil, nil })
 	for _, pid := range pids {
 		waitFor(t, 3*time.Second, "orphan to die", func() bool { return !alive(pid) })
+	}
+}
+
+// An entry children.json holds that is not a gate marker (a call recorded
+// by an earlier runtime) is logged and dropped, not killed.
+func TestLegacyCallEntryDropped(t *testing.T) {
+	cfg, _ := testConfig(t)
+	os.MkdirAll(cfg.StateDir, 0o755)
+	os.WriteFile(filepath.Join(cfg.StateDir, "children.json"), []byte(`{"0b3c5d1e-session":4242}`), 0o644)
+	launch(t, cfg, func(context.Context, *Runtime) (json.RawMessage, error) { return nil, nil })
+	if countEvents(telemetry(t, cfg), "children-dropped") != 1 || readFile(t, cfg, "children.json") != "{}" {
+		t.Errorf("children.json %q", readFile(t, cfg, "children.json"))
 	}
 }

@@ -1,6 +1,7 @@
 package lsfrt
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -10,14 +11,16 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Every agent call runs in its own rootless podman container
 // (docs/design/lsf-runtime.md, Permissions → A call's launch). Its working
 // directory, the call's clone, is bind-mounted at its host path, so the
 // absolute paths in the clone's local config (core.hooksPath and the
-// lsf-global files) resolve inside it as on the host; the clone's
-// .git/config, hooks and info are bound read-only over it. claude and the
+// lsf-global files) resolve inside it as on the host; the clone's .git is
+// bound over itself, so it cannot be renamed away, and its config, hooks
+// and info are bound read-only over that. claude and the
 // plugin are bound read-only; the network is pasta's, spliced to the
 // credential proxy on the host's 127.0.0.1 and nothing else.
 
@@ -82,6 +85,10 @@ func (rt *Runtime) containerArgv(s containerSpec) []string {
 		"--read-only", "--tmpfs", "/tmp:rw,exec", "--network", network,
 		"-v", s.dir+":"+s.dir+":rw")
 	if s.gitBinds {
+		// .git bound over itself is a mountpoint, which the agent cannot
+		// rename or replace with a .git of its own.
+		g := filepath.Join(s.dir, ".git")
+		a = append(a, "-v", g+":"+g+":rw")
 		for _, g := range gitROBinds {
 			p := filepath.Join(s.dir, ".git", g)
 			a = append(a, "-v", p+":"+p+":ro")
@@ -96,6 +103,28 @@ func (rt *Runtime) containerArgv(s containerSpec) []string {
 	}
 	a = append(a, rt.cfg.Image)
 	return append(a, s.cmd...)
+}
+
+// rmTimeout bounds a container's removal, which runs whatever the call's
+// context: a cancelled call's container must still go.
+const rmTimeout = 60 * time.Second
+
+// removeContainer removes a container, if it exists. -t 0: its processes
+// have had SIGTERM and the grace, or were never running.
+func (rt *Runtime) removeContainer(name string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), rmTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, rt.cfg.PodmanBin, "rm", "-f", "-t", "0", "--ignore", name)
+	cmd.WaitDelay = time.Second
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if ctx.Err() != nil {
+			err = fmt.Errorf("podman rm timed out after %v", rmTimeout)
+		}
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	rt.event("container-removed", map[string]any{"container": name})
+	return nil
 }
 
 // callContainer is a call attempt's container in placement p.
