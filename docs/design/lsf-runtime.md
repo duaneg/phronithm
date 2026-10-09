@@ -455,7 +455,7 @@ Classification reads the `result` event first, because the CLI can recover from 
 | `skill-missing` | as `ok`, but no skill load | retry; on the second miss, the value, flagged `skill-not-loaded` |
 | `invalid` | clean result, `structured_output` missing, null or failing the schema | retry, then null |
 | `session-limit` | no clean result, and an assistant `error: rate_limit` | wait until `resetsAt` (from a `rejected` `rate_limit_event`, else the fallback) plus margin, then retry; null after `maxSessionWaits` |
-| `permanent`, authentication | assistant error `authentication_failed`, or status 401, whatever the cause | the run stops with `auth-failed`; the call is not journaled and a kept clone stays as found, so a relaunch re-runs the call. Claude Code 2.1.294 retries a 401 ten times itself (about three minutes) before it returns (`testdata/streams/auth-401.jsonl`) |
+| `permanent`, authentication | assistant error `authentication_failed`, or status 401, whatever the cause; also a call the guard timeout kills while the CLI retries a 401 (`api_retry` with `error_status` 401) | the run stops with `auth-failed`; the call is not journaled and a kept clone stays as found, without a fetch-back, so a relaunch re-runs the call in it (one whose integration branch has since moved, holding commits not fetched, stops the relaunch as any stale clone does). Claude Code 2.1.294 retries a 401 ten times itself (about three minutes) before it returns (`testdata/streams/auth-401.jsonl`). A result with no error but no valid output is `invalid` even beside `authentication_failed` |
 | `permanent` | assistant error `model_not_found`, `billing_error`, `invalid_request` and the like, or status 400/403/404 | null |
 | `transient` | anything else | back off, then null |
 

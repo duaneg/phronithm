@@ -73,6 +73,11 @@ func classify(a *attempt, schema json.RawMessage, skill string, prefixed bool) v
 			v.guardKilled = true
 			return v
 		}
+		// Killed while the CLI retried a 401, or after it gave up: the
+		// credential failed, not the call.
+		if authFailed(&a.acc) {
+			return verdict{class: classPermanent, auth: true}
+		}
 		return verdict{class: classTimeout}
 	case a.spawnErr != nil:
 		return verdict{class: classSpawnError, errors: []string{a.spawnErr.Error()}}
@@ -90,10 +95,16 @@ func classify(a *attempt, schema json.RawMessage, skill string, prefixed bool) v
 	}
 	if slices.ContainsFunc(a.acc.AssistantErrors, func(e string) bool { return slices.Contains(permanentErrors, e) }) ||
 		(r != nil && slices.Contains(permanentStatuses, r.APIErrorStatus)) {
-		auth := slices.Contains(a.acc.AssistantErrors, "authentication_failed") || r != nil && r.APIErrorStatus == 401
-		return verdict{class: classPermanent, auth: auth}
+		return verdict{class: classPermanent, auth: authFailed(&a.acc)}
 	}
 	return verdict{class: classTransient}
+}
+
+// authFailed reports a stream that shows a failed authentication: an
+// authentication_failed assistant error, a 401 result, or the CLI retrying
+// a 401.
+func authFailed(acc *streamAcc) bool {
+	return slices.Contains(acc.AssistantErrors, "authentication_failed") || acc.Result != nil && acc.Result.APIErrorStatus == 401 || acc.AuthRetries > 0
 }
 
 // classifyResult classifies a clean result event: ok, skill-missing or

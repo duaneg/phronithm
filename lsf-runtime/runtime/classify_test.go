@@ -91,6 +91,15 @@ func TestClassifyAuth(t *testing.T) {
 			t.Errorf("%s: class %s auth %v, want permanent auth %v", tc.name, v.class, v.auth, tc.auth)
 		}
 	}
+	// The guard kills a call while the CLI retries a 401: auth, not timeout.
+	retry := `{"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,"error_status":401,"error":"authentication_failed"}`
+	if v := classify(&attempt{cause: errGuard, acc: accFromLines(initLine, retry)}, []byte(verdictSchema), "", false); v.class != classPermanent || !v.auth {
+		t.Errorf("guard-killed 401 retry: %+v", v)
+	}
+	other := `{"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,"error_status":529,"error":"overloaded"}`
+	if v := classify(&attempt{cause: errGuard, acc: accFromLines(initLine, other)}, []byte(verdictSchema), "", false); v.class != classTimeout {
+		t.Errorf("guard-killed 529 retry: %+v", v)
+	}
 }
 
 func TestClassifySynthetic(t *testing.T) {

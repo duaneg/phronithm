@@ -320,7 +320,7 @@ func TestAuthFailedStops(t *testing.T) {
 	if r, ok := IsStop(err1); !ok || r != StopAuthFailed {
 		t.Fatalf("call error %v", err1)
 	}
-	if s.StopReason != StopAuthFailed || !strings.Contains(s.Detail, "refresh the login and relaunch") {
+	if s.StopReason != StopAuthFailed || !strings.Contains(s.Detail, "renew the credential and relaunch") {
 		t.Errorf("summary %+v", s)
 	}
 	if recs, _ := filepath.Glob(filepath.Join(cfg.StateDir, "journal", journalKey(vOpts.Label)+"*")); len(recs) != 0 {
@@ -335,5 +335,30 @@ func TestAuthFailedStops(t *testing.T) {
 	}
 	if n := stubCount(t, stub); n != 2 {
 		t.Errorf("spawns %d, want 2", n)
+	}
+}
+
+// The auth stop is sticky: a later call in the launch does not spawn. A
+// discarded clone goes with the stopped call.
+func TestAuthFailedSticky(t *testing.T) {
+	cfg, stub := testConfig(t)
+	t.Setenv("STUB_SCRIPT", "fixture:auth-401,ok")
+	critic := Opts{Label: "critique-code:u1", Schema: json.RawMessage(verdictSchema)}
+	var err1, err2 error
+	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		_, err1 = rt.Call(ctx, "x", critic)
+		_, err2 = rt.Call(ctx, "y", vOpts)
+		return nil, nil
+	})
+	for _, err := range []error{err1, err2} {
+		if r, ok := IsStop(err); !ok || r != StopAuthFailed {
+			t.Errorf("error %v", err)
+		}
+	}
+	if n := stubCount(t, stub); n != 1 {
+		t.Errorf("spawns %d, want 1", n)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(cfg.StateDir, "scratch")); len(entries) != 0 {
+		t.Errorf("discarded clone left: %v", entries)
 	}
 }

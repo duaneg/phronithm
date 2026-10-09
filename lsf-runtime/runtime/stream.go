@@ -30,6 +30,9 @@ type streamEvent struct {
 		ToolInput json.RawMessage `json:"tool_input"`
 	} `json:"permission_denials"`
 
+	// system api_retry
+	ErrorStatus int `json:"error_status"`
+
 	// rate_limit_event
 	RateLimitInfo *struct {
 		Status        string `json:"status"`
@@ -59,7 +62,10 @@ type streamAcc struct {
 	// RejectedResetsAt is the resetsAt of the last rate_limit_event with
 	// status rejected, in unix seconds; 0 when none.
 	RejectedResetsAt int64
-	BadLines         int
+	// AuthRetries counts api_retry events for a 401: the CLI's own retries
+	// of a failed authentication, before any result.
+	AuthRetries int
+	BadLines    int
 }
 
 func (a *streamAcc) add(line []byte) {
@@ -73,9 +79,12 @@ func (a *streamAcc) add(line []byte) {
 	}
 	switch e.Type {
 	case "system":
-		if e.Subtype == "init" {
+		switch {
+		case e.Subtype == "init":
 			a.SessionID = e.SessionID
 			a.SlashCommands = e.SlashCommands
+		case e.Subtype == "api_retry" && e.ErrorStatus == 401:
+			a.AuthRetries++
 		}
 	case "assistant":
 		if e.Error != "" {
