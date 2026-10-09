@@ -124,11 +124,13 @@ func Run(ctx context.Context, cfg Config, body func(ctx context.Context, rt *Run
 			rt.Log("proxy: " + err.Error())
 			return Summary{}, fmt.Errorf("lsf-runtime: proxy: %w", err)
 		}
-		defer rt.proxy.close()
 	}
 	rt.writeStatus("running")
 
 	outcome, bodyErr, panicked := runBody(ctx, rt, body)
+	if rt.proxy != nil {
+		rt.proxy.close() // calls are done; its count goes in the log before the end
+	}
 	s := rt.summarise(ctx, outcome, bodyErr, panicked)
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil { // an outcome that is not valid JSON

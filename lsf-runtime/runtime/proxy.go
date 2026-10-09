@@ -1,6 +1,7 @@
 package lsfrt
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
@@ -61,6 +62,9 @@ func (c *ProxyConfig) prepare() []error {
 	u, err := url.Parse(c.Upstream)
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.Trim(u.Path, "/") != "" {
 		errs = append(errs, fmt.Errorf("proxy.upstream must be an http(s) origin such as %s, not %q", defaultUpstream, c.Upstream))
+	} else if ip := net.ParseIP(u.Hostname()); u.Scheme == "http" && (ip == nil || !ip.IsLoopback()) {
+		// The token would cross the network in cleartext.
+		errs = append(errs, fmt.Errorf("proxy.upstream: http is for a loopback address only, not %q", c.Upstream))
 	}
 	return errs
 }
@@ -74,11 +78,13 @@ type proxy struct {
 	upstream    *url.URL
 	credFile    string
 	rp          *httputil.ReverseProxy
+	tr          *http.Transport
 
-	mu       sync.Mutex
-	token    string
-	stamp    fileStamp
-	refusals int
+	mu        sync.Mutex
+	token     string
+	stamp     fileStamp
+	refusals  int
+	reReadBad bool // the last re-read failed; logged once until one succeeds
 }
 
 // fileStamp is what a change of the credentials file is detected by.
@@ -111,15 +117,22 @@ func (rt *Runtime) startProxy() (*proxy, error) {
 		return nil, err
 	}
 	errLog := log.New(logWriter{rt}, "proxy: ", 0)
+	// The default transport's settings (an https upstream reached through
+	// HTTPS_PROXY by a CONNECT tunnel, as Claude Code itself would), with
+	// bounds on reaching the upstream; a response may stream for long.
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.ResponseHeaderTimeout = 10 * time.Minute
 	p.rp = &httputil.ReverseProxy{
 		Rewrite:       p.rewrite,
+		Transport:     tr,
 		FlushInterval: -1,
 		ErrorLog:      errLog,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			rt.Log(fmt.Sprintf("proxy: %s %s: upstream: %v", r.Method, r.URL.Path, err))
+			rt.Log(fmt.Sprintf("proxy: %q %q: upstream: %v", r.Method, r.URL.Path, err))
 			w.WriteHeader(http.StatusBadGateway)
 		},
 	}
+	p.tr = tr
 	ln, err := net.Listen("tcp", c.Listen)
 	if err != nil {
 		return nil, err
@@ -141,10 +154,16 @@ func (rt *Runtime) startProxy() (*proxy, error) {
 	return p, nil
 }
 
-// close stops the proxy at launch end, closing open connections.
+// close stops the proxy at launch end: it stops accepting, waits briefly
+// for requests in flight, then closes what is left.
 func (p *proxy) close() {
-	p.srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if p.srv.Shutdown(ctx) != nil {
+		p.srv.Close()
+	}
 	<-p.done
+	p.tr.CloseIdleConnections()
 	p.mu.Lock()
 	n := p.refusals
 	p.mu.Unlock()
@@ -166,13 +185,17 @@ func (rt *Runtime) Proxy() ProxyInfo {
 }
 
 func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if why := p.refuse(r.Header.Values("Authorization")); why != "" {
+	why := p.refuse(r.Header.Values("Authorization"))
+	if why == "" && r.Method == http.MethodConnect {
+		why = "CONNECT"
+	}
+	if why != "" {
 		p.mu.Lock()
 		p.refusals++
 		first := p.refusals == 1
 		p.mu.Unlock()
 		if first {
-			p.rt.Log(fmt.Sprintf("proxy: refused %s %s: %s (logged once per launch)", r.Method, r.URL.Path, why))
+			p.rt.Log(fmt.Sprintf("proxy: refused %q %q: %s (logged once per launch)", r.Method, r.URL.Path, why))
 			p.rt.event("proxy-refused", map[string]any{"method": r.Method, "path": r.URL.Path, "why": why})
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -202,6 +225,7 @@ func (p *proxy) refuse(auth []string) string {
 func (p *proxy) rewrite(pr *httputil.ProxyRequest) {
 	pr.SetURL(p.upstream)
 	pr.Out.Header.Del("X-Api-Key")
+	pr.Out.Header.Del("Proxy-Authorization")
 	pr.Out.Header.Set("Authorization", "Bearer "+p.currentToken())
 	betas := pr.Out.Header.Values("Anthropic-Beta")
 	for _, v := range betas {
@@ -218,11 +242,17 @@ func (p *proxy) rewrite(pr *httputil.ProxyRequest) {
 // last read and returns the token in force: a failed re-read keeps the one
 // before.
 func (p *proxy) currentToken() string {
-	if err := p.reload(false); err != nil {
-		p.rt.Log("proxy: credentials re-read failed; the previous token stays: " + err.Error())
-	}
+	err := p.reload(false)
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	switch {
+	case err != nil && !p.reReadBad:
+		p.reReadBad = true
+		p.rt.Log("proxy: credentials re-read failed; the previous token stays until a re-read succeeds: " + err.Error())
+	case err == nil && p.reReadBad:
+		p.reReadBad = false
+		p.rt.Log("proxy: credentials re-read succeeded")
+	}
 	return p.token
 }
 

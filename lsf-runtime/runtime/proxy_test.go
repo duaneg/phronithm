@@ -112,18 +112,33 @@ func TestProxyRefuses(t *testing.T) {
 			"no scheme":     {p.Placeholder},
 			"two headers":   {"Bearer " + p.Placeholder, "Bearer " + p.Placeholder},
 		} {
-			code, body := proxyReq(t, p, auth, nil)
+			code, body := proxyReq(t, p, auth, map[string]string{"X-Api-Key": "sk-other"})
 			if code != http.StatusForbidden || body != proxyRefusal {
 				t.Errorf("%s: %d %q", name, code, body)
 			}
+		}
+		// CONNECT is refused even with the placeholder.
+		c, err := net.Dial("tcp", strings.TrimPrefix(p.URL, "http://"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.WriteString(c, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nAuthorization: Bearer "+p.Placeholder+"\r\n\r\n")
+		line := make([]byte, 12)
+		io.ReadFull(c, line)
+		c.Close()
+		if string(line) != "HTTP/1.1 403" {
+			t.Errorf("CONNECT: %q", line)
 		}
 		return nil, nil
 	})
 	if seen.n() != 0 {
 		t.Errorf("%d refused request(s) reached the upstream", seen.n())
 	}
+	if strings.Contains(stateFiles(t, cfg), "sk-other") {
+		t.Error("an x-api-key reached the logs")
+	}
 	logs := stateFiles(t, cfg)
-	if strings.Count(logs, "proxy: refused") != 1 || !strings.Contains(logs, "proxy: 7 request(s) refused this launch") {
+	if strings.Count(logs, "proxy: refused") != 1 || !strings.Contains(logs, "proxy: 8 request(s) refused this launch") {
 		t.Errorf("refusal logging:\n%s", logs)
 	}
 	if strings.Contains(logs, "not-the-placeholder") || strings.Contains(logs, p.Placeholder) || strings.Contains(logs, "live-token-1") {
@@ -138,7 +153,7 @@ func TestProxySubstitutes(t *testing.T) {
 	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
 		p := rt.Proxy()
 		bearer := []string{"Bearer " + p.Placeholder}
-		if code, body := proxyReq(t, p, bearer, map[string]string{"X-Api-Key": "k", "Anthropic-Beta": "a-1"}); code != 200 || body != "ok" {
+		if code, body := proxyReq(t, p, bearer, map[string]string{"X-Api-Key": "k", "Anthropic-Beta": "a-1", "Proxy-Authorization": "Basic x"}); code != 200 || body != "ok" {
 			t.Fatalf("%d %q", code, body)
 		}
 		proxyReq(t, p, bearer, map[string]string{"Anthropic-Beta": "oauth-2025-04-20,b-2"})
@@ -155,8 +170,13 @@ func TestProxySubstitutes(t *testing.T) {
 	if got := r.Header.Values("Authorization"); len(got) != 1 || got[0] != "Bearer live-token-1" {
 		t.Errorf("authorization: %q", got)
 	}
-	if r.Header.Get("X-Api-Key") != "" {
-		t.Error("x-api-key forwarded")
+	if r.Header.Get("X-Api-Key") != "" || r.Header.Get("Proxy-Authorization") != "" {
+		t.Error("x-api-key or proxy-authorization forwarded")
+	}
+	for k := range r.Header {
+		if strings.HasPrefix(k, "X-Forwarded") || k == "Forwarded" {
+			t.Errorf("%s added upstream", k)
+		}
 	}
 	for i, want := range []string{"a-1,oauth-2025-04-20", "oauth-2025-04-20,b-2", "oauth-2025-04-20"} {
 		if got := seen.reqs[i].Header.Values("Anthropic-Beta"); len(got) != 1 || got[0] != want {
@@ -189,18 +209,34 @@ func TestProxyRereads(t *testing.T) {
 		// Broken: the previous token stays.
 		os.WriteFile(creds, []byte("{not json"), 0o600)
 		proxyReq(t, p, bearer, nil)
+		proxyReq(t, p, bearer, nil) // the failure is logged once
+		// Same length, rewritten in place: only the modification time
+		// tells (set apart, as a coarse clock might not).
+		writeCreds(t, creds, "token-4")
+		proxyReq(t, p, bearer, nil)
+		writeCreds(t, creds, "token-5")
+		later := time.Now().Add(time.Minute)
+		os.Chtimes(creds, later, later)
+		proxyReq(t, p, bearer, nil)
+		// Same length and time, replaced by rename: only the inode tells.
+		writeCreds(t, tmp, "token-6")
+		os.Chtimes(tmp, later, later)
+		if err := os.Rename(tmp, creds); err != nil {
+			t.Fatal(err)
+		}
+		proxyReq(t, p, bearer, nil)
 		return nil, nil
 	})
-	for i, want := range []string{"token-one", "token-two-longer", "token-3", "token-3"} {
+	for i, want := range []string{"token-one", "token-two-longer", "token-3", "token-3", "token-3", "token-4", "token-5", "token-6"} {
 		if got := seen.reqs[i].Header.Get("Authorization"); got != "Bearer "+want {
 			t.Errorf("request %d: %q, want %q", i, got, want)
 		}
 	}
 	logs := stateFiles(t, cfg)
-	if !strings.Contains(logs, "credentials re-read failed; the previous token stays") || !strings.Contains(logs, "the new token is in use") {
+	if strings.Count(logs, "credentials re-read failed; the previous token stays") != 1 || !strings.Contains(logs, "credentials re-read succeeded") || !strings.Contains(logs, "the new token is in use") {
 		t.Errorf("re-read logging:\n%s", logs)
 	}
-	for _, tok := range []string{"token-one", "token-two-longer", "token-3"} {
+	for _, tok := range []string{"token-one", "token-two-longer", "token-3", "token-4", "token-5", "token-6"} {
 		if strings.Contains(logs, tok) {
 			t.Errorf("%s reached the logs", tok)
 		}
@@ -208,7 +244,9 @@ func TestProxyRereads(t *testing.T) {
 }
 
 // The response streams unbuffered: the client reads the upstream's first
-// chunk while the upstream is still blocked.
+// chunk while the upstream is still blocked. (ReverseProxy flushes an
+// event stream or a response of unknown length itself; FlushInterval -1
+// covers the rest.)
 func TestProxyStreams(t *testing.T) {
 	cfg, _ := testConfig(t)
 	release := make(chan struct{})
@@ -283,8 +321,8 @@ func TestProxyLifecycle(t *testing.T) {
 		c.Close()
 		t.Error("the proxy port still accepts after the launch")
 	}
-	if !strings.Contains(stateFiles(t, cfg), "upstream:") {
-		t.Error("the upstream error is not logged")
+	if logs := stateFiles(t, cfg); !strings.Contains(logs, "upstream:") || strings.Contains(logs, `"tok"`) || strings.Contains(logs, "Bearer tok") {
+		t.Error("the upstream error is not logged, or the token is")
 	}
 }
 
@@ -329,6 +367,7 @@ func TestProxyConfig(t *testing.T) {
 		{ProxyConfig{Listen: "127.0.0.1:0"}, "proxy.credentialsFile is required"},
 		{ProxyConfig{Listen: "127.0.0.1:0", CredentialsFile: "c", Upstream: "ftp://x"}, "proxy.upstream must be"},
 		{ProxyConfig{Listen: "127.0.0.1:0", CredentialsFile: "c", Upstream: "https://x/v1"}, "proxy.upstream must be"},
+		{ProxyConfig{Listen: "127.0.0.1:0", CredentialsFile: "c", Upstream: "http://api.example.com"}, "http is for a loopback address only"},
 	} {
 		if err := errors.Join(c.p.prepare()...); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%+v: %v", c.p, err)
