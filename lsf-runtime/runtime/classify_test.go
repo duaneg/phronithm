@@ -57,6 +57,7 @@ func TestClassifyFixtures(t *testing.T) {
 	}{
 		{"ok", verdictSchema, "", false, classOK},
 		{"permanent", verdictSchema, "", false, classPermanent},
+		{"auth-401", verdictSchema, "", false, classPermanent},
 		{"skill-loaded", findingsSchema, "phronithm:critique", true, classOK},
 		{"skill-tool", findingsSchema, "phronithm:critique", false, classOK},
 		{"skill-absent", findingsSchema, "phronithm:critique", false, classSkillMissing},
@@ -67,6 +68,27 @@ func TestClassifyFixtures(t *testing.T) {
 		a := &attempt{acc: accFromFixture(t, tc.fixture)}
 		if got := classify(a, []byte(tc.schema), tc.skill, tc.prefixed).class; got != tc.want {
 			t.Errorf("%s (skill %q, prefixed %v): class %s, want %s", tc.fixture, tc.skill, tc.prefixed, got, tc.want)
+		}
+	}
+}
+
+// A 401 or authentication_failed marks a permanent verdict auth; another
+// permanent error does not.
+func TestClassifyAuth(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		acc  streamAcc
+		auth bool
+	}{
+		{"recorded 401", accFromFixture(t, "auth-401"), true},
+		{"model_not_found", accFromFixture(t, "permanent"), false},
+		{"status alone", accFromLines(`{"type":"result","subtype":"success","is_error":true,"api_error_status":401}`), true},
+		{"error alone", accFromLines(`{"type":"assistant","error":"authentication_failed","message":{"content":[]}}`), true},
+		{"403", accFromLines(`{"type":"result","subtype":"success","is_error":true,"api_error_status":403}`), false},
+	} {
+		v := classify(&attempt{acc: tc.acc}, []byte(verdictSchema), "", false)
+		if v.class != classPermanent || v.auth != tc.auth {
+			t.Errorf("%s: class %s auth %v, want permanent auth %v", tc.name, v.class, v.auth, tc.auth)
 		}
 	}
 }

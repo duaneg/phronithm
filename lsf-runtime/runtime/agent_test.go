@@ -305,3 +305,35 @@ func TestSchemaMustBeAnObject(t *testing.T) {
 		t.Fatalf("err %v, spawns %d", err, stubCount(t, stub))
 	}
 }
+
+// A call failing authentication stops the run with auth-failed and is not
+// journaled; the kept clone stays. A relaunch runs the call again and
+// returns its value. Another permanent error is still a null.
+func TestAuthFailedStops(t *testing.T) {
+	cfg, stub := testConfig(t)
+	t.Setenv("STUB_SCRIPT", "fixture:auth-401,ok")
+	var err1 error
+	s := launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		_, err1 = rt.Call(ctx, "do the thing", vOpts)
+		return nil, err1
+	})
+	if r, ok := IsStop(err1); !ok || r != StopAuthFailed {
+		t.Fatalf("call error %v", err1)
+	}
+	if s.StopReason != StopAuthFailed || !strings.Contains(s.Detail, "refresh the login and relaunch") {
+		t.Errorf("summary %+v", s)
+	}
+	if recs, _ := filepath.Glob(filepath.Join(cfg.StateDir, "journal", journalKey(vOpts.Label)+"*")); len(recs) != 0 {
+		t.Errorf("journaled: %v", recs)
+	}
+	if !exists(filepath.Join(cfg.StateDir, "clone", journalKey(vOpts.Label))) {
+		t.Error("the kept clone is gone")
+	}
+	res, err := call(t, cfg, vOpts)
+	if err != nil || !strings.Contains(string(res.Value), `"verdict":"pass"`) || res.Replayed {
+		t.Fatalf("relaunch: %+v %v", res, err)
+	}
+	if n := stubCount(t, stub); n != 2 {
+		t.Errorf("spawns %d, want 2", n)
+	}
+}

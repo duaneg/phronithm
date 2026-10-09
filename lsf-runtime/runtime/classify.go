@@ -55,6 +55,9 @@ type verdict struct {
 	// guardKilled marks an ok or skill-missing verdict whose process the
 	// guard timeout killed after its result: the work is done, the exit hung.
 	guardKilled bool
+	// auth marks a permanent verdict that is an authentication failure (a
+	// 401, or authentication_failed): the credential, not the call, failed.
+	auth bool
 }
 
 // classify applies design §2.5. The result event decides first: the CLI can
@@ -87,7 +90,8 @@ func classify(a *attempt, schema json.RawMessage, skill string, prefixed bool) v
 	}
 	if slices.ContainsFunc(a.acc.AssistantErrors, func(e string) bool { return slices.Contains(permanentErrors, e) }) ||
 		(r != nil && slices.Contains(permanentStatuses, r.APIErrorStatus)) {
-		return verdict{class: classPermanent}
+		auth := slices.Contains(a.acc.AssistantErrors, "authentication_failed") || r != nil && r.APIErrorStatus == 401
+		return verdict{class: classPermanent, auth: auth}
 	}
 	return verdict{class: classTransient}
 }

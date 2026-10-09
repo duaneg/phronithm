@@ -32,6 +32,7 @@ const (
 	StopMaxCost      StopReason = "max-cost"
 	StopDryRun       StopReason = "dry-run"
 	StopRuntimeError StopReason = "runtime-error" // the runtime cannot continue
+	StopAuthFailed   StopReason = "auth-failed"   // a call failed authentication (401): refresh the login and relaunch
 	StopCrashed      StopReason = "crashed"       // body returned a non-stop error or panicked
 )
 

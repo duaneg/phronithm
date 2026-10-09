@@ -88,7 +88,17 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 			return *res, nil
 		case classStopped:
 			return *res, rt.stopErr()
-		case classTimeout, classPermanent, classSpawnError:
+		case classPermanent:
+			if v.auth {
+				// The credential failed, not the call: the run stops and
+				// the call is not journaled, so a relaunch re-runs it. A
+				// kept clone stays as found.
+				rt.Log(fmt.Sprintf("%s: authentication failed (401): the credential has expired or been revoked; refresh the login and relaunch", o.Label))
+				return *res, rt.setStop(StopAuthFailed, o.Label+": authentication failed (401); refresh the login and relaunch")
+			}
+			err := rt.checkNull(ctx, c, res)
+			return *res, err
+		case classTimeout, classSpawnError:
 			err := rt.checkNull(ctx, c, res)
 			return *res, err
 		case classInvalid:

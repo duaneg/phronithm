@@ -275,7 +275,7 @@ The runtime builds each call's settings, argv and environment. The role supplies
 
 - **What it does.** The runtime starts it at launch on the listen address its config gives (an ephemeral 127.0.0.1 port for B2), with a placeholder random to the launch (Runtime → Interface, `rt.Proxy()`). It refuses a request whose bearer is not the placeholder. Otherwise it replaces the bearer with the live session's OAuth access token from `~/.claude/.credentials.json`, adds the OAuth beta header, forwards to `api.anthropic.com`, and streams the response back unbuffered.
 - **Which token.** The live session's credential, with no separate token (requester, 2026-10-08).
-- **When it reads the token.** It re-reads the file when the file changes, so a refresh by an interactive session reaches running calls. A run that outlives the token with no refresh fails its calls as `permanent` (401). `s2-sandbox` decides whether that becomes a stop.
+- **When it reads the token.** It re-reads the file when the file changes, so a refresh by an interactive session reaches running calls. A call that fails authentication (401) stops the run with `auth-failed` and is not journaled, so a relaunch after the login is refreshed re-runs it (requester, 2026-10-09; Runtime → A call).
 - **The proxy stops with the launch.**
 
 ### Reviewers
@@ -453,7 +453,8 @@ Classification reads the `result` event first, because the CLI can recover from 
 | `skill-missing` | as `ok`, but no skill load | retry; on the second miss, the value, flagged `skill-not-loaded` |
 | `invalid` | clean result, `structured_output` missing, null or failing the schema | retry, then null |
 | `session-limit` | no clean result, and an assistant `error: rate_limit` | wait until `resetsAt` (from a `rejected` `rate_limit_event`, else the fallback) plus margin, then retry; null after `maxSessionWaits` |
-| `permanent` | assistant error `model_not_found`, `authentication_failed`, `billing_error`, `invalid_request` and the like, or status 400/401/403/404 | null |
+| `permanent`, authentication | assistant error `authentication_failed`, or status 401, whatever the cause | the run stops with `auth-failed`; the call is not journaled and a kept clone stays as found, so a relaunch re-runs the call. Claude Code 2.1.294 retries a 401 ten times itself (about three minutes) before it returns (`testdata/streams/auth-401.jsonl`) |
+| `permanent` | assistant error `model_not_found`, `billing_error`, `invalid_request` and the like, or status 400/403/404 | null |
 | `transient` | anything else | back off, then null |
 
 - `invalid` and `skill-missing` share one retry.

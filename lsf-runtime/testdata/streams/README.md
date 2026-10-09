@@ -10,6 +10,7 @@
 | `skill-tool.jsonl` | no prefix; the model loaded `phronithm:critique` with the Skill tool |
 | `skill-absent.jsonl` | no prefix; no Skill call; valid output |
 | `skill-unknown.jsonl` | prompt prefixed `/phronithm:nonexistent-skill`; not in `slash_commands`, sent as plain text; valid output |
+| `auth-401.jsonl` | recorded from **2.1.294** on 2026-10-09 against a local server answering every request 401 (`authentication_error`, "OAuth token has expired"), with `ANTHROPIC_BASE_URL` set to it, a placeholder `ANTHROPIC_AUTH_TOKEN` and an empty `HOME`: assistant `error: authentication_failed`, result `is_error`, 401. The CLI's ten `api_retry` system events before it are dropped by the trimming below |
 
 Trimming:
 
