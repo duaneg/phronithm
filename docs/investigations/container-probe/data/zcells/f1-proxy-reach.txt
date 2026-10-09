@@ -1,2 +1,8 @@
+# F1: Bash in a call container reaches the inject proxy (credential is used, not leaked)
+# Context: run.sh scripted <w> f1 — a /bin/bash -c in a full call container (pasta + inject/egress proxies).
+# Command (first line): curl --noproxy '*' -X POST -H 'Authorization: Bearer lsf-placeholder-token' http://127.0.0.1:18433/v1/messages -d '<minimal body>'
+# inject-proxy.py returns its own 403 only for a non-placeholder bearer; 404/400 are therefore UPSTREAM api.anthropic.com responses => the request was forwarded with the live token.
+# No authenticated 200 call was completed (that would spend real tokens on the account); forwarding is the harm demonstrated.
+
 direct no-proxy placeholder: 404
 direct no-proxy no-auth: 400

@@ -1,4 +1,14 @@
-# F3: teardown on SIGKILL to the podman run client (grace-expiry path)
-before: Up 3 seconds
-after SIGKILL of client: [lsfp-f3b Up 5 seconds]
-podman rm -f by name: lsfp-f3b; now []
+# F3: container teardown under the runtime's kill model
+
+## without --init: group SIGTERM (killgroup) does NOT stop the container
+before: [Up 30 seconds]
+after group SIGTERM: [lsfp-noinit Up 35 seconds]
+
+## with --init: group SIGTERM tears it down within grace
+before: [Up 3 seconds]
+after group SIGTERM: []
+
+## with --init, SIGKILL to the podman-run client (grace-expiry path): container survives
+before: [Up 2 seconds]
+after SIGKILL of client: [lsfp-sigkill Up 5 seconds]
+podman rm -f by name: lsfp-sigkill; now []
