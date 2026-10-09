@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/duaneg/phronithm/lsf-runtime/orchestrator/orchtest"
 	"github.com/duaneg/phronithm/lsf-runtime/plan"
@@ -797,5 +798,42 @@ func TestMergeConflictCallGitSetup(t *testing.T) {
 	errMatch(t, err, `the conflict call changed the merge clone's git config, hooks or info files; remove .* and relaunch`)
 	if !f.mc().mergeInProgress() {
 		t.Error("the merge was aborted, running git after the change")
+	}
+}
+
+// The merge step's git in its merge clone reads no global config: a filter
+// defined globally and selected by the clone's .gitattributes does not run
+// on a stat-dirty file there; with an unisolated git (the control) it does.
+func TestMergeCloneIgnoresGlobalFilter(t *testing.T) {
+	for _, isolated := range []bool{true, false} {
+		f := newMergeFixture(t, distinct, "A")
+		f.r.commit(".gitattributes", "*.txt filter=x\n", "attributes")
+		f.r.commit("a.txt", "a\n", "a")
+		global := filepath.Join(t.TempDir(), "gitconfig")
+		if err := os.WriteFile(global, []byte("[filter \"x\"]\n\tclean = \"sh -c 'touch \\\"$PWD.filter-ran\\\"; cat'\"\n\tsmudge = \"sh -c 'touch \\\"$PWD.filter-ran\\\"; cat'\"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("GIT_CONFIG_GLOBAL", global)
+		mc := f.makeClone()
+		// Beside the clone, which the step removes when it finishes.
+		marker := mc.dir + ".filter-ran"
+		os.Remove(marker) // the fake's own checkout ran it
+		future := time.Now().Add(time.Hour)
+		if err := os.Chtimes(filepath.Join(mc.dir, "a.txt"), future, future); err != nil {
+			t.Fatal(err)
+		}
+		var g gitRunner
+		if !isolated {
+			g = execGit{}
+		}
+		o := mergeOrch(t, f, g, nil)
+		res, err := runMerge(t, o, f.in("A"), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		eq(t, statuses(res), "A=clean")
+		eq(t, o.clones.has(mc.dir), true, "the merge clone is in the set")
+		_, statErr := os.Stat(marker)
+		eq(t, statErr == nil, !isolated, "filter ran; isolated", isolated)
 	}
 }

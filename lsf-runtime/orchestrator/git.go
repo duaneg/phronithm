@@ -12,8 +12,11 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
+
+	"github.com/duaneg/phronithm/lsf-runtime/internal/gitenv"
 )
 
 // gitRunner runs one git command in dir and returns its stdout; stderr is
@@ -29,11 +32,43 @@ const (
 	gitTimeout       = 5 * time.Minute
 )
 
-type execGit struct{}
+// execGit is git as a process. In a directory clones holds (a merge clone)
+// it reads no global or system config (gitenv.Env(true)), so a driver the
+// clone's .gitattributes selects runs only if its local config defines it.
+// A zero execGit isolates nothing.
+type execGit struct{ clones *dirSet }
+
+// dirSet is a set of directories, safe for concurrent use; a nil set is
+// empty.
+type dirSet struct {
+	mu sync.Mutex
+	m  map[string]bool
+}
+
+func (s *dirSet) add(dir string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.m == nil {
+		s.m = map[string]bool{}
+	}
+	s.m[filepath.Clean(dir)] = true
+}
+
+func (s *dirSet) has(dir string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.m[filepath.Clean(dir)]
+}
 
 // run runs git in its own process group, so a timeout or cancellation
 // kills a hook's children with it.
-func (execGit) run(ctx context.Context, dir string, args ...string) ([]byte, error) {
+func (e execGit) run(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	d := gitTimeout
 	if len(args) > 0 && args[0] == "commit" {
 		d = gitCommitTimeout
@@ -46,7 +81,7 @@ func (execGit) run(ctx context.Context, dir string, args ...string) ([]byte, err
 	cmd.Dir = dir
 	// Paths are literal: a hook-touched path like `a*b` must not match others.
 	// LC_ALL=C: the merge reads git's refusal message.
-	cmd.Env = append(scrubbedEnv(), "GIT_TERMINAL_PROMPT=0", "GIT_LITERAL_PATHSPECS=1", "LC_ALL=C")
+	cmd.Env = append(gitenv.Env(e.clones.has(dir)), "GIT_LITERAL_PATHSPECS=1", "LC_ALL=C")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// SIGTERM lets git remove its own lock files; WaitDelay then kills git
 	// if it lingers.
@@ -58,19 +93,6 @@ func (execGit) run(ctx context.Context, dir string, args ...string) ([]byte, err
 		return out.Bytes(), &gitError{args: args, err: err, stderr: strings.TrimSpace(stderr.String())}
 	}
 	return out.Bytes(), nil
-}
-
-// scrubbedEnv is the environment without the variables that would point
-// git at another repository or index (set when run from inside a hook).
-func scrubbedEnv() []string {
-	return slices.DeleteFunc(os.Environ(), func(kv string) bool {
-		for _, k := range []string{"GIT_DIR=", "GIT_INDEX_FILE=", "GIT_WORK_TREE=", "GIT_COMMON_DIR=", "GIT_OBJECT_DIRECTORY="} {
-			if strings.HasPrefix(kv, k) {
-				return true
-			}
-		}
-		return false
-	})
 }
 
 // gitError is a failed git command.

@@ -55,9 +55,12 @@ type orch struct {
 	seed map[string]json.RawMessage
 
 	// The code stages' repository: git is nil when the runtime has none.
-	git   gitRunner
-	repo  string
-	today func() string // the decision log's entry date
+	// clones are the merge clones the launch has used, where git is
+	// isolated from global config.
+	git    gitRunner
+	repo   string
+	clones *dirSet
+	today  func() string // the decision log's entry date
 
 	mu   sync.Mutex
 	uses map[string]int // real calls and steps per label this launch
@@ -76,7 +79,8 @@ type orch struct {
 func newOrch(rt Runtime, c *runCtx, seed map[string]json.RawMessage) *orch {
 	o := &orch{rt: rt, ctx: c, seed: seed, uses: map[string]int{}, worktrees: map[string][]string{}, tips: map[string]string{}, gateMemo: map[string]*gateFlight{}, today: func() string { return time.Now().Format(time.DateOnly) }}
 	if repo := rt.Repo(); repo != "" {
-		o.git, o.repo = execGit{}, repo
+		o.clones = &dirSet{}
+		o.git, o.repo = execGit{o.clones}, repo
 	}
 	return o
 }

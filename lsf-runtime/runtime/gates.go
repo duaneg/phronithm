@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/duaneg/phronithm/lsf-runtime/internal/gitenv"
 )
 
 // GateSpec is one declared gate. Timeout 0 is the config's gateTimeout.
@@ -241,7 +243,7 @@ func (rt *Runtime) gateProcess(ctx context.Context, dir, logPath, command string
 	marker := fmt.Sprintf("%s%s-%d", gateMarkerPrefix, rt.launchID, rt.gateSeq.Add(1))
 	cmd := exec.CommandContext(pctx, "sh", "-c", gateScript, marker)
 	cmd.Dir = dir
-	cmd.Env = append(scrubbedEnv(), "LSF_GATE_COMMAND="+command)
+	cmd.Env = append(gitenv.Scrubbed(), "LSF_GATE_COMMAND="+command)
 	cmd.Stdout, cmd.Stderr = out, out
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	var cancelled atomic.Bool // the context ended while the command ran

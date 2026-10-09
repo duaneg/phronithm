@@ -37,7 +37,10 @@ type placement struct {
 // effective config (local or global): the identity and signing, so a commit
 // made in the clone is attributed and signed as one made in the main
 // checkout, and the line-ending normalisation, so the work tree matches.
-var configCopied = []string{"user.name", "user.email", "core.autocrlf", "core.eol", "core.safecrlf", "commit.gpgsign", "tag.gpgsign", "user.signingkey", "gpg.format"}
+// The runtime's own git in a clone reads no global config, so whatever it
+// needs from there is here.
+var configCopied = []string{"user.name", "user.email", "core.autocrlf", "core.eol", "core.safecrlf", "commit.gpgsign", "tag.gpgsign", "user.signingkey", "gpg.format",
+	"gpg.program", "gpg.openpgp.program", "gpg.x509.program", "gpg.ssh.program"}
 
 // usesClone reports whether a call with these options runs in a clone the
 // runtime makes.
@@ -124,17 +127,17 @@ func (rt *Runtime) reuseClone(ctx context.Context, label string, p placement, in
 		return false, fmt.Errorf("%s exists but %v; remove it and relaunch", p.dir, err)
 	}
 	if p.branch == integration {
-		if b, err := gitOut(ctx, p.dir, "fetch", "--no-tags", "-q", rt.cfg.Repo, "refs/heads/"+integration); err != nil {
+		if b, err := cloneOut(ctx, p.dir, "fetch", "--no-tags", "-q", rt.cfg.Repo, "refs/heads/"+integration); err != nil {
 			return false, fmt.Errorf("fetch %s into %s: %v: %s", integration, p.dir, err, strings.TrimSpace(string(b)))
 		}
-		switch err := gitRun(ctx, p.dir, "merge-base", "--is-ancestor", "FETCH_HEAD", "HEAD"); {
+		switch err := cloneRun(ctx, p.dir, "merge-base", "--is-ancestor", "FETCH_HEAD", "HEAD"); {
 		case err == nil:
 		case exitStatus(err) == 1:
 			// Only a clone whose HEAD came back, with nothing uncommitted,
 			// may go: a failed fetch-back or a null's dirt would be lost.
-			head, herr := gitStdout(ctx, p.dir, "rev-parse", "HEAD")
+			head, herr := cloneStdout(ctx, p.dir, "rev-parse", "HEAD")
 			fetched, ferr := gitStdout(ctx, rt.cfg.Repo, "rev-parse", "-q", "--verify", "refs/heads/"+p.dest)
-			dirt, derr := gitStdout(ctx, p.dir, "status", "--porcelain", "--untracked-files=normal")
+			dirt, derr := cloneStdout(ctx, p.dir, "status", "--porcelain", "--untracked-files=normal")
 			if herr != nil || ferr != nil || derr != nil || strings.TrimSpace(string(head)) != strings.TrimSpace(string(fetched)) || len(dirt) > 0 {
 				return false, fmt.Errorf("%s is stale (%s moved since) but holds commits not fetched to %s or uncommitted changes; recover them, remove it and relaunch", p.dir, integration, p.dest)
 			}
@@ -145,7 +148,7 @@ func (rt *Runtime) reuseClone(ctx context.Context, label string, p placement, in
 			return false, fmt.Errorf("merge-base in %s: %v", p.dir, err)
 		}
 	}
-	if b, err := gitOut(ctx, p.dir, "fetch", "--no-tags", "-q", rt.cfg.Repo, "+refs/heads/*:refs/heads/*", "^refs/heads/"+p.branch); err != nil {
+	if b, err := cloneOut(ctx, p.dir, "fetch", "--no-tags", "-q", rt.cfg.Repo, "+refs/heads/*:refs/heads/*", "^refs/heads/"+p.branch); err != nil {
 		return false, fmt.Errorf("refresh %s: %v: %s", p.dir, err, strings.TrimSpace(string(b)))
 	}
 	return false, nil
@@ -157,12 +160,12 @@ func isCloneOn(ctx context.Context, dir, branch string) error {
 	if fi, err := os.Lstat(filepath.Join(dir, ".git")); err != nil || !fi.IsDir() {
 		return errors.New("is not a clone")
 	}
-	top, err := gitStdout(ctx, dir, "rev-parse", "--show-toplevel")
+	top, err := cloneStdout(ctx, dir, "rev-parse", "--show-toplevel")
 	resolved, _ := filepath.EvalSymlinks(dir)
 	if err != nil || strings.TrimSpace(string(top)) != resolved {
 		return errors.New("is not a clone's top")
 	}
-	head, err := gitStdout(ctx, dir, "symbolic-ref", "--short", "-q", "HEAD")
+	head, err := cloneStdout(ctx, dir, "symbolic-ref", "--short", "-q", "HEAD")
 	if h := strings.TrimSpace(string(head)); err != nil || h != branch {
 		return fmt.Errorf("is not on %s", branch)
 	}
@@ -188,7 +191,7 @@ func (rt *Runtime) makeClone(ctx context.Context, dir, branch, integration strin
 		}
 	}()
 	run := func(in string, args ...string) error {
-		if b, err := gitOut(ctx, in, args...); err != nil {
+		if b, err := cloneOut(ctx, in, args...); err != nil {
 			return fmt.Errorf("git %s: %v: %s", strings.Join(args[:min(2, len(args))], " "), err, strings.TrimSpace(string(b)))
 		}
 		return nil
@@ -208,7 +211,7 @@ func (rt *Runtime) makeClone(ctx context.Context, dir, branch, integration strin
 	if err := rt.copyRepoSetup(ctx, tmp, dir); err != nil {
 		return err
 	}
-	if gitRun(ctx, tmp, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch) == nil {
+	if cloneRun(ctx, tmp, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch) == nil {
 		err = run(tmp, "checkout", "-q", branch, "--")
 	} else {
 		err = run(tmp, "checkout", "-q", "-b", branch, integration, "--")
@@ -224,7 +227,9 @@ const partialSuffix = ".partial"
 
 // copyRepoSetup gives a new clone at dir, to be renamed to final, the main
 // repo's effective hooks, the configCopied values and its info/exclude and
-// info/attributes.
+// info/attributes, each followed by the content of the file the main repo's
+// core.excludesFile or core.attributesFile names, when set: the clone's own
+// git reads no global config.
 func (rt *Runtime) copyRepoSetup(ctx context.Context, dir, final string) error {
 	mainPath := func(p string) (string, error) {
 		b, err := gitStdout(ctx, rt.cfg.Repo, "rev-parse", "--git-path", p)
@@ -246,7 +251,7 @@ func (rt *Runtime) copyRepoSetup(ctx context.Context, dir, final string) error {
 		return err
 	}
 	// The clone runs the copies whatever a global core.hooksPath says.
-	if b, err := gitOut(ctx, dir, "config", "core.hooksPath", filepath.Join(final, ".git", "hooks")); err != nil {
+	if b, err := cloneOut(ctx, dir, "config", "core.hooksPath", filepath.Join(final, ".git", "hooks")); err != nil {
 		return fmt.Errorf("config core.hooksPath: %v: %s", err, strings.TrimSpace(string(b)))
 	}
 	for _, k := range configCopied {
@@ -257,23 +262,38 @@ func (rt *Runtime) copyRepoSetup(ctx context.Context, dir, final string) error {
 		if err != nil {
 			return fmt.Errorf("config --get %s: %w", k, err)
 		}
-		if b, err := gitOut(ctx, dir, "config", k, strings.TrimSuffix(string(v), "\n")); err != nil {
+		if b, err := cloneOut(ctx, dir, "config", k, strings.TrimSuffix(string(v), "\n")); err != nil {
 			return fmt.Errorf("config %s: %v: %s", k, err, strings.TrimSpace(string(b)))
 		}
 	}
-	for _, f := range []string{"info/exclude", "info/attributes"} {
-		src, err := mainPath(f)
+	for _, f := range []struct{ path, global string }{{"info/exclude", "core.excludesFile"}, {"info/attributes", "core.attributesFile"}} {
+		src, err := mainPath(f.path)
 		if err != nil {
 			return err
 		}
-		b, err := os.ReadFile(src)
-		if errors.Is(err, fs.ErrNotExist) {
+		b, err := readIfExists(src)
+		if err != nil {
+			return err
+		}
+		v, err := gitStdout(ctx, rt.cfg.Repo, "config", "--type=path", "--get", f.global)
+		switch {
+		case exitStatus(err) == 1: // unset
+		case err != nil:
+			return fmt.Errorf("config --get %s: %w", f.global, err)
+		default:
+			g, err := readIfExists(strings.TrimSuffix(string(v), "\n"))
+			if err != nil {
+				return err
+			}
+			if len(b) > 0 && len(g) > 0 && b[len(b)-1] != '\n' {
+				b = append(b, '\n')
+			}
+			b = append(b, g...)
+		}
+		if b == nil {
 			continue
 		}
-		if err != nil {
-			return err
-		}
-		d := filepath.Join(dir, ".git", filepath.FromSlash(f))
+		d := filepath.Join(dir, ".git", filepath.FromSlash(f.path))
 		if err := os.MkdirAll(filepath.Dir(d), 0o755); err != nil {
 			return err
 		}
@@ -282,6 +302,15 @@ func (rt *Runtime) copyRepoSetup(ctx context.Context, dir, final string) error {
 		}
 	}
 	return nil
+}
+
+// readIfExists is p's content, nil when it does not exist.
+func readIfExists(p string) ([]byte, error) {
+	b, err := os.ReadFile(p)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	return b, err
 }
 
 // copyHooks copies src's hooks recursively (a hook may source a sibling
@@ -366,9 +395,9 @@ func (rt *Runtime) fetchBack(ctx context.Context, label string, p placement, res
 		return fmt.Errorf("fetching %s from its clone %s: %v: %s", p.branch, p.dir, err, strings.TrimSpace(string(b)))
 	}
 	res.Branch = p.dest
-	head, err := gitStdout(gctx, p.dir, "rev-parse", "-q", "--verify", "HEAD")
+	head, err := cloneStdout(gctx, p.dir, "rev-parse", "-q", "--verify", "HEAD")
 	res.CloneHead = strings.TrimSpace(string(head))
-	on, _ := gitStdout(gctx, p.dir, "symbolic-ref", "--short", "-q", "HEAD")
+	on, _ := cloneStdout(gctx, p.dir, "symbolic-ref", "--short", "-q", "HEAD")
 	if err != nil || strings.TrimSpace(string(on)) != p.branch {
 		rt.event("clone-head-off-branch", map[string]any{"label": label, "path": p.dir, "branch": p.branch, "head": res.CloneHead})
 		rt.Log(fmt.Sprintf("%s: clone %s HEAD %s is not on %s; %s was fetched as it stands", label, p.dir, res.CloneHead, p.branch, p.branch))

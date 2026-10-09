@@ -8,9 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
+
+	"github.com/duaneg/phronithm/lsf-runtime/internal/gitenv"
 )
 
 // Repo is the main checkout.
@@ -193,7 +194,7 @@ func (rt *Runtime) RemoveWorktree(ctx context.Context, label, integration string
 				out.Kept = "not a clone on " + out.Branch
 				return out, nil
 			}
-			head, err := gitStdout(gctx, out.Path, "rev-parse", "-q", "--verify", "HEAD")
+			head, err := cloneStdout(gctx, out.Path, "rev-parse", "-q", "--verify", "HEAD")
 			if err != nil || strings.TrimSpace(string(head)) != tip {
 				out.Kept = "clone has commits not fetched"
 				return out, nil
@@ -202,11 +203,15 @@ func (rt *Runtime) RemoveWorktree(ctx context.Context, label, integration string
 			out.Kept = "not a worktree on " + out.Branch
 			return out, nil
 		}
-		others, err := gitStdout(gctx, out.Path, "ls-files", "-z", "--others", "--directory")
+		git := gitStdout
+		if isClone {
+			git = cloneStdout
+		}
+		others, err := git(gctx, out.Path, "ls-files", "-z", "--others", "--directory")
 		if err != nil {
 			return out, fmt.Errorf("%s: ls-files: %w", label, err)
 		}
-		dirty, err := gitStdout(gctx, out.Path, "diff", "-z", "--name-only", "HEAD")
+		dirty, err := git(gctx, out.Path, "diff", "-z", "--name-only", "HEAD")
 		if err != nil {
 			return out, fmt.Errorf("%s: diff: %w", label, err)
 		}
@@ -304,11 +309,36 @@ func gitRun(ctx context.Context, dir string, args ...string) error {
 }
 
 func gitCmd(ctx context.Context, dir string, args ...string) *exec.Cmd {
+	return newGitCmd(ctx, dir, false, args)
+}
+
+// cloneStdout, cloneOut, cloneRun and cloneCmd are the git helpers for a
+// clone the runtime made (gitenv.Env(true)): no global or system config, so
+// a driver the clone's .gitattributes selects runs only if its local
+// config defines one.
+func cloneStdout(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	return cloneCmd(ctx, dir, args...).Output()
+}
+
+func cloneOut(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	return cloneCmd(ctx, dir, args...).CombinedOutput()
+}
+
+func cloneRun(ctx context.Context, dir string, args ...string) error {
+	_, err := cloneOut(ctx, dir, args...)
+	return err
+}
+
+func cloneCmd(ctx context.Context, dir string, args ...string) *exec.Cmd {
+	return newGitCmd(ctx, dir, true, args)
+}
+
+func newGitCmd(ctx context.Context, dir string, clone bool, args []string) *exec.Cmd {
 	// An agent can write its clone's config: no fsmonitor command runs
 	// under the runtime's git.
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-c", "core.fsmonitor=false"}, args...)...)
 	cmd.Dir = dir
-	cmd.Env = append(scrubbedEnv(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = gitenv.Env(clone)
 	return cmd
 }
 
@@ -320,17 +350,4 @@ func refSafe(key string) string {
 	}
 	key = strings.TrimLeft(key, ".-")
 	return strings.TrimSuffix(key, ".lock")
-}
-
-// scrubbedEnv is the environment without the variables that would point
-// git at another repository or index (set when run from inside a hook).
-func scrubbedEnv() []string {
-	return slices.DeleteFunc(os.Environ(), func(kv string) bool {
-		for _, k := range []string{"GIT_DIR=", "GIT_INDEX_FILE=", "GIT_WORK_TREE=", "GIT_COMMON_DIR=", "GIT_OBJECT_DIRECTORY="} {
-			if strings.HasPrefix(kv, k) {
-				return true
-			}
-		}
-		return false
-	})
 }

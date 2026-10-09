@@ -17,17 +17,22 @@ import (
 // check.
 
 // dirtyPaths is dir's dirty paths, relative to its toplevel, sorted: each
-// porcelain entry once (a rename or copy by its new path).
-func (rt *Runtime) dirtyPaths(ctx context.Context, dir string) ([]string, error) {
+// porcelain entry once (a rename or copy by its new path). clone says dir is
+// a clone the runtime made, read without global or system config.
+func (rt *Runtime) dirtyPaths(ctx context.Context, dir string, clone bool) ([]string, error) {
 	gctx, cancel := rt.gitContext(ctx)
 	defer cancel()
-	top, err := gitStdout(gctx, dir, "rev-parse", "--show-toplevel")
+	git := gitStdout
+	if clone {
+		git = cloneStdout
+	}
+	top, err := git(gctx, dir, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return nil, fmt.Errorf("rev-parse --show-toplevel: %w", err)
 	}
 	// No optional locks: the check must not take the index lock from an
 	// agent's own git running in parallel.
-	out, err := gitStdout(gctx, strings.TrimSpace(string(top)), "--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	out, err := git(gctx, strings.TrimSpace(string(top)), "--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all")
 	if err != nil {
 		return nil, fmt.Errorf("status: %w", err)
 	}
@@ -66,7 +71,7 @@ func (rt *Runtime) afterCall(ctx context.Context, c *callState, res *CallResult)
 			}
 			return rt.setStop(StopRuntimeError, fmt.Sprintf("%s: %v; the clone is kept", c.o.Label, err))
 		}
-		rt.checkUncommitted(ctx, c.o.Label, c.place.dir, res)
+		rt.checkUncommitted(ctx, c.o.Label, c.place.dir, true, res)
 	case c.place.kind == CloneDiscarded:
 		rt.discard(c.o.Label, c.place)
 	}
@@ -74,8 +79,8 @@ func (rt *Runtime) afterCall(ctx context.Context, c *callState, res *CallResult)
 }
 
 // checkUncommitted sets res.Uncommitted, or the unchecked flag, from dir.
-func (rt *Runtime) checkUncommitted(ctx context.Context, label, dir string, res *CallResult) {
-	paths, err := rt.dirtyPaths(ctx, dir)
+func (rt *Runtime) checkUncommitted(ctx context.Context, label, dir string, clone bool, res *CallResult) {
+	paths, err := rt.dirtyPaths(ctx, dir, clone)
 	if err != nil {
 		rt.uncheckedCall(ctx, label, res, err)
 		return
@@ -114,8 +119,12 @@ func (rt *Runtime) recheckUncommitted(ctx context.Context, o Opts, key string, u
 	}
 	// Only the call's own clone or worktree: a bare directory left by a
 	// crash would resolve to an enclosing repository.
+	git := gitStdout
+	if res.Clone == CloneKept {
+		git = cloneStdout
+	}
 	gctx, cancel := rt.gitContext(ctx)
-	top, err := gitStdout(gctx, dir, "rev-parse", "--show-toplevel")
+	top, err := git(gctx, dir, "rev-parse", "--show-toplevel")
 	cancel()
 	resolved, _ := filepath.EvalSymlinks(dir)
 	if err != nil || strings.TrimSpace(string(top)) != resolved {
@@ -138,7 +147,7 @@ func (rt *Runtime) recheckUncommitted(ctx context.Context, o Opts, key string, u
 		}
 	}
 	if recheck {
-		rt.checkUncommitted(ctx, o.Label, dir, res)
+		rt.checkUncommitted(ctx, o.Label, dir, res.Clone == CloneKept, res)
 	}
 }
 

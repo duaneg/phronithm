@@ -90,7 +90,7 @@ func TestUncommittedRenameIsOneEntry(t *testing.T) {
 	commitFile(t, cfg.Repo, "old.txt", "a\n")
 	git(t, cfg.Repo, "mv", "old.txt", "new.txt")
 	rt := &Runtime{cfg: cfg, killCh: make(chan struct{})}
-	paths, err := rt.dirtyPaths(context.Background(), cfg.Repo)
+	paths, err := rt.dirtyPaths(context.Background(), cfg.Repo, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -553,6 +553,7 @@ func (o *orch) mergeStage(in mergeInput) stageFn {
 		if err != nil {
 			return nil, err
 		}
+		o.clones.add(dir)
 		m := mergeGit{g, dir, o.repo, "refs/lsf/" + o.ctx.plan8() + "/xfer/" + name}
 		if _, err := g.r.run(ctx, o.repo, "update-ref", "-d", m.xfer); err != nil {
 			return nil, err
