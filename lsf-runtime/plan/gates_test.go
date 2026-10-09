@@ -48,7 +48,38 @@ func TestParseDeclarationProblems(t *testing.T) {
 		{"not a mapping", "- a\n", "top level must be a mapping"},
 		{"yaml error", "gates: [\n", "unterminated flow sequence"},
 		{"unknown top key", "gates:\n  - name: a\n    command: x\nextra: 1\n", "unknown top-level key extra"},
-		{"no gates", "setup: x\n", "`gates` must be a non-empty sequence"},
+		{"setup only", "setup: x\n", "setup needs a non-empty `gates` sequence"},
+		{"setup and hosts", "setup: x\nhosts: [example.com]\n", "setup needs a non-empty `gates` sequence"},
+		{"neither", "extra: 1\n", "the block must hold `gates`, `hosts` or both"},
+		{"null hosts", "hosts:\ngates:\n  - name: a\n    command: x\n", "`hosts` must be a non-empty sequence of host names"},
+		{"empty hosts", "hosts: []\n", "`hosts` must be a non-empty sequence of host names"},
+		{"hosts not a sequence", "hosts: example.com\n", "`hosts` must be a non-empty sequence of host names"},
+		{"host not a string", "hosts:\n  - a: b\n", `hosts[0]: must be a host name; got {"a":"b"}`},
+		{"empty host", "hosts: [\"\"]\n", "hosts[0]: must be a non-empty host name"},
+		{"host with space", "hosts: [\"a .com\"]\n", "hosts[0]: must not contain whitespace"},
+		{"host with scheme", "hosts: [\"https://a.com\"]\n", "hosts[0]: must be a host name, without scheme, path or user"},
+		{"host with user", "hosts: [u@a.com]\n", "without scheme, path or user"},
+		{"host with port", "hosts: [\"a.com:443\"]\n", "hosts[0]: must be a host name, without port"},
+		{"bracketed v6 with port", "hosts: [\"[2001:db8::1]:443\"]\n", "without port"},
+		{"bracketed v4", "hosts: [\"[192.0.2.1]\"]\n", "only an IPv6 address may be bracketed"},
+		{"localhost", "hosts: [LocalHost]\n", "hosts[0]: must not be a loopback name"},
+		{"localhost dot", "hosts: [localhost.]\n", "must not be a loopback name"},
+		{"under localhost", "hosts: [a.localhost]\n", "must not be a loopback name"},
+		{"wildcard localhost", "hosts: [\"*.localhost\"]\n", "must not be a loopback name"},
+		{"v4 loopback", "hosts: [127.0.0.1]\n", "must not be a loopback or unspecified address"},
+		{"v4 loopback range", "hosts: [127.8.9.10]\n", "must not be a loopback or unspecified address"},
+		{"v6 loopback", "hosts: [\"::1\"]\n", "must not be a loopback or unspecified address"},
+		{"v6 loopback bracketed", "hosts: [\"[::1]\"]\n", "must not be a loopback or unspecified address"},
+		{"v4-mapped loopback", "hosts: [\"::ffff:127.0.0.1\"]\n", "must not be a loopback or unspecified address"},
+		{"v4 unspecified", "hosts: [0.0.0.0]\n", "must not be a loopback or unspecified address"},
+		{"v6 unspecified", "hosts: [\"::\"]\n", "must not be a loopback or unspecified address"},
+		{"bare wildcard", "hosts: [\"*.\"]\n", "optionally with a leading *. wildcard"},
+		{"single-label wildcard dot", "hosts: [\"*.com.\"]\n", "a wildcard must cover a name of at least two labels"},
+		{"single-label wildcard", "hosts: [\"*.com\"]\n", "a wildcard must cover a name of at least two labels"},
+		{"inner wildcard", "hosts: [\"a.*.com\"]\n", "optionally with a leading *. wildcard"},
+		{"star", "hosts: [\"*\"]\n", "optionally with a leading *. wildcard"},
+		{"empty label", "hosts: [a..com]\n", "optionally with a leading *. wildcard"},
+		{"duplicate host", "hosts: [a.com, A.COM]\n", "duplicate host A.COM"},
 		{"empty gates", "gates: []\n", "`gates` must be a non-empty sequence"},
 		{"gates not a sequence", "gates: x\n", "`gates` must be a non-empty sequence"},
 		{"empty setup", "setup: \"  \"\ngates:\n  - name: a\n    command: x\n", "setup must be a non-empty command"},
@@ -99,6 +130,35 @@ func TestParseDeclarationProblemsAccumulate(t *testing.T) {
 	}
 }
 
+func TestParseDeclarationHosts(t *testing.T) {
+	for _, c := range []struct {
+		name, body, want string
+		gated            bool
+	}{
+		{"hosts alone", "hosts: [registry.npmjs.org, \"*.github.com\"]\n",
+			`{"hosts":["registry.npmjs.org","*.github.com"]}`, false},
+		{"beside gates", "gates:\n  - name: a\n    command: x\nhosts:\n  - proxy.golang.org\n  - 192.0.2.1\n  - \"2001:db8::1\"\n  - \"[2001:db8::2]\"\n  - Example.COM.\n",
+			`{"gates":[{"name":"a","command":"x"}],"hosts":["proxy.golang.org","192.0.2.1","2001:db8::1","[2001:db8::2]","Example.COM."]}`, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			d, problems := ParseDeclaration(gatesDoc(c.body))
+			if len(problems) != 0 {
+				t.Fatalf("problems: %v", problems)
+			}
+			if got := d.Identity(); got != c.want {
+				t.Errorf("\n got %s\nwant %s", got, c.want)
+			}
+			if d.Gated() != c.gated {
+				t.Errorf("Gated() = %v", d.Gated())
+			}
+		})
+	}
+	var none *Declaration
+	if none.Gated() {
+		t.Error("no block is not gated")
+	}
+}
+
 // Gate order is run order, so it is part of the identity.
 func TestDeclarationIdentityOrder(t *testing.T) {
 	ab, _ := ParseDeclaration(gatesDoc("gates:\n  - name: a\n    command: x\n  - name: b\n    command: y\n"))
@@ -134,7 +194,7 @@ func TestDocumentedGatesExample(t *testing.T) {
 	if d == nil || len(problems) > 0 {
 		t.Fatalf("documented example: %v", problems)
 	}
-	want := `{"setup":"npm ci","gates":[{"name":"tests","command":"npm test","timeout":"45m"},{"name":"lint","command":"npm run lint"}]}`
+	want := `{"setup":"npm ci","gates":[{"name":"tests","command":"npm test","timeout":"45m"},{"name":"lint","command":"npm run lint"}],"hosts":["registry.npmjs.org","*.github.com"]}`
 	if got := d.Identity(); got != want {
 		t.Errorf("\n got %s\nwant %s", got, want)
 	}

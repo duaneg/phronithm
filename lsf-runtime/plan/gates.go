@@ -2,8 +2,10 @@ package plan
 
 import (
 	"fmt"
+	"net"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // The project's declared gate commands (docs/plan-graph.md, Gate block): a
@@ -20,10 +22,19 @@ type DeclaredGate struct {
 	Timeout string `json:"timeout,omitempty"`
 }
 
-// Declaration is the gate block. Its identity is its MarshalJS JSON.
+// Declaration is the gate block. Its identity is its MarshalJS JSON. Hosts
+// are the network allowance: the hosts the project's builds and tests fetch
+// from. A block holding hosts alone declares no gates.
 type Declaration struct {
 	Setup string         `json:"setup,omitempty"`
-	Gates []DeclaredGate `json:"gates"`
+	Gates []DeclaredGate `json:"gates,omitempty"`
+	Hosts []string       `json:"hosts,omitempty"`
+}
+
+// Gated reports whether the runtime runs gate commands for the plan: a
+// block holding hosts alone is handled as no block.
+func (d *Declaration) Gated() bool {
+	return d != nil && len(d.Gates) > 0
 }
 
 var gatesBlockRE = blockRE(GatesTag)
@@ -55,18 +66,37 @@ func ParseDeclaration(markdown string) (*Declaration, []Problem) {
 	if !ok {
 		return nil, []Problem{gatesProblem("top level must be a mapping", GatesTag)}
 	}
-	problems := unknownKeys(top, []string{"setup", "gates"}, func(k string) Problem {
+	problems := unknownKeys(top, []string{"setup", "gates", "hosts"}, func(k string) Problem {
 		return gatesProblem("unknown top-level key "+k, k)
 	})
-	d := &Declaration{Gates: []DeclaredGate{}}
-	if v, present := top.Get("setup"); present {
-		s, ok := v.(string)
+	d := &Declaration{}
+	rawSetup, hasSetup := top.Get("setup")
+	if hasSetup {
+		s, ok := rawSetup.(string)
 		if !ok || strings.TrimSpace(s) == "" {
 			problems = append(problems, gatesProblem("setup must be a non-empty command", "setup"))
 		}
 		d.Setup = s
 	}
-	rawGates, _ := top.Get("gates")
+	rawHosts, hasHosts := top.Get("hosts")
+	if hasHosts {
+		var ps []Problem
+		d.Hosts, ps = parseHosts(rawHosts)
+		problems = append(problems, ps...)
+	}
+	rawGates, hasGates := top.Get("gates")
+	if !hasGates {
+		switch {
+		case hasSetup:
+			problems = append(problems, gatesProblem("setup needs a non-empty `gates` sequence", "setup"))
+		case !hasHosts:
+			problems = append(problems, gatesProblem("the block must hold `gates`, `hosts` or both", GatesTag))
+		}
+		if len(problems) > 0 {
+			return nil, problems
+		}
+		return d, nil
+	}
 	gates, ok := rawGates.([]any)
 	if !ok || len(gates) == 0 {
 		return nil, append(problems, gatesProblem("`gates` must be a non-empty sequence", "gates"))
@@ -120,6 +150,82 @@ func ParseDeclaration(markdown string) (*Declaration, []Problem) {
 		return nil, problems
 	}
 	return d, nil
+}
+
+// parseHosts reads the hosts sequence. Entries compare lower-cased for
+// duplicates and are kept as written.
+func parseHosts(v any) ([]string, []Problem) {
+	seq, ok := v.([]any)
+	if !ok || len(seq) == 0 {
+		return nil, []Problem{gatesProblem("`hosts` must be a non-empty sequence of host names", "hosts")}
+	}
+	var problems []Problem
+	hosts := make([]string, 0, len(seq))
+	seen := map[string]bool{}
+	for idx, raw := range seq {
+		h, isStr := raw.(string)
+		if !isStr {
+			problems = append(problems, gatesProblem(fmt.Sprintf("hosts[%d]: must be a host name; got %s", idx, jsJSON(raw)), "hosts"))
+			continue
+		}
+		if why := hostProblem(h); why != "" {
+			problems = append(problems, gatesProblem(fmt.Sprintf("hosts[%d]: %s; got %s", idx, why, jsJSON(h)), "hosts"))
+			continue
+		}
+		key := strings.ToLower(h)
+		if seen[key] {
+			problems = append(problems, gatesProblem("duplicate host "+h, "hosts"))
+		}
+		seen[key] = true
+		hosts = append(hosts, h)
+	}
+	return hosts, problems
+}
+
+// hostProblem returns why h is not an acceptable host entry, "" when it is.
+// An entry is a name, a `*.` wildcard over a name of at least two labels, or
+// an IP literal (an IPv6 one optionally bracketed). Loopback and unspecified
+// addresses are refused; a name that resolves to loopback, or a numeric form
+// net.ParseIP does not read (127.1), is not caught.
+func hostProblem(h string) string {
+	switch {
+	case h == "":
+		return "must be a non-empty host name"
+	case strings.ContainsFunc(h, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }):
+		return "must not contain whitespace"
+	case strings.ContainsAny(h, "/@"):
+		return "must be a host name, without scheme, path or user"
+	}
+	bare := h
+	if strings.HasPrefix(h, "[") && strings.HasSuffix(h, "]") {
+		bare = h[1 : len(h)-1]
+	}
+	if ip := net.ParseIP(bare); ip != nil {
+		if bare != h && ip.To4() != nil {
+			return "only an IPv6 address may be bracketed"
+		}
+		if ip.IsLoopback() || ip.IsUnspecified() {
+			return "must not be a loopback or unspecified address"
+		}
+		return ""
+	}
+	if strings.ContainsAny(h, ":[]") {
+		return "must be a host name, without port"
+	}
+	name := strings.ToLower(strings.TrimSuffix(h, "."))
+	if name == "localhost" || strings.HasSuffix(name, ".localhost") {
+		return "must not be a loopback name"
+	}
+	labels := strings.Split(strings.TrimPrefix(name, "*."), ".")
+	if strings.HasPrefix(name, "*.") && len(labels) < 2 {
+		return "a wildcard must cover a name of at least two labels"
+	}
+	for _, l := range labels {
+		if l == "" || strings.Contains(l, "*") {
+			return "must be a host name, optionally with a leading *. wildcard"
+		}
+	}
+	return ""
 }
 
 // validGateName keeps a name usable in labels and log names.

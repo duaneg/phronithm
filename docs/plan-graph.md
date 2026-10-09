@@ -107,9 +107,10 @@ written by agents and records amendments; it does not clear gates.
 
 ## Gate block
 
-A plan may declare the project's gate commands in a third block, in its
-`## Gate commands` section. The Go runtime (`lsf-runtime`) runs them; the
-Workflow script ignores the block.
+A plan may declare the project's gate commands, and the hosts its builds and
+tests fetch from, in a third block, in its `## Gate commands` section. The Go
+runtime (`lsf-runtime`) runs the commands; the Workflow script ignores the
+block.
 
 ````markdown
 ```yaml lsf-gates
@@ -120,15 +121,28 @@ gates:
     timeout: 45m
   - name: lint
     command: "npm run lint"
+hosts:
+  - registry.npmjs.org
+  - "*.github.com"
 ```
 ````
 
-- `gates` is required and non-empty. Each gate has a unique `name` and a
+- A block holds `gates`, `hosts` or both. A block holding `hosts` alone
+  declares no gates: stages run and report the gates themselves, as without
+  a block.
+- `gates`, when present, is non-empty. Each gate has a unique `name` and a
   non-empty `command`, which no other gate repeats. `timeout` is optional: a
   Go duration (`90s`, `45m`, `2h`) greater than zero. Without one, the
   runtime config's `gateTimeout` (default 2 h) applies.
-- `setup` is optional. It runs once per checkout before the gates, for
-  example to install dependencies. If it fails, no gate runs.
+- `setup` is optional and needs `gates`. It runs once per checkout before the
+  gates, for example to install dependencies. If it fails, no gate runs.
+- `hosts`, when present, is a non-empty list of the hosts the project's
+  builds and tests fetch from: a host name, a `*.` wildcard over a name of at
+  least two labels (`*.github.com`), or an IP address. No scheme, port, path
+  or user. Entries compare case-insensitively and may not repeat. Loopback
+  (`localhost`, names under `.localhost`, `127.0.0.0/8`, `::1`) and
+  unspecified addresses (`0.0.0.0`, `::`) are refused; a name that resolves
+  to loopback is not caught.
 - Quote a command that contains `: ` or ` #`; see the YAML subset below.
 - A plan has at most one gate block, counting any fenced example at line
   start in the plan document. Without one, stages run and report the gates

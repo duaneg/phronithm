@@ -27,7 +27,7 @@ Serves human teams planning work and agent teams needing structured task assignm
 - **decomposition-plan**: Document at `docs/plans/<feature-name>-breakdown.md` (or project equivalent). Contains:
   - Work units with classification metadata and done conditions
   - Graph block: the units, dependencies, scope, gates, and execution order as one machine-readable YAML block (format: [plan graph](${CLAUDE_PLUGIN_ROOT}/docs/plan-graph.md)), kept in step with the entries
-  - Gate commands block, when the project has gates: its gate commands (test suite, linters, type checks) as a ```yaml lsf-gates block (same format document). The Go runtime (`lsf-runtime`) runs them itself; the Workflow script ignores the block
+  - Gate commands block, when the project has gates or its builds fetch from the network: its gate commands (test suite, linters, type checks) and the hosts its builds and tests fetch from, as a ```yaml lsf-gates block (same format document). The Go runtime (`lsf-runtime`) runs them itself; the Workflow script ignores the block
   - Execution order with rationale
   - Dependency graph (Mermaid format preferred), parallel streams for 2-worker and N-worker scenarios, and critical path analysis — omitted from a plan drafted for `phronithm:large-scale-feature`, whose Phase 3 workflow computes them from the Graph block
   - Meta-tasks (test harness, debug tooling, integration testing)
@@ -196,7 +196,7 @@ Understand the feature's structure before decomposing it.
 
    Probe environment gates now rather than recording them on trust: check that the binaries, versions, fonts, services, and data sets the done conditions rely on exist and behave as assumed, and pin versions in the plan. If running non-interactively and a gate cannot be resolved, record it as unknown on the unit and flag it in the risk registry.
 
-   Derive the project's gate commands (its test suite, linters, type checks) from its instructions (CLAUDE.md or equivalent) and its CI configuration, each exactly as the project runs it. A plan drafted for `phronithm:large-scale-feature` records them in the `## Gate commands` block; these are not the units' external gates. Where the sources disagree, or name no command for a check the project evidently has, ask the requester; non-interactively, take the CI's command and flag the choice in the risk registry. The runtime runs each through `sh` on a clean checkout of a commit: only committed files, no build caches. Put a dependency install, a build or `git submodule update --init` the gates need in `setup`. Run each command once at the base commit: a gate red there makes every merge regress, so it is a question for the requester. Give a `timeout` to a gate known to outlast the runtime default of 2 h. Omit the block when the project has no gates.
+   Derive the project's gate commands (its test suite, linters, type checks) from its instructions (CLAUDE.md or equivalent) and its CI configuration, each exactly as the project runs it. A plan drafted for `phronithm:large-scale-feature` records them in the `## Gate commands` block; these are not the units' external gates. Where the sources disagree, or name no command for a check the project evidently has, ask the requester; non-interactively, take the CI's command and flag the choice in the risk registry. The runtime runs each through `sh` on a clean checkout of a commit: only committed files, no build caches. Put a dependency install, a build or `git submodule update --init` the gates need in `setup`. Run each command once at the base commit: a gate red there makes every merge regress, so it is a question for the requester. Give a `timeout` to a gate known to outlast the runtime default of 2 h. Ask the requester for the hosts the project's builds and tests fetch from (package registries, module proxies, toolchain downloads) and list them under `hosts`. Omit the block when the project has neither gates nor hosts.
 
 5. **Identify meta-tasks**. Debug tooling, test harnesses, and verification checkpoints are real work — anticipating them prevents surprise scope growth and ensures they're budgeted. A verification checkpoint that gates a specific unit is not a meta-task — it is that unit's dependency and a clause of its done condition; only work belonging to no single unit stays here. Work that falls outside any single unit but is necessary:
    - Test harness or debug tooling (e.g. shortcuts to reach the feature under development)
@@ -265,9 +265,9 @@ Build the execution plan from the analysis.
 
    ## Gate commands
    <one ```yaml lsf-gates block — the project's gate commands (setup, then
-    each gate's name, command and optional timeout) per
-    ${CLAUDE_PLUGIN_ROOT}/docs/plan-graph.md. Omitted when the project has
-    no gates>
+    each gate's name, command and optional timeout) and the hosts its builds
+    and tests fetch from, per ${CLAUDE_PLUGIN_ROOT}/docs/plan-graph.md.
+    Omitted when the project has neither>
 
    ## Dependency Graph
    <Mermaid diagram preferred. Mark dependency types: solid arrows for logical,

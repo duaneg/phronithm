@@ -31,6 +31,8 @@ func TestLoadStageFixtures(t *testing.T) {
 		{"bad gates", []string{testdata + "bad-gates.plan.md"},
 			"invalid-plan [tests]: gates block: tests: command must be a non-empty string\n" +
 				"invalid-plan [tests]: gates block: tests: timeout must be a positive duration such as 45m; got \"soon\"\n"},
+		{"loopback host", []string{writeTemp(t, "x.plan.md", strings.Replace(readTestdata(t, "ok.plan.md"), "gates:\n  - name: tests", "hosts: [proxy.golang.org, \"[::1]\"]\ngates:\n  - name: tests", 1))},
+			"invalid-plan [hosts]: gates block: hosts[1]: must not be a loopback or unspecified address; got \"[::1]\"\n"},
 		{"disagreement", []string{writeTemp(t, "x.plan.md", strings.Replace(readTestdata(t, "ok.plan.md"), "- **Type**: design", "- **Type**: feature", 1))},
 			"plan-disagreement [docs-pass]: entries: docs-pass Type is \"feature\" in its entry, \"design\" in the block\n"},
 	} {
@@ -47,6 +49,23 @@ func TestOK(t *testing.T) {
 	code, out, errOut := runCmd("-decisions", testdata+"ok.decisions.md", testdata+"ok.plan.md")
 	if code != 0 || out != "" || errOut != "decision log: "+testdata+"ok.decisions.md\n" {
 		t.Errorf("exit %d stdout %q stderr %q", code, out, errOut)
+	}
+}
+
+// A block may hold hosts alone, or hosts beside gates.
+func TestHostsBlocks(t *testing.T) {
+	ok := readTestdata(t, "ok.plan.md")
+	for name, block := range map[string]string{
+		"hosts alone":  "hosts: [proxy.golang.org]\n",
+		"beside gates": "hosts: [proxy.golang.org]\ngates:\n  - name: tests\n    command: go test ./...\n",
+	} {
+		plan := strings.Replace(ok, "gates:\n  - name: tests\n    command: go test ./...\n", block, 1)
+		if plan == ok {
+			t.Fatal("fixture changed")
+		}
+		if code, out, errOut := runCmd("-decisions", testdata+"ok.decisions.md", writeTemp(t, "x.plan.md", plan)); code != 0 || out != "" {
+			t.Errorf("%s: exit %d stdout %q stderr %q", name, code, out, errOut)
+		}
 	}
 }
 
