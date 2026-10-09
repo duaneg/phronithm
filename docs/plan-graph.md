@@ -137,12 +137,15 @@ hosts:
 - `setup` is optional and needs `gates`. It runs once per checkout before the
   gates, for example to install dependencies. If it fails, no gate runs.
 - `hosts`, when present, is a non-empty list of the hosts the project's
-  builds and tests fetch from: a host name, a `*.` wildcard over a name of at
-  least two labels (`*.github.com`), or an IP address. No scheme, port, path
-  or user. Entries compare case-insensitively and may not repeat. Loopback
-  (`localhost`, names under `.localhost`, `127.0.0.0/8`, `::1`) and
-  unspecified addresses (`0.0.0.0`, `::`) are refused; a name that resolves
-  to loopback is not caught.
+  builds and tests fetch from: a host name (letters, digits, `-` and `_`;
+  an internationalised name in its `xn--` form), a `*.` wildcard over a name
+  of at least two labels (`*.github.com`), or an IP address. No scheme, port,
+  path or user. Entries compare case-insensitively, ignoring a trailing dot,
+  and may not repeat. Loopback (`localhost`, names under `.localhost`,
+  `127.0.0.0/8`, `::1`), unspecified (`0.0.0.0`, `::`) and IPv4-compatible
+  IPv6 addresses are refused, and so are numeric forms other than a dotted
+  quad (`127.1`, `0x7f.0.0.1`). A name that resolves to loopback is not
+  caught.
 - Quote a command that contains `: ` or ` #`; see the YAML subset below.
 - A plan has at most one gate block, counting any fenced example at line
   start in the plan document. Without one, stages run and report the gates

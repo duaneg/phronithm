@@ -172,7 +172,7 @@ func parseHosts(v any) ([]string, []Problem) {
 			problems = append(problems, gatesProblem(fmt.Sprintf("hosts[%d]: %s; got %s", idx, why, jsJSON(h)), "hosts"))
 			continue
 		}
-		key := strings.ToLower(h)
+		key := strings.ToLower(strings.TrimSuffix(h, "."))
 		if seen[key] {
 			problems = append(problems, gatesProblem("duplicate host "+h, "hosts"))
 		}
@@ -183,10 +183,12 @@ func parseHosts(v any) ([]string, []Problem) {
 }
 
 // hostProblem returns why h is not an acceptable host entry, "" when it is.
-// An entry is a name, a `*.` wildcard over a name of at least two labels, or
-// an IP literal (an IPv6 one optionally bracketed). Loopback and unspecified
-// addresses are refused; a name that resolves to loopback, or a numeric form
-// net.ParseIP does not read (127.1), is not caught.
+// An entry is a name of letters, digits, hyphens and underscores (IDNs in
+// their xn-- form), a `*.` wildcard over a name of at least two labels, or
+// an IP literal (an IPv6 one optionally bracketed). Loopback, unspecified
+// and IPv4-compatible IPv6 addresses are refused, and so is a name whose
+// last label is numeric (127.1, 2130706433, 0x7f.1), which a resolver may
+// read as an address. A name that resolves to loopback is not caught.
 func hostProblem(h string) string {
 	switch {
 	case h == "":
@@ -207,6 +209,9 @@ func hostProblem(h string) string {
 		if ip.IsLoopback() || ip.IsUnspecified() {
 			return "must not be a loopback or unspecified address"
 		}
+		if ip.To4() == nil && net.IP(make([]byte, 12)).Equal(ip[:12]) {
+			return "must not be an IPv4-compatible IPv6 address"
+		}
 		return ""
 	}
 	if strings.ContainsAny(h, ":[]") {
@@ -220,10 +225,19 @@ func hostProblem(h string) string {
 	if strings.HasPrefix(name, "*.") && len(labels) < 2 {
 		return "a wildcard must cover a name of at least two labels"
 	}
+	if len(name) > 253 {
+		return "must be at most 253 characters"
+	}
 	for _, l := range labels {
-		if l == "" || strings.Contains(l, "*") {
-			return "must be a host name, optionally with a leading *. wildcard"
+		if l == "" || len(l) > 63 || strings.ContainsFunc(l, func(r rune) bool {
+			return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_')
+		}) {
+			return "must be a host name of letters, digits, - and _ labels (at most 63 each), optionally with a leading *. wildcard"
 		}
+	}
+	last := labels[len(labels)-1]
+	if strings.Trim(last, "0123456789") == "" || strings.HasPrefix(last, "0x") && strings.Trim(last[2:], "0123456789abcdef") == "" {
+		return "must not be a numeric address form other than a dotted quad"
 	}
 	return ""
 }
