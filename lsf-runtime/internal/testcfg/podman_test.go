@@ -75,10 +75,13 @@ func TestStubDetached(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { podman(t, nil, "rm", "-f", "--ignore", "d1"); cmd.Wait() })
 	rec := filepath.Join(c.State, "name.d1")
 	deadline := time.Now().Add(5 * time.Second)
+	var b []byte
 	for {
-		if _, err := os.Stat(rec); err == nil {
+		var err error
+		if b, err = os.ReadFile(rec); err == nil {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -86,8 +89,13 @@ func TestStubDetached(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	b, _ := os.ReadFile(rec)
-	inner, _ := strconv.Atoi(strings.SplitN(string(b), "\n", 2)[0])
+	inner, err := strconv.Atoi(strings.SplitN(string(b), "\n", 2)[0])
+	if err != nil || inner <= 1 {
+		t.Fatalf("record %q", b)
+	}
+	if _, stderr, code := podman(t, nil, "run", "--name", "d1", "img", "true"); code != 125 || !strings.Contains(stderr, "already in use") {
+		t.Errorf("a live name reused: exit %d %q", code, stderr)
+	}
 	syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 	time.Sleep(200 * time.Millisecond)
 	if syscall.Kill(inner, 0) != nil {

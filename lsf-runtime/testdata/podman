@@ -9,7 +9,12 @@
 # STUB_PODMAN_STATE      directory for records (default $STUB_STATE/podman):
 #                        count, run.<n> (the run's argv, NUL-separated),
 #                        name.<name> (pid, then one label per line), calls
-#                        (one line per non-run invocation).
+#                        (one line per non-run invocation). Records are
+#                        written whole (a temp file renamed into place).
+# A run's command keeps the client's pid, and rm -f signals that pid's
+# process group: the caller must start podman in its own group (Setpgid),
+# as the runtime does; rm also signals the pid itself. Flag values are not
+# checked: tests assert them in the recorded argv.
 # STUB_PODMAN_ROOTLESS   info's {{.Host.Security.Rootless}} (default true).
 # STUB_PODMAN_PASTA      info's {{.Host.Pasta.Executable}} (default
 #                        /usr/bin/pasta; set empty for none).
@@ -24,7 +29,7 @@
 set -u
 state="${STUB_PODMAN_STATE:-}"
 [ -z "$state" ] && [ -n "${STUB_STATE:-}" ] && state="$STUB_STATE/podman"
-[ -z "$state" ] && state="${TMPDIR:-/tmp}/lsf-stub-podman-$(id -u)"
+[ -n "$state" ] || { echo "stub podman: set STUB_PODMAN_STATE or STUB_STATE" >&2; exit 125; }
 mkdir -p "$state"
 
 die() { echo "stub podman: $*" >&2; exit 125; }
@@ -107,11 +112,14 @@ cmd_rm() {
       continue
     fi
     pid=$(head -n1 "$f")
-    if alive "$pid"; then
-      kill -TERM -- "-$pid" 2>/dev/null
-      i=0
-      while alive "$pid" && [ "$i" -lt 20 ]; do sleep 0.05; i=$((i + 1)); done
+    if [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; then
+      if alive "$pid"; then
+        kill -TERM -- "-$pid" 2>/dev/null; kill -TERM "$pid" 2>/dev/null
+        i=0
+        while alive "$pid" && [ "$i" -lt 20 ]; do sleep 0.05; i=$((i + 1)); done
+      fi
       kill -KILL -- "-$pid" 2>/dev/null
+      alive "$pid" && kill -KILL "$pid" 2>/dev/null
     fi
     rm -f "$f"
   done
@@ -186,7 +194,11 @@ cmd_run() {
 
   record() { # pid
     local f="$state/name.$name"
-    { echo "$1"; printf '%s\n' "${labels[@]}"; } > "$f"
+    if [ -e "$f" ] && alive "$(head -n1 "$f")"; then
+      echo "Error: the container name \"$name\" is already in use" >&2; exit 125
+    fi
+    { echo "$1"; [ ${#labels[@]} -gt 0 ] && printf '%s\n' "${labels[@]}"; } > "$f.tmp.$$"
+    mv -f "$f.tmp.$$" "$f"
   }
   if [ "${STUB_PODMAN_DETACH:-}" = 1 ]; then
     setsid "${args[@]}" <&0 &
@@ -206,9 +218,9 @@ case "$sub" in
   run)
     lock
     n=$(( $(cat "$state/count" 2>/dev/null || echo 0) + 1 ))
-    echo "$n" > "$state/count"
-    unlock
+    echo "$n" > "$state/count.tmp" && mv -f "$state/count.tmp" "$state/count"
     printf '%s\0' run "$@" > "$state/run.$n"
+    unlock
     cmd_run "$@" ;;
   info)  note info "$@"; cmd_info "$@" ;;
   image) note image "$@"; cmd_image "$@" ;;
