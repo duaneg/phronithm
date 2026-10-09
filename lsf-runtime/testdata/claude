@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Stub `claude -p --output-format stream-json` for the runtime's tests.
-# Bash 3.2 compatible (macOS). The prompt is read from stdin.
+# Bash 3.2 compatible (macOS). The prompt is read from stdin. --version
+# answers 0.0.0-stub before any record is made.
 #
 # STUB_SCRIPT   comma list of modes, one per invocation, the last repeating
 #               (STUB_MODE is the single-mode form; default ok).
@@ -20,6 +21,7 @@
 #        dirty-transient:<path> (writes <path>, then a 529) |
 #        file:<path> (cats a stream file)
 set -u
+if [ "${1:-}" = --version ]; then echo "0.0.0-stub (Claude Code)"; exit 0; fi
 here=$(cd "$(dirname "$0")" && pwd)
 state="${STUB_STATE:-}"
 n=1

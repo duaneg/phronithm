@@ -33,7 +33,12 @@ import (
 // and once (the entry answers one call; later ones fall to the next match).
 // In a return, @branch and @head stand for the cwd's branch and HEAD after
 // the shell command, so a worktree stage reports the runtime's branch.
+// --version answers 0.0.0-stub, as the launch's smoke check asks.
 func TestMain(m *testing.M) {
+	if os.Getenv("LSF_FAKE_CLAUDE_TABLE") != "" && len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Println("0.0.0-stub (Claude Code)")
+		os.Exit(0)
+	}
 	if table := os.Getenv("LSF_FAKE_CLAUDE_TABLE"); table != "" && slices.Contains(os.Args, "--session-id") {
 		os.Exit(fakeClaude(table))
 	}

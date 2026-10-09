@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+# Stub `podman` for the runtime's tests: `run` becomes a host exec of the
+# container's command, so the tests need no podman. It emulates only what
+# the runtime drives: run, info, image exists, ps and rm. The command's
+# environment is the stub's own with the -e K=V overlay, not a container's:
+# tests assert the -e list in the recorded argv, never the inner process's
+# environment.
+#
+# STUB_PODMAN_STATE      directory for records (default $STUB_STATE/podman):
+#                        count, run.<n> (the run's argv, NUL-separated),
+#                        name.<name> (pid, then one label per line), calls
+#                        (one line per non-run invocation).
+# STUB_PODMAN_ROOTLESS   info's {{.Host.Security.Rootless}} (default true).
+# STUB_PODMAN_PASTA      info's {{.Host.Pasta.Executable}} (default
+#                        /usr/bin/pasta; set empty for none).
+# STUB_PODMAN_NOIMAGE=1  image exists fails.
+# STUB_PODMAN_RUN_EXIT   run exits with it, after writing to stderr.
+# STUB_PODMAN_SMOKE_EXIT the smoke container's exit (default 0).
+# STUB_PODMAN_DETACH=1   run emulates conmon: the command runs in its own
+#                        session, the client ignores SIGTERM and waits, so
+#                        only rm -f ends the command.
+# STUB_PODMAN_RM_EXIT    rm exits with it, removing nothing.
+# STUB_PODMAN_PS_EXIT    ps exits with it, listing nothing.
+set -u
+state="${STUB_PODMAN_STATE:-}"
+[ -z "$state" ] && [ -n "${STUB_STATE:-}" ] && state="$STUB_STATE/podman"
+[ -z "$state" ] && state="${TMPDIR:-/tmp}/lsf-stub-podman-$(id -u)"
+mkdir -p "$state"
+
+die() { echo "stub podman: $*" >&2; exit 125; }
+lock() { # a lock older than ~2 s belongs to a killed stub
+  local i=0
+  while ! mkdir "$state/.lock" 2>/dev/null; do
+    i=$((i + 1)); [ "$i" -gt 200 ] && rmdir "$state/.lock" 2>/dev/null
+    sleep 0.01
+  done
+}
+unlock() { rmdir "$state/.lock"; }
+note() { lock; printf '%s\n' "$*" >> "$state/calls"; unlock; }
+
+# alive pid: the process exists and is not a zombie.
+alive() {
+  kill -0 "$1" 2>/dev/null || return 1
+  local s
+  s=$(cut -d' ' -f3 "/proc/$1/stat" 2>/dev/null) || return 0
+  [ "$s" != Z ]
+}
+
+cmd_info() {
+  [ "${1:-}" = --format ] || die "info: --format required"
+  case "${2:-}" in
+    '{{.Host.Security.Rootless}}') echo "${STUB_PODMAN_ROOTLESS:-true}" ;;
+    '{{.Host.Pasta.Executable}}')  echo "${STUB_PODMAN_PASTA-/usr/bin/pasta}" ;;
+    *) die "info: unknown format ${2:-}" ;;
+  esac
+}
+
+cmd_image() {
+  [ "${1:-}" = exists ] && [ $# -eq 2 ] || die "image: only 'exists REF'"
+  [ "${STUB_PODMAN_NOIMAGE:-}" = 1 ] && { echo "stub podman: no image $2" >&2; exit 1; }
+  exit 0
+}
+
+cmd_ps() {
+  local filter= format=
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -a) ;;
+      --filter) filter=$2; shift ;;
+      --format) format=$2; shift ;;
+      *) die "ps: unknown argument $1" ;;
+    esac
+    shift
+  done
+  [ "$format" = '{{.Names}}' ] || die "ps: format must be {{.Names}}"
+  case "$filter" in label=*) ;; *) die "ps: filter must be label=K=V" ;; esac
+  if [ -n "${STUB_PODMAN_PS_EXIT:-}" ]; then echo "stub podman: ps failed" >&2; exit "$STUB_PODMAN_PS_EXIT"; fi
+  local f n
+  for f in "$state"/name.*; do
+    [ -e "$f" ] || continue
+    n=${f##*/name.}
+    alive "$(head -n1 "$f")" || continue
+    tail -n +2 "$f" | grep -qxF "${filter#label=}" && echo "$n"
+  done
+  exit 0
+}
+
+cmd_rm() {
+  local force= ignore= names=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -f) force=1 ;;
+      -t) shift ;;
+      --ignore) ignore=1 ;;
+      -*) die "rm: unknown flag $1" ;;
+      *) names+=("$1") ;;
+    esac
+    shift
+  done
+  [ -n "$force" ] || die "rm: -f required"
+  if [ -n "${STUB_PODMAN_RM_EXIT:-}" ]; then echo "stub podman: rm failed" >&2; exit "$STUB_PODMAN_RM_EXIT"; fi
+  local n f pid i code=0
+  for n in "${names[@]}"; do
+    f="$state/name.$n"
+    if [ ! -e "$f" ]; then
+      [ -n "$ignore" ] || { echo "stub podman: no container $n" >&2; code=1; }
+      continue
+    fi
+    pid=$(head -n1 "$f")
+    if alive "$pid"; then
+      kill -TERM -- "-$pid" 2>/dev/null
+      i=0
+      while alive "$pid" && [ "$i" -lt 20 ]; do sleep 0.05; i=$((i + 1)); done
+      kill -KILL -- "-$pid" 2>/dev/null
+    fi
+    rm -f "$f"
+  done
+  exit "$code"
+}
+
+cmd_run() {
+  local interactive= name= labels=() vols=() envs=() workdir= smoke= detach_flag=
+  local flag val
+  while [ $# -gt 0 ]; do
+    flag=$1 val=
+    case "$flag" in
+      --*=*) val=${flag#*=}; flag=${flag%%=*} ;;
+    esac
+    case "$flag" in
+      --rm|--init|--read-only) ;;
+      -i) interactive=1 ;;
+      -d) detach_flag=1 ;;
+      --pull|--log-driver|--userns|--cap-drop|--security-opt|--tmpfs|--network|--name|--label|-v|-w|-e)
+        if [ -z "$val" ]; then [ $# -ge 2 ] || die "run: $flag needs a value"; val=$2; shift; fi
+        case "$flag" in
+          --name) name=$val ;;
+          --label) labels+=("$val"); [ "$val" = lsf.smoke=1 ] && smoke=1 ;;
+          -v) vols+=("$val") ;;
+          -w) workdir=$val ;;
+          -e) envs+=("$val") ;;
+        esac ;;
+      -*) die "run: unknown flag $flag" ;;
+      *) break ;;
+    esac
+    shift
+  done
+  [ $# -ge 2 ] || die "run: image and command required"
+  [ -n "$name" ] || die "run: --name required"
+  [ -z "$detach_flag" ] || die "run: -d is not emulated"
+  shift # the image
+  if [ -n "${STUB_PODMAN_RUN_EXIT:-}" ]; then
+    echo "Error: stub podman run failed" >&2
+    exit "$STUB_PODMAN_RUN_EXIT"
+  fi
+
+  # The command, with each bind's destination replaced by its source.
+  local args=("$@") v src dst rest i
+  for v in "${vols[@]}"; do
+    src=${v%%:*} rest=${v#*:} dst=${rest%%:*}
+    [ "$src" = "$dst" ] && continue
+    for i in "${!args[@]}"; do
+      case "${args[$i]}" in
+        "$dst") args[$i]=$src ;;
+        "$dst"/*) args[$i]=$src${args[$i]#"$dst"} ;;
+      esac
+    done
+  done
+
+  if [ -n "$smoke" ]; then
+    local claude=
+    for v in "${vols[@]}"; do
+      rest=${v#*:}
+      [ "${rest%%:*}" = /opt/claude/claude ] && claude=${v%%:*}
+    done
+    [ -n "$claude" ] || die "run: smoke without a claude bind"
+    "$claude" --version </dev/null || exit 1
+    exit "${STUB_PODMAN_SMOKE_EXIT:-0}"
+  fi
+
+  local e
+  for e in "${envs[@]}"; do
+    case "$e" in *=*) export "${e%%=*}=${e#*=}" ;; esac
+  done
+  [ -n "$workdir" ] && { cd "$workdir" || exit 126; }
+  [ -n "$interactive" ] || exec </dev/null
+
+  record() { # pid
+    local f="$state/name.$name"
+    { echo "$1"; printf '%s\n' "${labels[@]}"; } > "$f"
+  }
+  if [ "${STUB_PODMAN_DETACH:-}" = 1 ]; then
+    setsid "${args[@]}" <&0 &
+    local pid=$!
+    record "$pid"
+    trap '' TERM
+    wait "$pid"
+    exit $?
+  fi
+  record "$$"
+  exec "${args[@]}"
+}
+
+sub=${1:-}
+[ $# -gt 0 ] && shift
+case "$sub" in
+  run)
+    lock
+    n=$(( $(cat "$state/count" 2>/dev/null || echo 0) + 1 ))
+    echo "$n" > "$state/count"
+    unlock
+    printf '%s\0' run "$@" > "$state/run.$n"
+    cmd_run "$@" ;;
+  info)  note info "$@"; cmd_info "$@" ;;
+  image) note image "$@"; cmd_image "$@" ;;
+  ps)    note ps "$@"; cmd_ps "$@" ;;
+  rm)    note rm "$@"; cmd_rm "$@" ;;
+  *) die "unknown subcommand $sub" ;;
+esac
