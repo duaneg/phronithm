@@ -116,7 +116,7 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 	conflicts := []plan.Merge{}
 	if len(order) > 0 {
 		in := mergeInput{Wave: wave, Name: c.name, IntegrationBranch: c.integrationBranch, PlanPath: l.plan.Path, ArchivePath: c.archivePath,
-			LedgerPath: c.ledgerPath, ArchitectureDoc: c.architectureDoc, PauseRef: c.pauseRef, Units: []mergeUnitIn{}, Declared: l.decl != nil}
+			LedgerPath: c.ledgerPath, ArchitectureDoc: c.architectureDoc, PauseRef: c.pauseRef, Units: []mergeUnitIn{}, Declared: l.decl.Gated()}
 		for _, r := range order {
 			in.Units = append(in.Units, mergeUnitIn{Unit: r.unit, Branch: r.branch, Sha: r.reportSha, Report: r.completionPath, GatedTree: r.gatedTree})
 		}

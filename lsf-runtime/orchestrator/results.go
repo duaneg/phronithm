@@ -39,6 +39,12 @@ type copyResult struct {
 	ArchitectureSha string `json:"architectureSha"`
 }
 
+// pinResult is the gates-pin step's value: the plan document at
+// args.planSha, whole, as load reads it.
+type pinResult struct {
+	PlanBlock string `json:"planBlock"`
+}
+
 type reading struct {
 	Clause  string `json:"clause"`
 	Reading string `json:"reading"`

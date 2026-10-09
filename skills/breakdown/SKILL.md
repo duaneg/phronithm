@@ -348,7 +348,7 @@ Under the `lsf-implement` workflow the plan's size is bounded by moving what is 
 
 - **Completed entries are archived at merge.** The merge stage moves a completed unit's `### <id>` entry verbatim to `docs/plans/<name>-archive.md` and leaves the one-line stub `### <id> — complete at <merge SHA>; entry archived to <archive>; report <path>`. The unit's `## Graph` block entry is untouched apart from `complete: true`. A re-plan never restores or rewrites a stub.
 - **Closed risks are archived at re-plan.** A Risk Registry entry retired by this pass's completions or amendments moves to the archive under `## Closed risks`, cited by id and one clause.
-- **The gate commands block is fixed for the run.** A wave re-plan never edits it: the Go runtime stops with `declared-gates-changed` when it changes. The only sanctioned change is a requester's decision, which the decision re-plan applies at the next launch, before the block is read.
+- **The gate commands block is fixed for the run.** A re-plan, wave or decision, never edits it: the Go runtime pins it at launch and stops with `declared-gates-changed` when it changes. The requester changes it by committing the plan and relaunching at the new SHA.
 - **Plan Maintenance takes the compact form** in the template above: heading, one line per amendment, nothing restated.
 
 ## Commit discipline

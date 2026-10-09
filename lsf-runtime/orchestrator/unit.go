@@ -476,7 +476,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	// A design unit's review reads no gates.
 	switch {
 	case design:
-	case o.decl != nil:
+	case o.decl.Gated():
 		run, gsigs, stop, err := o.declaredGates(ctx, at("implement"), impl.Result.Sha, impl.Result.Gates)
 		if err != nil {
 			return nil, err
@@ -543,7 +543,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 			if design {
 				return nil, nil
 			}
-			if o.decl != nil {
+			if o.decl.Gated() {
 				run, gsigs, stop, err := o.declaredGates(ctx, at("fix"), fixed.Result.Sha, fixed.Result.Gates)
 				if err != nil {
 					return nil, err
@@ -576,7 +576,7 @@ func (o *orch) runUnit(ctx context.Context, p *plan.Plan, u *plan.Unit, wave int
 	}
 
 	// 5. completion report: rendered here, committed by a code step
-	review := reviewOutcome{rounds: reviewGate.rounds, findings: reviewGate.findings, fixedGates: fixedGates, declared: o.decl != nil && !design}
+	review := reviewOutcome{rounds: reviewGate.rounds, findings: reviewGate.findings, fixedGates: fixedGates, declared: o.decl.Gated() && !design}
 	if fixedGates || review.declared {
 		review.gates = gr.gates
 	}

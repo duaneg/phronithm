@@ -192,6 +192,9 @@ func Defaults() map[string]Handler {
 		"load": func(c Call, s *State) any {
 			return Copied(s.Plan, M{"planBlock": ToBlock(s.Plan) + GatesBlock(s.GatesBlock)})
 		},
+		"gates-pin": func(c Call, s *State) any {
+			return Ret(M{"planBlock": ToBlock(s.Plan) + GatesBlock(s.GatesBlock)})
+		},
 		"plan": func(c Call, s *State) any {
 			return Ret(M{"branch": "plan-" + c.Unit, "sha": "p", "path": "docs/plans/" + c.Unit + "-plan.md", "bytes": 0, "readings": []any{}})
 		},

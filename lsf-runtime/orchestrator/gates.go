@@ -70,7 +70,7 @@ type gateInput struct {
 // gated once. A waiter whose own context ends stops; a waiter on a run that
 // was not kept (a stop, a fault, a gate not run) runs the gates itself.
 func (o *orch) gates(ctx context.Context, commit string) (gateSet, string, error) {
-	if o.decl == nil {
+	if !o.decl.Gated() {
 		return gateSet{}, "gates: the plan declares none", nil
 	}
 	tree, fault, err := o.treeOf(ctx, commit)

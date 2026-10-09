@@ -1104,9 +1104,9 @@ func TestDecisionReplanDirectEdits(t *testing.T) {
 	}, decisions)
 	out := run(t, s)
 	eq(t, out.Status, "complete", out.stopKinds())
-	eqs(t, s.Labels()[:4], []string{"decision-log", "decision-replan", "direct-edits:w0", "ledger:w0"})
-	match(t, s.Calls[1].Prompt, "(?s)`directEdits`.*not made by the re-plan|not made by the re-plan.*`directEdits`")
-	match(t, s.Calls[2].Prompt, `(?s)decision re-plan.*docs/debt\.md.*file the D7 row`)
+	eqs(t, s.Labels()[:5], []string{"gates-pin", "decision-log", "decision-replan", "direct-edits:w0", "ledger:w0"})
+	match(t, s.Calls[2].Prompt, "(?s)`directEdits`.*not made by the re-plan|not made by the re-plan.*`directEdits`")
+	match(t, s.Calls[3].Prompt, `(?s)decision re-plan.*docs/debt\.md.*file the D7 row`)
 	w0 := []string{}
 	for _, r := range out.Unscribed {
 		if r.Wave != nil && *r.Wave == 0 {
@@ -1201,14 +1201,14 @@ func TestDecisionsFirst(t *testing.T) {
 		M{"decisions": []M{{"id": "d1", "question": "q", "decision": "yes"}}})
 	out := run(t, s)
 	eq(t, out.Status, "complete", out.stopKinds())
-	eqs(t, s.Labels()[:3], []string{"decision-log", "decision-replan", "ledger:w0"})
+	eqs(t, s.Labels()[:4], []string{"gates-pin", "decision-log", "decision-replan", "ledger:w0"})
 	for _, c := range agentCalls(s) {
 		match(t, c.Prompt, `Decision log: docs/plans/f-decisions\.md @ dec1`, c.Label)
 	}
 	for _, l := range filterPrefix(s.Labels(), "load") {
 		eq(t, input(t, s, l)["decisionLogSha"], any("dec1"), l)
 	}
-	rp := s.Calls[1].Prompt
+	rp := s.Prompt("decision-replan")
 	match(t, rp, `Decomposition plan: docs/plans/f-breakdown\.md @ plan0`)
 	match(t, rp, `(?s)"id": "d1".*"decision": "yes"`)
 	noMatch(t, rp, `"clears"`)
@@ -1461,7 +1461,7 @@ func TestCarriedRows(t *testing.T) {
 	s := stub(t, twoWaves(), nil, M{"unscribed": carried})
 	out := run(t, s)
 	eq(t, out.Status, "complete")
-	eq(t, s.Labels()[0], "ledger:carried")
+	eqs(t, s.Labels()[:2], []string{"gates-pin", "ledger:carried"})
 	match(t, ledgerText(t, s, "ledger:carried"), `(?s)## Wave 3.*dev-Z`)
 	eq(t, len(out.Unscribed), 0)
 	if _, ok := out.Digest.ByKind["deviation"]; ok {
@@ -1557,7 +1557,7 @@ func TestPauseAtLoadAfterDecisions(t *testing.T) {
 	out := run(t, s)
 	eq(t, out.Status, "paused")
 	eq(t, out.PlanSha, "decided1")
-	eqs(t, s.Labels()[:2], []string{"decision-log", "decision-replan"})
+	eqs(t, s.Labels()[:3], []string{"gates-pin", "decision-log", "decision-replan"})
 	match(t, out.Note, `no decisions`)
 	if hasPrefix(s.Labels(), "plan:") {
 		t.Error(s.Labels())
@@ -1930,7 +1930,7 @@ func TestEveryRoleTier(t *testing.T) {
 	role := map[string]string{
 		"critique-plan": "critique", "critique-code": "critique", "lens-review": "critique",
 		"review-gate": "gate", "plan": "planning", "replan": "planning", "termination": "planning",
-		"load": "mechanical", "ledger": "mechanical", "cleanup": "mechanical", "completion-report": "mechanical",
+		"load": "mechanical", "gates-pin": "mechanical", "ledger": "mechanical", "cleanup": "mechanical", "completion-report": "mechanical",
 		"implement": "default", "fix-plan": "default", "fix-code": "default", "merge": "default", "direct-edits": "default", "obligations": "default",
 	}
 	for _, c := range s.Calls {

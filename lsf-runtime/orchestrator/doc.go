@@ -228,7 +228,8 @@
 //     paths: the clones and worktrees, and their dirt, are gone. A failed removal is not
 //     retried.
 //
-// D26 and D27 are unit declared-gates'; D28 to D30 are unit s2-clones'.
+// D26 and D27 are unit declared-gates'; D28 to D30 are unit s2-clones'; D31
+// is unit s2-boundary-common's.
 //
 //   - D26. With declared gates a merge is gated before it is committed, so a
 //     regressed merge committed nothing: the wave rewrites the
@@ -258,9 +259,11 @@
 //     call does; a kill leaves it in progress for the resume.
 //   - D27. A plan may declare its gate commands in a ```yaml lsf-gates block
 //     (docs/plan-graph.md, plan.ParseDeclaration), which the frozen JS
-//     ignores. The launch's first load fixes the declaration; a later load
-//     whose block differs is a declared-gates-changed stop (the relaunch
-//     takes the new block). With a declaration the runtime runs the gates
+//     ignores. The launch pins the declaration before any agent call (D31);
+//     a load whose block differs is a declared-gates-changed stop (the
+//     relaunch takes the new block). A block holding hosts alone declares no
+//     gates (Declaration.Gated) and is handled as no block, except that it
+//     is pinned like any other. With gate commands the runtime runs the gates
 //     itself (lsfrt.Runtime.RunGates) on a clean detached checkout of a
 //     non-design unit's implement commit, of each code fix's commit, and of
 //     each merge's tree before its commit (merge.go), once per tree: a run
@@ -277,10 +280,8 @@
 //     failed checkout) is a stage-fault. A merge that differs
 //     from the unit's last gated tree only at its completion report reuses
 //     that result. Design units run no unit-level gates; their merges are
-//     gated. A decision re-plan runs before the first load, so a gate block
-//     it changes becomes the baseline: a requester's change to the block is
-//     made by decision, and only the wave re-plan's prompt forbids editing it. JS has none of this; an undeclared
-//     plan's prompts and steps are unchanged (promptparity).
+//     gated. JS has none of this; an undeclared plan's prompts and steps are
+//     unchanged (promptparity), the gates-pin step aside (D31).
 //   - D28. Every agent call runs in its own clone under the state dir
 //     (lsfrt: clone.go), as docs/design/lsf-runtime.md Permissions →
 //     Placement assigns it: a role's clone is kept (fetched back to
@@ -318,4 +319,17 @@
 //     they return; the commit-by-name clause has no main-checkout wording; the
 //     conflict call is in the merge clone. promptparity rewrites the JS prompts
 //     by its d30 table. The wording is part of those calls' input hash.
+//   - D31. The gate block is pinned from the plan at args.planSha by the code
+//     step gates-pin (input {sha, planPath}), run after the carried rows are
+//     registered and before their scribe, the decision log and every agent
+//     call. Its value is the plan document; Run parses it, so a replay pins
+//     alike. A block with problems, or the step's fault or null, stops the
+//     run at load. The pin's hosts go to the runtime (Runtime.PinHosts), for
+//     the boundary that confines calls. Every load, the first included,
+//     compares its block with the pin, so a decision re-plan that edits the
+//     block stops at the first load with declared-gates-changed; the
+//     decision re-plan's prompt, like the wave re-plan's, says not to edit a
+//     block the plan has. A requester changes the block by committing the
+//     plan and relaunching at the new SHA. JS has no pin; promptparity
+//     leaves the step out.
 package orchestrator

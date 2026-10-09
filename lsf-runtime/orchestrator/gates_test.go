@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -396,4 +397,121 @@ func TestDeclaredReplanPrompt(t *testing.T) {
 	plain := stub(t, orchtest.TwoWaves(), discovering(), nil)
 	run(t, plain)
 	notContains(t, plain.Prompt("replan:w1"), "lsf-gates")
+}
+
+// D31: the gate block is pinned from the plan at args.planSha before any
+// other step or call, and the runtime gets its hosts.
+func TestGatesPinFirst(t *testing.T) {
+	s := stub(t, orchtest.TwoWaves(), nil, M{"unscribed": []M{{"kind": "deviation", "source": "reported", "stage": "implement", "unit": "Z", "wave": 3, "statement": "dev-Z", "referent": "src/Z", "raisedBy": "implement", "disposition": "recorded"}}})
+	s.State.GatesBlock = "hosts: [proxy.golang.org]\n" + twoGates
+	run(t, s)
+	eq(t, s.Labels()[0], "gates-pin")
+	eq(t, input(t, s, "gates-pin")["sha"], any("plan0"))
+	eq(t, input(t, s, "gates-pin")["planPath"], any("docs/plans/f-breakdown.md"))
+	eq(t, len(s.Pins), 1)
+	eqs(t, s.Pins[0], []string{"proxy.golang.org"})
+
+	s = stub(t, orchtest.TwoWaves(), nil, nil)
+	run(t, s)
+	eq(t, len(s.Pins), 1)
+	eq(t, len(s.Pins[0]), 0, "an undeclared plan pins no hosts")
+}
+
+// D31: a decision re-plan that changes the block stops at the first load;
+// an unchanged block passes, and the re-plan is told not to edit it.
+func TestDecisionReplanGatesPinned(t *testing.T) {
+	decisions := M{"decisions": []M{{"id": "d1", "question": "q", "decision": "yes"}}}
+	dr := orchtest.Defaults()["decision-replan"]
+	for _, c := range []struct {
+		name, now, want string
+	}{
+		{"changed", "hosts: [proxy.golang.org]\n" + twoGates, "declared-gates-changed"},
+		{"added hosts-only", "hosts: [proxy.golang.org]\n", "declared-gates-changed"},
+		{"unchanged", twoGates, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := stub(t, orchtest.TwoWaves(), Hs{
+				"load": func(_ Call, st *State) any {
+					return orchtest.Copied(st.Plan, M{"decisionsBlock": decisionsBlock("2026-10-09", "yes"), "planBlock": orchtest.ToBlock(st.Plan) + orchtest.GatesBlock(st.GatesBlock)})
+				},
+				"decision-replan": func(cl Call, st *State) any {
+					st.GatesBlock = c.now
+					return dr(cl, st)
+				},
+			}, decisions)
+			s.State.GatesBlock = twoGates
+			v := run(t, s)
+			contains(t, s.Prompt("decision-replan"), "Do not edit the plan's ```yaml lsf-gates block; a change to it stops the run.")
+			if c.want == "" {
+				eq(t, v.Status, "complete", v.stopKinds())
+				return
+			}
+			eq(t, strings.Join(v.stopKinds(), ","), c.want)
+			eq(t, v.Escalation.Stage, "load")
+			eq(t, v.PlanSha, "decided1")
+			eq(t, len(filterPrefix(s.Labels(), "load")), 1, "stopped at the first load")
+		})
+	}
+	s := stub(t, orchtest.TwoWaves(), Hs{"load": loadWith(M{"decisionsBlock": decisionsBlock("2026-10-09", "yes")})}, decisions)
+	run(t, s)
+	noMatch(t, s.Prompt("decision-replan"), "lsf-gates")
+}
+
+// A block holding hosts alone runs as an undeclared plan: no gates run,
+// and every prompt but a re-plan's (told the block is frozen) is the
+// undeclared plan's.
+func TestHostsOnlyRunsUndeclared(t *testing.T) {
+	undeclared := stub(t, orchtest.TwoWaves(), nil, nil)
+	want := run(t, undeclared)
+	s := stub(t, orchtest.TwoWaves(), nil, nil)
+	s.State.GatesBlock = "hosts: [proxy.golang.org]\n"
+	got := run(t, s)
+	eq(t, got.Status, want.Status)
+	eq(t, len(s.GateRuns), 0)
+	frozen := "Do not edit the plan's ```yaml lsf-gates block; a change to it stops the run.\n"
+	a, b := agentCalls(undeclared), agentCalls(s)
+	eq(t, len(b), len(a))
+	for i := range a {
+		p := b[i].Prompt
+		if b[i].Prefix == "replan" || b[i].Prefix == "termination" {
+			p = strings.Replace(p, frozen, "", 1)
+		}
+		eq(t, b[i].Label, a[i].Label)
+		eq(t, p, a[i].Prompt, a[i].Label)
+	}
+	for _, l := range filterPrefix(s.Labels(), "merge") {
+		if input(t, s, l)["declared"] == true {
+			t.Errorf("%s: declared", l)
+		}
+	}
+}
+
+// A pin with problems, a null or a fault stops at load before any agent
+// call.
+func TestGatesPinStops(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		block string
+		h     H
+		want  string
+	}{
+		{"loopback", "hosts: [localhost]\n", nil, "invalid-plan"},
+		{"null", "", func(Call, *State) any { return nil }, "agent-null"},
+		{"fault", "", func(Call, *State) any { return errors.New("boom") }, "stage-fault"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			hs := Hs{}
+			if c.h != nil {
+				hs["gates-pin"] = c.h
+			}
+			s := stub(t, orchtest.TwoWaves(), hs, M{"decisions": []M{{"id": "d1", "question": "q", "decision": "yes"}}})
+			s.State.GatesBlock = c.block
+			v := run(t, s)
+			eq(t, strings.Join(v.stopKinds(), ","), c.want)
+			eq(t, v.Escalation.Stage, "load")
+			eq(t, len(agentCalls(s)), 0)
+			eq(t, len(s.Pins), 0)
+			eqs(t, filterPrefix(s.Labels(), "decision-log"), []string{})
+		})
+	}
 }

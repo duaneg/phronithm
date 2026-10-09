@@ -114,7 +114,10 @@ func runGo(sc scenario) (result, jsScenario, []string) {
 	}
 	for _, c := range s.Calls {
 		if c.Step {
-			r.Steps = append(r.Steps, step{c.Label, c.Input})
+			// gates-pin is Go's own (D31): JS has no gate block.
+			if c.Label != "gates-pin" {
+				r.Steps = append(r.Steps, step{c.Label, c.Input})
+			}
 			continue
 		}
 		o, _ := plan.MarshalJS(opts{c.Opts.Label, c.Opts.Phase, c.Opts.Model, c.Opts.Effort, c.Opts.AgentType, c.Opts.Isolation, c.Opts.Schema}, "")

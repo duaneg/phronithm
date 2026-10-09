@@ -82,6 +82,29 @@ func (o *orch) load(in loadInput) stageFn {
 	}
 }
 
+type pinInput struct {
+	Sha      string `json:"sha"`
+	PlanPath string `json:"planPath"`
+}
+
+// pin reads the plan document at args.planSha for the gate block pin (D31).
+func (o *orch) pin(in pinInput) stageFn {
+	return func(ctx context.Context, _ string, _ bool) (json.RawMessage, error) {
+		g, err := o.gitFor()
+		if err != nil {
+			return nil, err
+		}
+		b, ok, err := g.blob(ctx, o.repo, in.Sha, in.PlanPath)
+		if err == nil && !ok {
+			err = fmt.Errorf("%s:%s does not exist", in.Sha, in.PlanPath)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return stageValue(pinResult{string(b)})
+	}
+}
+
 // liveReads re-reads HEAD's branch (headBranch non-nil) and the pause ref
 // after a step, replayed or not, so a relaunch sees the requester's fix.
 // Without a repository the scripted values stand.

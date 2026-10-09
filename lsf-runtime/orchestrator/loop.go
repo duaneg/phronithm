@@ -324,6 +324,41 @@ type loaded struct {
 	stops []*plan.Signal
 }
 
+// pinGates pins the gate block from the plan at args.planSha before any
+// agent call (D31): every load compares against it, and the runtime gets its
+// hosts. Its effects come from the step's value, so a replay pins alike. A
+// block with problems, and the step's fault or null, stop at load.
+func (l *launch) pinGates(ctx context.Context) (json.RawMessage, bool, error) {
+	at := plan.At{Stage: "load"}
+	r, fault, err := step[pinResult](ctx, l.orch, "gates-pin", pinInput{l.ctx.planSha, l.ctx.planPath}, l.pin(pinInput{l.ctx.planSha, l.ctx.planPath}))
+	var stops []*plan.Signal
+	switch {
+	case err != nil:
+		return nil, true, err
+	case fault != "":
+		stops = []*plan.Signal{stageFaultSignal(at, fault)}
+	case r == nil:
+		stops = []*plan.Signal{plan.NullReturnSignal(at)}
+	}
+	if stops == nil {
+		decl, problems := plan.ParseDeclaration(r.Result.PlanBlock)
+		for _, p := range problems {
+			stops = append(stops, plan.NewSignal(plan.Signal{Kind: p.Kind, Statement: p.Statement, Referent: p.Referent, Source: "structural", Stage: "load"}))
+		}
+		if stops == nil {
+			l.decl = decl
+			var hosts []string
+			if decl != nil {
+				hosts = decl.Hosts
+			}
+			l.rt.PinHosts(hosts)
+			return nil, false, nil
+		}
+	}
+	out, err := l.stopped(ctx, "load", stops, nil)
+	return out, true, err
+}
+
 func (l *launch) loadPlan(ctx context.Context, sha, label string, wave *int) (loaded, error) {
 	c := l.ctx
 	in := loadInput{Sha: sha, PlanPath: c.planPath, DecisionLogSha: c.decisionLogSha, DecisionLogPath: c.decisionLogPath,
@@ -360,11 +395,7 @@ func (l *launch) loadPlan(ctx context.Context, sha, label string, wave *int) (lo
 	for _, p := range problems {
 		out.stops = append(out.stops, problem(p))
 	}
-	switch {
-	case len(problems) > 0:
-	case !l.declSet:
-		l.decl, l.declSet = decl, true
-	case decl.Identity() != l.decl.Identity():
+	if len(problems) == 0 && decl.Identity() != l.decl.Identity() {
 		out.stops = append(out.stops, declChanged(l.decl, decl, wave))
 	}
 	if g.Plan != nil {
@@ -444,6 +475,9 @@ func Run(ctx context.Context, rt Runtime) (json.RawMessage, error) {
 		l.ledger = append(l.ledger, s)
 		l.carried[s] = true
 	}
+	if out, halt, err := l.pinGates(ctx); halt {
+		return out, err
+	}
 	if len(l.carried) > 0 {
 		rt.Log(fmt.Sprintf("%d ledger row(s) carried from a previous run", len(l.carried)))
 		if out, halt, err := l.scribeOrStop(ctx, "ledger:carried"); halt {
@@ -485,7 +519,7 @@ func Run(ctx context.Context, rt Runtime) (json.RawMessage, error) {
 			rpItems = append(rpItems, rpItem{id: dec.ID, describe: dec.Question, described: true, stopText: dec.Question, referent: dec.ID})
 		}
 		t := c.tierFor("planning")
-		rp, cs, err := call[replanResult](ctx, l.orch, site{at: plan.At{Stage: "decision-replan", Wave: plan.W(0)}, writer: true}, decisionReplanPrompt(c, l.ref(), items),
+		rp, cs, err := call[replanResult](ctx, l.orch, site{at: plan.At{Stage: "decision-replan", Wave: plan.W(0)}, writer: true}, decisionReplanPrompt(c, l.ref(), items, l.decl),
 			lsfrt.Opts{Label: "decision-replan", Model: t.Model, Effort: t.Effort, Phase: "Load", Schema: replanSchema})
 		if err != nil {
 			return nil, err

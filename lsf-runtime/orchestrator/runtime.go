@@ -25,7 +25,8 @@ import (
 // none); Worktree is a code step's own worktree and its branch;
 // RemoveWorktree removes a label's merged clone or worktree; MergeClone is
 // a wave's merge clone, made or reused, and RemoveMergeClone removes it;
-// RunGates runs declared gates on a clean checkout (lsfrt.Runtime).
+// RunGates runs declared gates on a clean checkout (lsfrt.Runtime);
+// PinHosts hands the runtime the gate block's hosts as pinned (D31).
 type Runtime interface {
 	Call(ctx context.Context, prompt string, o lsfrt.Opts) (lsfrt.CallResult, error)
 	Parallel(ctx context.Context, thunks []func(context.Context) (json.RawMessage, error)) ([]json.RawMessage, error)
@@ -36,6 +37,7 @@ type Runtime interface {
 	MergeClone(ctx context.Context, name string) (string, error)
 	RemoveMergeClone(ctx context.Context, name string) error
 	RunGates(ctx context.Context, label, commit, setup string, gates []lsfrt.GateSpec) ([]lsfrt.GateRun, error)
+	PinHosts(hosts []string)
 	Log(msg string)
 	Args() json.RawMessage
 }
@@ -64,10 +66,9 @@ type orch struct {
 	worktrees map[string][]string
 	tips      map[string]string // branch → tip its writer's check journaled (D23)
 
-	// decl is the plan's gate declaration as the launch's first load read
-	// it, nil when undeclared; declSet once that load has run (D27).
+	// decl is the plan's gate declaration as the launch pinned it from the
+	// plan at args.planSha, nil when undeclared (D27, D31).
 	decl     *plan.Declaration
-	declSet  bool
 	gateMemo map[string]*gateFlight // tree → its gate run this launch
 }
 

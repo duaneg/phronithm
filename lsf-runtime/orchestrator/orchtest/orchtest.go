@@ -95,6 +95,7 @@ type Stub struct {
 	Returns  map[string]json.RawMessage // by final label, calls and steps; null included; none for a handler error or a harness failure
 	Failures []string                   // harness failures: repeated label, missing handler, unexpected panic
 	GateRuns []GateCall                 // RunGates calls, in order
+	Pins     [][]string                 // PinHosts calls, in order
 }
 
 // GateCall is one RunGates call.
@@ -306,6 +307,13 @@ func (s *Stub) runGateStep(ctx context.Context, c Call, fn func(context.Context,
 		s.Returns[c.Label] = v
 	}
 	return v, err
+}
+
+// PinHosts records the call.
+func (s *Stub) PinHosts(hosts []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Pins = append(s.Pins, hosts)
 }
 
 // Repo is "": the stub has no repository.

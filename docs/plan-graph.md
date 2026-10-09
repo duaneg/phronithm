@@ -179,11 +179,12 @@ gated once more, and a second move faults. A merge commit whose tree no run
 covers (one that raced the merge, or a hook's change) is gated when the stage
 meets it, and is a fault if its gates fail.
 
-The runtime fixes the block at a launch's first load. Values compare as
-written, so `1h` and `60m` differ. A wave re-plan that changes the block stops
-the run with `declared-gates-changed`, and the relaunch takes the changed
-block. A requester's change goes through a decision, which the decision
-re-plan applies before the first load. The commands run with the runtime's
+The runtime pins the block from the plan at the launch's `planSha`, before
+any agent call. Values compare as written, so `1h` and `60m` differ. A
+re-plan, wave or decision, that changes the block stops the run with
+`declared-gates-changed`, and a relaunch at the re-plan's SHA takes the
+changed block. A requester changes the block by committing the plan and
+relaunching at the new SHA. The commands run with the runtime's
 environment, credentials included, and are trusted as the plan document is;
 the last 4 KB of a failing gate's output goes to the reviewers' prompts and
 the journal.

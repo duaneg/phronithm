@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -49,6 +50,9 @@ type Runtime struct {
 
 	seenMu sync.Mutex
 	seen   map[string]string // journal key → input hash, this launch
+
+	hostsMu sync.Mutex
+	hosts   []string // the plan's network allowance, as PinHosts set it
 }
 
 // Run is a launch. It takes the state-dir lock, reaps orphans, installs
@@ -222,6 +226,21 @@ func (rt *Runtime) Log(msg string) {
 
 // Args is the orchestrator's arguments, passed through from the config.
 func (rt *Runtime) Args() json.RawMessage { return rt.cfg.Args }
+
+// PinHosts records the hosts the plan's gate block allows, as the launch
+// pinned them from the plan at args.planSha before any agent call.
+func (rt *Runtime) PinHosts(hosts []string) {
+	rt.hostsMu.Lock()
+	defer rt.hostsMu.Unlock()
+	rt.hosts = slices.Clone(hosts)
+}
+
+// Hosts are the pinned hosts, nil before PinHosts or for a plan with none.
+func (rt *Runtime) Hosts() []string {
+	rt.hostsMu.Lock()
+	defer rt.hostsMu.Unlock()
+	return slices.Clone(rt.hosts)
+}
 
 // event appends one telemetry record.
 func (rt *Runtime) event(kind string, fields map[string]any) {

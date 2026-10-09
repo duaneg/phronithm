@@ -540,8 +540,8 @@ STOP (return an escalation record):
   nothing committed);
 - a declared gate the runtime could not run (`gate-not-run`), after a code
   stage or before a merge;
-- a plan whose `lsf-gates` block changed since the run's first load
-  (`declared-gates-changed`); the relaunch takes the changed block;
+- a plan whose `lsf-gates` block differs from the one the launch pinned at its
+  `planSha` (`declared-gates-changed`); a relaunch at the new SHA takes it;
 - a plan that fails the load checks: unreadable block, unknown or duplicate
   units, an overlapping-scope pair with no edge, a bad clearance, or the main
   checkout not on the integration branch;
