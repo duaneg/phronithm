@@ -29,16 +29,17 @@ type Config struct {
 	DefaultRole string          `json:"defaultRole"`
 	Skills      []SkillRule     `json:"skills,omitempty"`
 
-	Caps                 Caps       `json:"caps,omitzero"`
-	GuardTimeout         Duration   `json:"guardTimeout,omitempty"` // 0 = none
-	KillGrace            Duration   `json:"killGrace,omitempty"`    // default 10s
-	Backoff              []Duration `json:"backoff,omitempty"`      // default [5s, 20s, 60s]
-	SessionLimitMargin   Duration   `json:"sessionLimitMargin,omitempty"`
-	SessionLimitFallback Duration   `json:"sessionLimitFallback,omitempty"`
-	MaxSessionWaits      int        `json:"maxSessionWaits,omitempty"`
-	DryRun               bool       `json:"dryRun,omitempty"`
-	GateTimeout          Duration   `json:"gateTimeout,omitempty"`     // default 2h; a declared gate's own timeout overrides it
-	GateConcurrency      int        `json:"gateConcurrency,omitempty"` // default 1; bounds concurrent RunGates
+	Caps                 Caps         `json:"caps,omitzero"`
+	GuardTimeout         Duration     `json:"guardTimeout,omitempty"` // 0 = none
+	KillGrace            Duration     `json:"killGrace,omitempty"`    // default 10s
+	Backoff              []Duration   `json:"backoff,omitempty"`      // default [5s, 20s, 60s]
+	SessionLimitMargin   Duration     `json:"sessionLimitMargin,omitempty"`
+	SessionLimitFallback Duration     `json:"sessionLimitFallback,omitempty"`
+	MaxSessionWaits      int          `json:"maxSessionWaits,omitempty"`
+	DryRun               bool         `json:"dryRun,omitempty"`
+	GateTimeout          Duration     `json:"gateTimeout,omitempty"`     // default 2h; a declared gate's own timeout overrides it
+	GateConcurrency      int          `json:"gateConcurrency,omitempty"` // default 1; bounds concurrent RunGates
+	Proxy                *ProxyConfig `json:"proxy,omitempty"`           // the credential proxy; none without it
 
 	roleRes  []*regexp.Regexp // compiled RoleRules[i].Label, nil when empty
 	skillRes []*regexp.Regexp // compiled Skills[i].Label
@@ -190,6 +191,9 @@ func (c *Config) prepare() error {
 			errs = append(errs, fmt.Errorf("skills[%d].label: %w", i, err))
 		}
 		c.skillRes[i] = re
+	}
+	if c.Proxy != nil {
+		errs = append(errs, c.Proxy.prepare()...)
 	}
 	if c.Concurrency < 0 || c.GateConcurrency < 0 || c.MaxSessionWaits < 0 || c.Caps.MaxCalls < 0 || c.Caps.MaxCostUSD < 0 {
 		errs = append(errs, errors.New("concurrency, gateConcurrency, maxSessionWaits and caps must not be negative"))

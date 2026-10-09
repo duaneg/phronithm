@@ -53,6 +53,8 @@ type Runtime struct {
 
 	hostsMu sync.Mutex
 	hosts   []string // the plan's network allowance, as PinHosts set it
+
+	proxy *proxy // the credential proxy, nil without a proxy config
 }
 
 // Run is a launch. It takes the state-dir lock, reaps orphans, installs
@@ -117,6 +119,13 @@ func Run(ctx context.Context, cfg Config, body func(ctx context.Context, rt *Run
 
 	rt.Log(fmt.Sprintf("launch %s: state dir %s", rt.launchID, cfg.StateDir))
 	rt.event("launch", map[string]any{"launch": rt.launchID, "pid": os.Getpid(), "dryRun": cfg.DryRun})
+	if cfg.Proxy != nil {
+		if rt.proxy, err = rt.startProxy(); err != nil {
+			rt.Log("proxy: " + err.Error())
+			return Summary{}, fmt.Errorf("lsf-runtime: proxy: %w", err)
+		}
+		defer rt.proxy.close()
+	}
 	rt.writeStatus("running")
 
 	outcome, bodyErr, panicked := runBody(ctx, rt, body)
