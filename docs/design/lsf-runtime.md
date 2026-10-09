@@ -321,7 +321,7 @@ The runtime builds each call's settings, argv and environment. The role supplies
 
 ### Runtime changes
 
-Carried by `s2-clones` (1, 2, and the `clone` field and discarded-clone rule of 3) and then `s2-sandbox` (the rest), both before `runtime-cli-drive` and `retained-artefacts-impl`.
+Carried by `s2-clones` (1, 2, and the `clone` field and discarded-clone rule of 3), `s2-boundary-common` (4, `hosts` in the gate block and its parser from 5, and the 401 stop), and then `s2-sandbox` (the rest), all before `runtime-cli-drive` and `retained-artefacts-impl`.
 
 1. **Clones for every agent call,** as in Placement: clone, fetch-back, removal (a kept clone at its unit's cleanup, a discarded one after its call), and the refusal to launch under `/tmp` or `/var/tmp`. The repo-call snapshot in Uncommitted at return goes, since no agent call runs in the main checkout.
 2. **Orchestrator changes:**
@@ -349,7 +349,7 @@ Carried by `s2-clones` (1, 2, and the `clone` field and discarded-clone rule of 
 
 ## Runtime
 
-Unit `runtime-core`, plan `docs/plans/runtime-core-plan.md`. Package `lsfrt` in `lsf-runtime/runtime/`; tests run against the stub `lsf-runtime/testdata/claude` and streams recorded from Claude Code 2.1.289 (`testdata/streams/`).
+Unit `runtime-core`, plan `docs/plans/runtime-core-plan.md`. Package `lsfrt` in `lsf-runtime/runtime/`; tests run against the stub `lsf-runtime/testdata/claude` and streams recorded from Claude Code 2.1.289, and one (`auth-401.jsonl`) from 2.1.294 (`testdata/streams/`).
 
 ### Interface
 
@@ -516,6 +516,8 @@ Every call in a kept clone that spawned and returns a value or a null reports th
 - The `Retains:` move: `retained-artefacts-impl`.
 - A stop file, status readers and detaching: `runtime-cli-drive`.
 - The roles' content: `s2-permissions-design`.
+- Pointing calls at the proxy, and confining calls and `setup` to `hosts`: `s2-sandbox`.
+- Presenting `auth-failed` to the requester ("renew the credential and relaunch"): `runtime-cli-drive` and `phronithm:lsf-drive`.
 
 ### Known limits
 
