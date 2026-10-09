@@ -137,18 +137,23 @@ func Run(ctx context.Context, cfg Config, body func(ctx context.Context, rt *Run
 	}
 	defer rt.telFile.Close()
 
+	if err := rt.checkContainerHost(); err != nil {
+		rt.Log("launch check: " + err.Error())
+		return Summary{}, fmt.Errorf("lsf-runtime: launch check: %w", err)
+	}
 	stopSignals := rt.watchSignals()
 	defer stopSignals()
-	rt.reapOrphans()
+	if err := rt.reapOrphans(); err != nil {
+		rt.Log(err.Error())
+		return Summary{}, fmt.Errorf("lsf-runtime: %w", err)
+	}
 	rt.wipeScratch()
 
 	rt.Log(fmt.Sprintf("launch %s: state dir %s", rt.launchID, cfg.StateDir))
 	rt.event("launch", map[string]any{"launch": rt.launchID, "pid": os.Getpid(), "dryRun": cfg.DryRun})
-	if cfg.Proxy != nil {
-		if rt.proxy, err = rt.startProxy(); err != nil {
-			rt.Log("proxy: " + err.Error())
-			return Summary{}, fmt.Errorf("lsf-runtime: proxy: %w", err)
-		}
+	if rt.proxy, err = rt.startProxy(); err != nil {
+		rt.Log("proxy: " + err.Error())
+		return Summary{}, fmt.Errorf("lsf-runtime: proxy: %w", err)
 	}
 	rt.writeStatus("running")
 

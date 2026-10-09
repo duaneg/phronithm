@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -88,14 +89,23 @@ func stubArgv(t *testing.T, stub string, n int) []string {
 	return strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00")
 }
 
-// podmanRun is the stub podman's run n's arguments, "run" first.
+// podmanRun is the stub podman's n-th call run's arguments, "run" first,
+// counting from 1 and skipping launch checks' smoke runs.
 func podmanRun(t *testing.T, stub string, n int) []string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(stub, "podman", "run."+strconv.Itoa(n)))
-	if err != nil {
-		t.Fatal(err)
+	for i, seen := 1, 0; ; i++ {
+		b, err := os.ReadFile(filepath.Join(stub, "podman", "run."+strconv.Itoa(i)))
+		if err != nil {
+			t.Fatalf("call run %d: %v", n, err)
+		}
+		argv := strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00")
+		if slices.Contains(argv, labelSmoke) {
+			continue
+		}
+		if seen++; seen == n {
+			return argv
+		}
 	}
-	return strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00")
 }
 
 // stubPids is invocation n's leader and grandchild pids (hang modes).

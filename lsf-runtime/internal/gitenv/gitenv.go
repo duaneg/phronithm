@@ -47,26 +47,37 @@ func Env(clone bool) []string {
 	return env
 }
 
-// CloneGitDir checks the git directory a clone's git would use from dir:
-// the first .git at or above dir must be a directory with no commondir.
-// An agent can write its clone's .git, though not its config, hooks or
-// info; a commondir there would point git at a config the agent wrote,
-// and a .git file at a directory it made, whose drivers the runtime's git
-// would then run on the host.
+// CloneGitDir checks a clone's git directory before the runtime's git runs
+// at the clone's top, dir: dir/.git must be a directory holding HEAD and no
+// commondir. An agent can write its clone's .git, though not its config,
+// hooks or info; a commondir there would point git at a config the agent
+// wrote, a .git file at a directory it made, and an emptied .git would
+// send git's discovery up to an enclosing repository.
 func CloneGitDir(dir string) error {
-	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
-		fi, err := os.Lstat(filepath.Join(d, ".git"))
-		if err == nil {
-			if !fi.IsDir() {
-				return fmt.Errorf("%s/.git is not a directory; the runtime's git does not follow it", d)
-			}
-			if _, err := os.Lstat(filepath.Join(d, ".git", "commondir")); err == nil {
-				return fmt.Errorf("%s/.git/commondir exists; the runtime's git does not follow it", d)
-			}
-			return nil
-		}
-		if d == filepath.Dir(d) {
-			return nil
-		}
+	g := filepath.Join(filepath.Clean(dir), ".git")
+	fi, err := os.Lstat(g)
+	switch {
+	case err != nil:
+		return fmt.Errorf("%s: %w", g, err)
+	case !fi.IsDir():
+		return fmt.Errorf("%s is not a directory; the runtime's git does not follow it", g)
 	}
+	if _, err := os.Lstat(filepath.Join(g, "commondir")); err == nil {
+		return fmt.Errorf("%s/commondir exists; the runtime's git does not follow it", g)
+	}
+	if fi, err := os.Lstat(filepath.Join(g, "HEAD")); err != nil || !fi.Mode().IsRegular() {
+		return fmt.Errorf("%s has no HEAD file; it is not the clone's git directory", g)
+	}
+	return nil
+}
+
+// CloneArgs are the options the runtime's git takes in a clone, before the
+// command: no fsmonitor command, and no look inside a nested repository an
+// agent made (a gitlink), whose own config's filter git would otherwise run
+// while computing status or a diff.
+var CloneArgs = []string{"-c", "core.fsmonitor=false", "-c", "diff.ignoreSubmodules=all", "-c", "submodule.recurse=false"}
+
+// Ceiling is the environment entry that stops git's discovery above dir.
+func Ceiling(dir string) string {
+	return "GIT_CEILING_DIRECTORIES=" + filepath.Dir(filepath.Clean(dir))
 }

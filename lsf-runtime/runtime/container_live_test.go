@@ -322,3 +322,25 @@ func TestLiveReaping(t *testing.T) {
 		t.Error("no orphan-terminated event")
 	}
 }
+
+// L5: the launch check refuses a claudeVersion the smoke container does not
+// report, and an image that is not present, naming each.
+func TestLiveLaunchChecks(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(*Config)
+		want string
+	}{
+		{"version", func(c *Config) { c.ClaudeVersion = "2.1.294" }, `reported "0.0.0-stub (Claude Code)", not claudeVersion 2.1.294`},
+		{"image", func(c *Config) { c.Image = "localhost/lsf-absent@sha256:" + strings.Repeat("0", 64) }, "is not present"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := liveConfig(t)
+			tc.set(&cfg)
+			_, err := Run(context.Background(), cfg, func(context.Context, *Runtime) (json.RawMessage, error) { return nil, nil })
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err %v, want %q", err, tc.want)
+			}
+		})
+	}
+}

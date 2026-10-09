@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/duaneg/phronithm/lsf-runtime/internal/gitenv"
 )
 
 // Every agent call runs in its own rootless podman container
@@ -96,8 +98,11 @@ func (rt *Runtime) containerArgv(s containerSpec) []string {
 	}
 	a = append(a, "-v", rt.cfg.ClaudeBin+":"+ctrClaude+":ro", "-v", rt.cfg.PluginDir+":"+ctrPlugin+":ro",
 		"-w", s.dir, "-e", "HOME=/tmp/home", "-e", "SHELL=/bin/bash", "-e", "DISABLE_AUTOUPDATER=1",
-		"-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1", "-e", "ANTHROPIC_BASE_URL="+rt.Proxy().URL,
-		"-e", "ANTHROPIC_AUTH_TOKEN", "-e", "NO_PROXY=127.0.0.1", "-e", "no_proxy=127.0.0.1")
+		"-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
+	if s.network == "" { // the API's route: only a call spliced to the proxy gets it
+		a = append(a, "-e", "ANTHROPIC_BASE_URL="+rt.Proxy().URL, "-e", "ANTHROPIC_AUTH_TOKEN")
+	}
+	a = append(a, "-e", "NO_PROXY=127.0.0.1", "-e", "no_proxy=127.0.0.1")
 	for _, e := range rt.cfg.Env {
 		a = append(a, "-e", e)
 	}
@@ -117,6 +122,13 @@ func (rt *Runtime) removeContainer(name string) error {
 	cmd := exec.CommandContext(ctx, rt.cfg.PodmanBin, "rm", "-f", "-t", "0", "--ignore", name)
 	cmd.WaitDelay = time.Second
 	out, err := cmd.CombinedOutput()
+	if err != nil && ctx.Err() == nil {
+		// --rm's own removal may have been in flight: gone is gone.
+		exists := exec.CommandContext(ctx, rt.cfg.PodmanBin, "container", "exists", name)
+		if exitStatus(exists.Run()) == 1 {
+			err = nil
+		}
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			err = fmt.Errorf("podman rm timed out after %v", rmTimeout)
@@ -209,4 +221,120 @@ func resolveBin(name string) (string, error) {
 		return "", errors.New(p + ": a path with ':' cannot be a bind mount's source")
 	}
 	return p, nil
+}
+
+// smokeTimeout bounds the launch check's smoke container.
+const smokeTimeout = 2 * time.Minute
+
+// smokeScript is the smoke container's check, run by /bin/sh in a
+// throwaway repo bound as a call's clone is: claude's version first, then
+// the tools a call relies on, a write to the index, and the read-only .git
+// binds and the .git mountpoint holding.
+const smokeScript = `set -e
+/opt/claude/claude --version
+bash -c true
+git --version >/dev/null
+rg --version >/dev/null
+echo smoke > smoke.txt
+git add smoke.txt
+for p in .git/config .git/hooks/x .git/info/x; do
+  if (echo x >> "$p") 2>/dev/null; then echo "$p is writable" >&2; exit 1; fi
+done
+if mv .git .git.moved 2>/dev/null; then echo ".git can be renamed" >&2; exit 1; fi
+`
+
+// checkContainerHost is the launch check (docs/design/lsf-runtime.md,
+// Permissions → Image): podman present and rootless, pasta present, the
+// image present, and a smoke container that reports the pinned claude and
+// runs bash, git and rg with a call's mounts. A dry run runs it too.
+func (rt *Runtime) checkContainerHost() error {
+	if _, err := exec.LookPath(rt.cfg.PodmanBin); err != nil {
+		return fmt.Errorf("podman: %w", err)
+	}
+	info := func(format string) (string, error) {
+		out, err := exec.Command(rt.cfg.PodmanBin, "info", "--format", format).Output()
+		if err != nil {
+			return "", fmt.Errorf("podman info: %w%s", err, stderrOf(err))
+		}
+		return strings.TrimSpace(string(out)), nil
+	}
+	rootless, err := info("{{.Host.Security.Rootless}}")
+	if err != nil {
+		return err
+	}
+	if rootless != "true" {
+		return fmt.Errorf("podman is not rootless (Host.Security.Rootless %q)", rootless)
+	}
+	pasta, err := info("{{.Host.Pasta.Executable}}")
+	if err != nil {
+		return err
+	}
+	if pasta == "" {
+		return errors.New("pasta is missing (podman info names no Host.Pasta.Executable)")
+	}
+	if fi, err := os.Stat(pasta); err != nil || fi.IsDir() {
+		return fmt.Errorf("pasta: %s is not an executable on this host", pasta)
+	}
+	if out, err := exec.Command(rt.cfg.PodmanBin, "image", "exists", rt.cfg.Image).CombinedOutput(); err != nil {
+		return fmt.Errorf("image %s is not present (podman image exists: %v %s); build it and name it by digest", rt.cfg.Image, err, strings.TrimSpace(string(out)))
+	}
+	return rt.smoke()
+}
+
+func stderrOf(err error) string {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+		return ": " + strings.TrimSpace(string(ee.Stderr))
+	}
+	return ""
+}
+
+// smoke runs the smoke container in <stateDir>/smoke, removed afterwards.
+func (rt *Runtime) smoke() error {
+	dir := filepath.Join(rt.cfg.StateDir, "smoke")
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("smoke: %w", err)
+	}
+	defer os.RemoveAll(dir)
+	ctx, cancel := context.WithTimeout(context.Background(), smokeTimeout)
+	defer cancel()
+	init := exec.CommandContext(ctx, "git", "init", "-q", dir)
+	init.Env = gitenv.Env(true)
+	if out, err := init.CombinedOutput(); err != nil {
+		return fmt.Errorf("smoke: git init: %v %s", err, strings.TrimSpace(string(out)))
+	}
+	if err := prepareGitBinds(dir); err != nil {
+		return fmt.Errorf("smoke: %w", err)
+	}
+	name := "lsf-" + rt.stateHash[:8] + "-smoke-" + rt.launchID
+	cmd := exec.CommandContext(ctx, rt.cfg.PodmanBin, rt.containerArgv(containerSpec{
+		name: name, dir: dir, gitBinds: true, network: "none", labels: []string{labelSmoke},
+		cmd: []string{"/bin/sh", "-c", smokeScript},
+	})...)
+	cmd.Env = rt.podmanEnv()
+	cmd.WaitDelay = 5 * time.Second
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		if rerr := rt.removeContainer(name); rerr != nil {
+			rt.Log("smoke: " + rerr.Error())
+		}
+		return fmt.Errorf("smoke container timed out after %v: %s", smokeTimeout, tail(out))
+	}
+	if err != nil {
+		return fmt.Errorf("smoke container failed (%v): %s", err, tail(out))
+	}
+	first, _, _ := strings.Cut(string(out), "\n")
+	if f := strings.Fields(first); len(f) == 0 || f[0] != rt.cfg.ClaudeVersion {
+		return fmt.Errorf("smoke container: claude --version reported %q, not claudeVersion %s", strings.TrimSpace(first), rt.cfg.ClaudeVersion)
+	}
+	rt.event("smoke", map[string]any{"claude": strings.TrimSpace(first)})
+	return nil
+}
+
+// tail is the last 2 KiB of out, trimmed.
+func tail(out []byte) string {
+	if len(out) > 2048 {
+		out = out[len(out)-2048:]
+	}
+	return strings.TrimSpace(string(out))
 }

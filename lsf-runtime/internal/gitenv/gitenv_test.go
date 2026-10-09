@@ -47,14 +47,20 @@ func TestEnv(t *testing.T) {
 
 func TestCloneGitDir(t *testing.T) {
 	d := t.TempDir()
-	sub := filepath.Join(d, "a", "b")
 	os.MkdirAll(filepath.Join(d, ".git"), 0o755)
-	os.MkdirAll(sub, 0o755)
-	if err := CloneGitDir(sub); err != nil {
+	os.MkdirAll(filepath.Join(d, "a"), 0o755)
+	if err := CloneGitDir(d); err == nil || !strings.Contains(err.Error(), "no HEAD") {
+		t.Errorf("emptied .git: %v", err)
+	}
+	os.WriteFile(filepath.Join(d, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644)
+	if err := CloneGitDir(d); err != nil {
 		t.Errorf("plain: %v", err)
 	}
+	if err := CloneGitDir(filepath.Join(d, "a")); err == nil {
+		t.Error("a directory below the clone's top was accepted")
+	}
 	os.WriteFile(filepath.Join(d, ".git", "commondir"), []byte("x\n"), 0o644)
-	if err := CloneGitDir(sub); err == nil || !strings.Contains(err.Error(), "commondir exists") {
+	if err := CloneGitDir(d); err == nil || !strings.Contains(err.Error(), "commondir exists") {
 		t.Errorf("commondir: %v", err)
 	}
 	f := t.TempDir()

@@ -16,21 +16,23 @@ import (
 // reapOrphans removes what a previous launch left running: a SIGKILLed
 // launch's calls keep running and would race its successor (spike run 4).
 // A call is a container carrying this state dir's label; each is removed
-// with podman rm -f. If podman ps fails, the failure is logged and the
-// launch goes on: the containers are found by label, so the next launch
-// finds them still. A gate process (RunGates) is recorded in children.json
+// with podman rm -f. A failed podman ps, or a container not removed, is
+// the launch's error: a live container may still write a clone this launch
+// would read. A gate process (RunGates) is recorded in children.json
 // under its marker, the "lsf-gate:" argument its shell carries as $0, and
 // matched by it, not by pid, which covers one recorded before Start and
 // rules out a reused pid; its group gets SIGTERM and, after KillGrace,
 // SIGKILL. If ps fails, children.json is kept for the next launch. Another
 // entry there is a call recorded by an earlier runtime, logged and dropped.
 // In a dry run, orphans are reported, not removed.
-func (rt *Runtime) reapOrphans() {
-	rt.reapContainers()
+func (rt *Runtime) reapOrphans() error {
+	if err := rt.reapContainers(); err != nil {
+		return err
+	}
 	path := filepath.Join(rt.cfg.StateDir, "children.json")
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return
+		return nil
 	}
 	var recorded map[string]int
 	if err := json.Unmarshal(b, &recorded); err != nil {
@@ -50,7 +52,7 @@ func (rt *Runtime) reapOrphans() {
 			rt.Log("orphan check failed; the recorded gates are carried forward for the next launch: " + err.Error())
 			rt.event("orphan-check-failed", map[string]any{"error": err.Error()})
 			rt.carryForward(recorded)
-			return
+			return nil
 		}
 		for pid, args := range procs {
 			for marker := range recorded {
@@ -77,17 +79,17 @@ func (rt *Runtime) reapOrphans() {
 		rt.saveChildrenLocked()
 		rt.childMu.Unlock()
 	}
+	return nil
 }
 
 // reapContainers removes the containers carrying this state dir's label.
-func (rt *Runtime) reapContainers() {
+func (rt *Runtime) reapContainers() error {
 	ctx, cancel := context.WithTimeout(context.Background(), rmTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, rt.cfg.PodmanBin, "ps", "-a", "--filter", "label="+labelState+"="+rt.stateHash, "--format", "{{.Names}}").Output()
 	if err != nil {
-		rt.Log("orphan check failed (podman ps); a later launch finds the containers by label: " + err.Error())
 		rt.event("orphan-check-failed", map[string]any{"error": err.Error()})
-		return
+		return fmt.Errorf("orphan check: podman ps: %w%s", err, stderrOf(err))
 	}
 	for _, name := range strings.Fields(string(out)) {
 		if rt.cfg.DryRun {
@@ -96,12 +98,12 @@ func (rt *Runtime) reapContainers() {
 			continue
 		}
 		if err := rt.removeContainer(name); err != nil {
-			rt.Log(fmt.Sprintf("orphaned container %s not removed: %v", name, err))
-			continue
+			return fmt.Errorf("orphaned container %s not removed: %w", name, err)
 		}
 		rt.event("orphan-terminated", map[string]any{"container": name})
 		rt.Log("removed orphaned container " + name + " left by a previous launch")
 	}
+	return nil
 }
 
 // matchesChild reports whether a process's arguments carry a gate's marker.

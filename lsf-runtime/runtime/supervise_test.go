@@ -465,30 +465,30 @@ func TestReaperEscalatesToSigkill(t *testing.T) {
 	}
 }
 
-func TestPsFailureLeavesOrphansForLater(t *testing.T) {
-	cfg, stub := testConfig(t)
-	pids := orphanLaunch(t, cfg, stub, "hang")
-	// A launch whose podman ps fails goes on; the containers keep their
-	// label, so the next launch finds them.
-	t.Setenv("STUB_PODMAN_PS_EXIT", "1")
-	t.Setenv("STUB_SCRIPT", "ok")
-	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
-		o := vOpts
-		o.Label = "implement:later"
-		return rt.Agent(ctx, "x", o)
-	})
-	if n := countEvents(telemetry(t, cfg), "orphan-check-failed"); n != 1 {
-		t.Fatalf("orphan-check-failed events %d", n)
-	}
-	for _, pid := range pids {
-		if !alive(pid) {
-			t.Fatalf("pid %d reaped though ps failed", pid)
-		}
-	}
-	t.Setenv("STUB_PODMAN_PS_EXIT", "")
-	launch(t, cfg, func(context.Context, *Runtime) (json.RawMessage, error) { return nil, nil })
-	for _, pid := range pids {
-		waitFor(t, 3*time.Second, "orphan to die", func() bool { return !alive(pid) })
+func TestReapFailureRefusesLaunch(t *testing.T) {
+	for _, env := range []string{"STUB_PODMAN_PS_EXIT", "STUB_PODMAN_RM_EXIT"} {
+		t.Run(env, func(t *testing.T) {
+			cfg, stub := testConfig(t)
+			pids := orphanLaunch(t, cfg, stub, "hang")
+			// A launch that cannot reap refuses to start: a live container
+			// may still write a clone it would read.
+			t.Setenv(env, "1")
+			ran := false
+			_, err := Run(context.Background(), cfg, func(context.Context, *Runtime) (json.RawMessage, error) { ran = true; return nil, nil })
+			if err == nil || ran {
+				t.Fatalf("err %v ran %v", err, ran)
+			}
+			for _, pid := range pids {
+				if !alive(pid) {
+					t.Fatalf("pid %d reaped though %s", pid, env)
+				}
+			}
+			t.Setenv(env, "")
+			launch(t, cfg, func(context.Context, *Runtime) (json.RawMessage, error) { return nil, nil })
+			for _, pid := range pids {
+				waitFor(t, 3*time.Second, "orphan to die", func() bool { return !alive(pid) })
+			}
+		})
 	}
 }
 

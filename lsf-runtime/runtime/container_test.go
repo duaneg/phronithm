@@ -101,15 +101,15 @@ func TestCallContainerArgv(t *testing.T) {
 			t.Errorf("run %d argv\n got %q\nwant %q", runs[i], got, w)
 		}
 	}
-	for _, f := range []string{filepath.Join(stub, "podman", "run.1"), filepath.Join(stub, "podman", "run.2"), filepath.Join(stub, "podman", "run.3"), filepath.Join(stub, "podman", "run.4"),
-		filepath.Join(cfg.StateDir, "telemetry.jsonl"), filepath.Join(cfg.StateDir, "log.txt")} {
+	runFiles, _ := filepath.Glob(filepath.Join(stub, "podman", "run.*"))
+	for _, f := range append(runFiles, filepath.Join(cfg.StateDir, "telemetry.jsonl"), filepath.Join(cfg.StateDir, "log.txt")) {
 		if b, _ := os.ReadFile(f); placeholder == "" || strings.Contains(string(b), placeholder) {
 			t.Errorf("%s carries the placeholder bearer", f)
 		}
 	}
 	// podman's own environment carries it, for -e ANTHROPIC_AUTH_TOKEN.
 	for _, n := range runs {
-		if b, _ := os.ReadFile(filepath.Join(stub, "podman", fmt.Sprintf("token.%d", n))); string(b) != placeholder {
+		if b, _ := os.ReadFile(filepath.Join(stub, "podman", fmt.Sprintf("token.%d", n+1))); string(b) != placeholder { // run 1 is the smoke
 			t.Errorf("run %d: podman's ANTHROPIC_AUTH_TOKEN %q, want the placeholder", n, b)
 		}
 	}
@@ -264,14 +264,20 @@ func TestGraceExpiryRemovesContainer(t *testing.T) {
 	}
 }
 
-// A failed removal stops the run before anything reads the clone: no
-// fetch-back, no journal record, and a discarded clone is not removed.
+// A failed removal of a container still there stops the run before
+// anything reads the clone: no fetch-back, no journal record, and a
+// discarded clone is not removed. One that failed because --rm got there
+// first is not a failure.
 func TestFailedRemovalLeavesCloneUnread(t *testing.T) {
 	for _, label := range []string{vOpts.Label, "critique-code:r1:u1"} {
 		t.Run(label, func(t *testing.T) {
-			cfg, _ := testConfig(t)
-			t.Setenv("STUB_SCRIPT", "transient")
+			cfg, stub := testConfig(t)
+			cfg.GuardTimeout = Duration(time.Second)
+			cfg.KillGrace = Duration(200 * time.Millisecond)
+			t.Setenv("STUB_PODMAN_DETACH", "1") // the container outlives its client
+			t.Setenv("STUB_SCRIPT", "hang-ignore-term")
 			t.Setenv("STUB_PODMAN_RM_EXIT", "1")
+			t.Cleanup(func() { killStubs(stub) })
 			o := vOpts
 			o.Label = label
 			_, err := call(t, cfg, o)
@@ -315,5 +321,109 @@ func TestRedirectedGitDirRefused(t *testing.T) {
 	s := readSummary(t, cfg)
 	if err == nil || s.StopReason != StopRuntimeError || !strings.Contains(s.Detail, "commondir exists") {
 		t.Errorf("err %v summary %+v", err, s)
+	}
+}
+
+// The launch check refuses, before any body runs and naming the fault: no
+// podman, podman not rootless, no pasta, no image, a smoke container that
+// fails, and one reporting another claude version.
+func TestLaunchChecks(t *testing.T) {
+	for _, tc := range []struct {
+		name, env, val, want string
+		cfg                  func(*Config)
+	}{
+		{name: "no podman", cfg: func(c *Config) { c.PodmanBin = "/nonexistent/podman" }, want: "podman: "},
+		{name: "rootful", env: "STUB_PODMAN_ROOTLESS", val: "false", want: "podman is not rootless"},
+		{name: "no pasta", env: "STUB_PODMAN_PASTA", val: "", want: "pasta is missing"},
+		{name: "pasta gone", env: "STUB_PODMAN_PASTA", val: "/nonexistent/pasta", want: "/nonexistent/pasta is not an executable"},
+		{name: "no image", env: "STUB_PODMAN_NOIMAGE", val: "1", want: "is not present"},
+		{name: "smoke fails", env: "STUB_PODMAN_SMOKE_EXIT", val: "1", want: "smoke container failed"},
+		{name: "version", cfg: func(c *Config) { c.ClaudeVersion = "2.1.294" }, want: `reported "0.0.0-stub (Claude Code)", not claudeVersion 2.1.294`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, _ := testConfig(t)
+			if tc.env != "" {
+				t.Setenv(tc.env, tc.val)
+			}
+			if tc.cfg != nil {
+				tc.cfg(&cfg)
+			}
+			ran := false
+			_, err := Run(context.Background(), cfg, func(context.Context, *Runtime) (json.RawMessage, error) { ran = true; return nil, nil })
+			if err == nil || ran || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err %v ran %v, want %q", err, ran, tc.want)
+			}
+		})
+	}
+	// A passing check removes its smoke repo and records the version.
+	cfg, _ := testConfig(t)
+	launch(t, cfg, func(context.Context, *Runtime) (json.RawMessage, error) { return nil, nil })
+	if _, err := os.Stat(filepath.Join(cfg.StateDir, "smoke")); !os.IsNotExist(err) {
+		t.Errorf("smoke repo left: %v", err)
+	}
+	if countEvents(telemetry(t, cfg), "smoke") != 1 {
+		t.Error("no smoke event")
+	}
+}
+
+// The smoke container is a call's container without the API: --network
+// none, the smoke label, the .git binds, and no proxy variables.
+func TestSmokeArgv(t *testing.T) {
+	cfg, _ := testConfig(t)
+	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		argv := rt.containerArgv(containerSpec{name: "s", dir: "/d", gitBinds: true, network: "none", labels: []string{labelSmoke}, cmd: []string{"/bin/sh"}})
+		if flagValue(argv, "--network") != "none" || !slices.Contains(argv, "lsf.smoke=1") || !slices.Contains(argv, "/d/.git/config:/d/.git/config:ro") {
+			t.Errorf("argv %q", argv)
+		}
+		for _, a := range argv {
+			if strings.HasPrefix(a, "ANTHROPIC_") {
+				t.Errorf("smoke argv carries %s", a)
+			}
+		}
+		return nil, nil
+	})
+}
+
+// A dry run reports orphaned containers and leaves them running.
+func TestDryRunReportsOrphans(t *testing.T) {
+	cfg, stub := testConfig(t)
+	pids := orphanLaunch(t, cfg, stub, "hang")
+	cfg.DryRun = true
+	launch(t, cfg, func(context.Context, *Runtime) (json.RawMessage, error) { return nil, nil })
+	if n := countEvents(telemetry(t, cfg), "orphan-found"); n != 3 {
+		t.Errorf("%d orphan-found events, want 3", n)
+	}
+	for _, pid := range pids {
+		if !alive(pid) {
+			t.Errorf("pid %d killed in a dry run", pid)
+		}
+	}
+	cfg.DryRun = false
+	launch(t, cfg, func(context.Context, *Runtime) (json.RawMessage, error) { return nil, nil })
+}
+
+// A nested repository an agent commits as a gitlink, with a filter in its
+// own config, is not looked into by the runtime's git: the uncommitted
+// check's status does not run the filter on the host.
+func TestNestedRepoFilterNotRun(t *testing.T) {
+	cfg, _ := testConfig(t)
+	marker := filepath.Join(t.TempDir(), "MARKER")
+	t.Setenv("STUB_SCRIPT", "nested:"+marker)
+	res, err := call(t, cfg, vOpts)
+	if err != nil || res.Value == nil {
+		t.Fatalf("res %+v err %v", res, err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("the nested repo's filter ran on the host")
+	}
+}
+
+func TestRemovalRacingRm(t *testing.T) {
+	cfg, _ := testConfig(t)
+	t.Setenv("STUB_SCRIPT", "transient,ok")
+	t.Setenv("STUB_PODMAN_RM_EXIT", "1") // fails, but the container has exited and gone
+	res, err := call(t, cfg, vOpts)
+	if err != nil || res.Value == nil {
+		t.Errorf("res %+v err %v", res, err)
 	}
 }

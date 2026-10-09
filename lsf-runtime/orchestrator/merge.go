@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/duaneg/phronithm/lsf-runtime/internal/gitenv"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -109,6 +110,10 @@ func (m mergeGit) toMain(ctx context.Context, sha string) error {
 		return nil
 	}
 	if _, err := m.r.run(ctx, m.dir, "update-ref", "refs/lsf/xfer", sha); err != nil {
+		return err
+	}
+	// The fetch runs upload-pack in the merge clone under the host's config.
+	if err := gitenv.CloneGitDir(m.dir); err != nil {
 		return err
 	}
 	_, err := m.r.run(ctx, m.main, "fetch", "--no-tags", "-q", m.dir, "+refs/lsf/xfer:"+m.xfer)

@@ -21,6 +21,8 @@
 #        dirty-transient:<path> (writes <path>, then a 529) |
 #        file:<path> (cats a stream file) | exit:<n> (exits n after its first lines) |
 #        stage:<path> (writes "resolved" to <path> and git-adds it, then ok) |
+#        nested:<marker> (commits a nested repo, sub, as a gitlink, then gives
+#        it a filter that touches <marker> and dirties it, then ok) |
 #        probe (writes probe.txt in cwd: cwd, uid, which of .git/config,
 #        .git/hooks/x, .git/info/x and the index can be written, env, and the
 #        status of a request to $ANTHROPIC_BASE_URL with the bearer, then ok)
@@ -118,6 +120,15 @@ case "$mode" in
   fixture:*) cat "$here/streams/${mode#fixture:}.jsonl" ;;
   file:*)    cat "${mode#file:}" ;;
   exit:*)    code=${mode#exit:} ;;
+  nested:*)  g() { git -c user.name=stub -c user.email=stub@example.invalid "$@" >&2; }
+             m=${mode#nested:}
+             git init -q sub >&2
+             printf '[filter "x"]\n\tclean = touch %s && cat\n' "$m" >> sub/.git/config
+             echo '* filter=x' > sub/.gitattributes; echo data > sub/f
+             g -C sub add -A && g -C sub commit -q -m sub && g add sub && g commit -q -m gitlink || code=2
+             rm -f "$m" # made by the commits above, the stub's own git
+             echo more >> sub/f; touch -d 2000-01-01 sub/f
+             [ "$code" = 0 ] && result_ok '{"verdict":"pass","n":3}' ;;
   stage:*)   f=${mode#stage:}; echo resolved > "$f"
              if git add -- "$f" >&2; then result_ok '{"verdict":"pass","n":3}'; else code=2; fi ;;
   probe)     {

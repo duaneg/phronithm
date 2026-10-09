@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stub `podman` for the runtime's tests: `run` becomes a host exec of the
 # container's command, so the tests need no podman. It emulates only what
-# the runtime drives: run, info, image exists, ps and rm. The command's
+# the runtime drives: run, info, image exists, ps, rm and container exists. The command's
 # environment is the stub's own with the -e K=V overlay, not a container's:
 # tests assert the -e list in the recorded argv, never the inner process's
 # environment.
@@ -18,10 +18,12 @@
 # as the runtime does; rm also signals the pid itself. Flag values are not
 # checked: tests assert them in the recorded argv.
 # STUB_PODMAN_ROOTLESS   info's {{.Host.Security.Rootless}} (default true).
-# STUB_PODMAN_PASTA      info's {{.Host.Pasta.Executable}} (default
-#                        /usr/bin/pasta; set empty for none).
+# STUB_PODMAN_PASTA      info's {{.Host.Pasta.Executable}} (default this
+#                        stub, an executable on any host; set empty for
+#                        none).
 # STUB_PODMAN_NOIMAGE=1  image exists fails.
-# STUB_PODMAN_RUN_EXIT   run exits with it, after writing to stderr.
+# STUB_PODMAN_RUN_EXIT   a run other than the smoke exits with it, after
+#                        writing to stderr.
 # STUB_PODMAN_SMOKE_EXIT the smoke container's exit (default 0).
 # STUB_PODMAN_DETACH=1   run emulates conmon: the command runs in its own
 #                        session, the client ignores SIGTERM and waits, so
@@ -57,7 +59,7 @@ cmd_info() {
   [ "${1:-}" = --format ] || die "info: --format required"
   case "${2:-}" in
     '{{.Host.Security.Rootless}}') echo "${STUB_PODMAN_ROOTLESS:-true}" ;;
-    '{{.Host.Pasta.Executable}}')  echo "${STUB_PODMAN_PASTA-/usr/bin/pasta}" ;;
+    '{{.Host.Pasta.Executable}}')  echo "${STUB_PODMAN_PASTA-$0}" ;;
     *) die "info: unknown format ${2:-}" ;;
   esac
 }
@@ -158,11 +160,6 @@ cmd_run() {
   [ -n "$name" ] || die "run: --name required"
   [ -z "$detach_flag" ] || die "run: -d is not emulated"
   shift # the image
-  if [ -n "${STUB_PODMAN_RUN_EXIT:-}" ]; then
-    echo "Error: stub podman run failed" >&2
-    exit "$STUB_PODMAN_RUN_EXIT"
-  fi
-
   # The command, with each bind's destination replaced by its source.
   local args=("$@") v src dst rest i
   for v in "${vols[@]}"; do
@@ -185,6 +182,10 @@ cmd_run() {
     [ -n "$claude" ] || die "run: smoke without a claude bind"
     "$claude" --version </dev/null || exit 1
     exit "${STUB_PODMAN_SMOKE_EXIT:-0}"
+  fi
+  if [ -n "${STUB_PODMAN_RUN_EXIT:-}" ]; then
+    echo "Error: stub podman run failed" >&2
+    exit "$STUB_PODMAN_RUN_EXIT"
   fi
 
   local e
@@ -214,6 +215,13 @@ cmd_run() {
   exec "${args[@]}"
 }
 
+cmd_container() {
+  [ "${1:-}" = exists ] && [ $# -eq 2 ] || die "container: only 'exists NAME'"
+  local f="$state/name.$2"
+  [ -e "$f" ] && alive "$(head -n1 "$f")" && exit 0
+  exit 1
+}
+
 sub=${1:-}
 [ $# -gt 0 ] && shift
 case "$sub" in
@@ -229,5 +237,6 @@ case "$sub" in
   image) note image "$@"; cmd_image "$@" ;;
   ps)    note ps "$@"; cmd_ps "$@" ;;
   rm)    note rm "$@"; cmd_rm "$@" ;;
+  container) note container "$@"; cmd_container "$@" ;;
   *) die "unknown subcommand $sub" ;;
 esac

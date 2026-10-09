@@ -85,17 +85,22 @@ func (e execGit) run(ctx context.Context, dir string, args ...string) ([]byte, e
 	defer cancel()
 	// The merge clone is a conflict call's cwd: no fsmonitor command it
 	// could configure runs under the step's git.
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-c", "core.fsmonitor=false"}, args...)...)
-	cmd.Dir = dir
-	// Paths are literal: a hook-touched path like `a*b` must not match others.
-	// LC_ALL=C: the merge reads git's refusal message.
 	clone := e.clones.has(dir)
+	pre := []string{"-c", "core.fsmonitor=false"}
 	if clone {
 		if err := gitenv.CloneGitDir(dir); err != nil {
 			return nil, err
 		}
+		pre = gitenv.CloneArgs
 	}
+	cmd := exec.CommandContext(ctx, "git", append(slices.Clone(pre), args...)...)
+	cmd.Dir = dir
+	// Paths are literal: a hook-touched path like `a*b` must not match others.
+	// LC_ALL=C: the merge reads git's refusal message.
 	cmd.Env = append(gitenv.Env(clone), "GIT_LITERAL_PATHSPECS=1", "LC_ALL=C")
+	if clone {
+		cmd.Env = append(cmd.Env, gitenv.Ceiling(dir))
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// SIGTERM lets git remove its own lock files; WaitDelay then kills git
 	// if it lingers.
