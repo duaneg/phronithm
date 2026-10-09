@@ -173,6 +173,9 @@ func parseHosts(v any) ([]string, []Problem) {
 			continue
 		}
 		key := strings.ToLower(strings.TrimSuffix(h, "."))
+		if ip := net.ParseIP(strings.Trim(h, "[]")); ip != nil {
+			key = ip.String()
+		}
 		if seen[key] {
 			problems = append(problems, gatesProblem("duplicate host "+h, "hosts"))
 		}
@@ -203,7 +206,7 @@ func hostProblem(h string) string {
 		bare = h[1 : len(h)-1]
 	}
 	if ip := net.ParseIP(bare); ip != nil {
-		if bare != h && ip.To4() != nil {
+		if bare != h && !strings.Contains(bare, ":") {
 			return "only an IPv6 address may be bracketed"
 		}
 		if ip.IsLoopback() || ip.IsUnspecified() {

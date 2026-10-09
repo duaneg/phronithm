@@ -329,34 +329,41 @@ type loaded struct {
 // hosts. Its effects come from the step's value, so a replay pins alike. A
 // block with problems, and the step's fault or null, stop at load.
 func (l *launch) pinGates(ctx context.Context) (json.RawMessage, bool, error) {
-	at := plan.At{Stage: "load"}
-	r, fault, err := step[pinResult](ctx, l.orch, "gates-pin", pinInput{l.ctx.planSha, l.ctx.planPath}, l.pin(pinInput{l.ctx.planSha, l.ctx.planPath}))
-	var stops []*plan.Signal
-	switch {
-	case err != nil:
+	in := pinInput{l.ctx.planSha, l.ctx.planPath}
+	r, fault, err := step[pinResult](ctx, l.orch, "gates-pin", in, l.pin(in))
+	if err != nil {
 		return nil, true, err
+	}
+	decl, stops := pinned(r, fault)
+	if len(stops) > 0 {
+		out, err := l.stopped(ctx, "load", stops, nil)
+		return out, true, err
+	}
+	l.decl = decl
+	var hosts []string
+	if decl != nil {
+		hosts = decl.Hosts
+	}
+	l.rt.PinHosts(hosts)
+	return nil, false, nil
+}
+
+// pinned is the declaration a gates-pin value holds, or the load-stage stops
+// for its fault, its null, or the block's problems.
+func pinned(r *ret[pinResult], fault string) (*plan.Declaration, []*plan.Signal) {
+	at := plan.At{Stage: "load"}
+	switch {
 	case fault != "":
-		stops = []*plan.Signal{stageFaultSignal(at, "gates-pin: "+fault)}
+		return nil, []*plan.Signal{stageFaultSignal(at, "gates-pin: "+fault)}
 	case r == nil:
-		stops = []*plan.Signal{plan.NullReturnSignal(at)}
+		return nil, []*plan.Signal{plan.NullReturnSignal(at)}
 	}
-	if stops == nil {
-		decl, problems := plan.ParseDeclaration(r.Result.PlanBlock)
-		for _, p := range problems {
-			stops = append(stops, plan.NewSignal(plan.Signal{Kind: p.Kind, Statement: p.Statement, Referent: p.Referent, Source: "structural", Stage: "load"}))
-		}
-		if stops == nil {
-			l.decl = decl
-			var hosts []string
-			if decl != nil {
-				hosts = decl.Hosts
-			}
-			l.rt.PinHosts(hosts)
-			return nil, false, nil
-		}
+	decl, problems := plan.ParseDeclaration(r.Result.PlanBlock)
+	var stops []*plan.Signal
+	for _, p := range problems {
+		stops = append(stops, plan.NewSignal(plan.Signal{Kind: p.Kind, Statement: p.Statement, Referent: p.Referent, Source: "structural", Stage: "load"}))
 	}
-	out, err := l.stopped(ctx, "load", stops, nil)
-	return out, true, err
+	return decl, stops
 }
 
 func (l *launch) loadPlan(ctx context.Context, sha, label string, wave *int) (loaded, error) {

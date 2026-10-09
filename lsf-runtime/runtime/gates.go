@@ -176,8 +176,11 @@ func (rt *Runtime) gateCheckout(ctx context.Context, label, dir, commit string) 
 	}
 	b, err := gitStdout(gctx, rt.cfg.Repo, "rev-parse", "--verify", "-q", "--end-of-options", commit+"^{commit}")
 	sha := strings.TrimSpace(string(b))
-	if err != nil || !fullObjectID(sha) {
+	switch {
+	case exitStatus(err) == 1 || err == nil && !fullObjectID(sha):
 		return fmt.Errorf("%s: gate checkout of %s: it does not resolve to a commit", label, commit)
+	case err != nil:
+		return fmt.Errorf("%s: gate checkout of %s: rev-parse: %w", label, commit, err)
 	}
 	run := func(in string, args ...string) error {
 		if out, err := cloneOut(gctx, in, args...); err != nil {
@@ -237,8 +240,12 @@ func (rt *Runtime) gateRemove(ctx context.Context, label, dir string) {
 // clones), it prunes the stale registrations. The caller holds wtSem.
 func (rt *Runtime) removeGateDir(ctx context.Context, dir string) error {
 	err := os.RemoveAll(dir)
+	gates := filepath.Join(rt.cfg.StateDir, "gates")
+	if resolved, rerr := filepath.EvalSymlinks(gates); rerr == nil {
+		gates = resolved // git lists resolved paths
+	}
 	list, lerr := gitStdout(ctx, rt.cfg.Repo, "worktree", "list", "--porcelain")
-	if lerr == nil && strings.Contains(string(list), "\nworktree "+filepath.Join(rt.cfg.StateDir, "gates")+string(filepath.Separator)) {
+	if lerr == nil && strings.Contains(string(list), "\nworktree "+gates+string(filepath.Separator)) {
 		gitRun(ctx, rt.cfg.Repo, "worktree", "prune")
 	}
 	return err

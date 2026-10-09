@@ -81,6 +81,7 @@ func TestParseDeclarationProblems(t *testing.T) {
 		{"empty label", "hosts: [a..com]\n", "optionally with a leading *. wildcard"},
 		{"duplicate host", "hosts: [a.com, A.COM]\n", "duplicate host A.COM"},
 		{"duplicate host dot", "hosts: [a.com, a.com.]\n", "duplicate host a.com."},
+		{"duplicate address", "hosts: [\"[2001:db8::1]\", \"2001:db8:0::1\"]\n", "duplicate host 2001:db8:0::1"},
 		{"query", "hosts: [\"a.com?x\"]\n", "must be a host name of letters, digits"},
 		{"fragment", "hosts: [\"a.com#f\"]\n", "must be a host name of letters, digits"},
 		{"backslash", "hosts: [\"a\\\\b.com\"]\n", "must be a host name of letters, digits"},
@@ -153,8 +154,8 @@ func TestParseDeclarationHosts(t *testing.T) {
 	}{
 		{"hosts alone", "hosts: [registry.npmjs.org, \"*.github.com\"]\n",
 			`{"hosts":["registry.npmjs.org","*.github.com"]}`, false},
-		{"beside gates", "gates:\n  - name: a\n    command: x\nhosts:\n  - proxy.golang.org\n  - 192.0.2.1\n  - \"2001:db8::1\"\n  - \"[2001:db8::2]\"\n  - Example.COM.\n  - xn--bcher-kva.example\n  - _acme.a-b.example\n  - 0x7f.example\n",
-			`{"gates":[{"name":"a","command":"x"}],"hosts":["proxy.golang.org","192.0.2.1","2001:db8::1","[2001:db8::2]","Example.COM.","xn--bcher-kva.example","_acme.a-b.example","0x7f.example"]}`, true},
+		{"beside gates", "gates:\n  - name: a\n    command: x\nhosts:\n  - proxy.golang.org\n  - 192.0.2.1\n  - \"2001:db8::1\"\n  - \"[2001:db8::2]\"\n  - \"[::ffff:192.0.2.9]\"\n  - Example.COM.\n  - xn--bcher-kva.example\n  - _acme.a-b.example\n  - 0x7f.example\n",
+			`{"gates":[{"name":"a","command":"x"}],"hosts":["proxy.golang.org","192.0.2.1","2001:db8::1","[2001:db8::2]","[::ffff:192.0.2.9]","Example.COM.","xn--bcher-kva.example","_acme.a-b.example","0x7f.example"]}`, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			d, problems := ParseDeclaration(gatesDoc(c.body))

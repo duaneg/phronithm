@@ -118,8 +118,8 @@ func (rt *Runtime) startProxy() (*proxy, error) {
 	}
 	errLog := log.New(logWriter{rt}, "proxy: ", 0)
 	// The default transport's settings (an https upstream reached through
-	// HTTPS_PROXY by a CONNECT tunnel, as Claude Code itself would), with
-	// bounds on reaching the upstream; a response may stream for long.
+	// HTTPS_PROXY by a CONNECT tunnel), with a bound on the upstream's
+	// response headers; a response may stream for long.
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.ResponseHeaderTimeout = 10 * time.Minute
 	p.rp = &httputil.ReverseProxy{
@@ -128,7 +128,9 @@ func (rt *Runtime) startProxy() (*proxy, error) {
 		FlushInterval: -1,
 		ErrorLog:      errLog,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			rt.Log(fmt.Sprintf("proxy: %q %q: upstream: %v", r.Method, r.URL.Path, err))
+			if r.Context().Err() == nil { // not the client going away
+				rt.Log(fmt.Sprintf("proxy: %q %q: upstream: %v", r.Method, r.URL.Path, err))
+			}
 			w.WriteHeader(http.StatusBadGateway)
 		},
 	}
@@ -138,7 +140,7 @@ func (rt *Runtime) startProxy() (*proxy, error) {
 		return nil, err
 	}
 	p.ln = ln
-	p.srv = &http.Server{Handler: p, ReadHeaderTimeout: 30 * time.Second, ErrorLog: errLog}
+	p.srv = &http.Server{Handler: p, ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute, ErrorLog: errLog}
 	go func() {
 		defer close(p.done)
 		if err := p.srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {

@@ -52,8 +52,8 @@ func TestCloneIgnoresGlobalConfig(t *testing.T) {
 				t.Errorf("%s: %q, want %q", k, got, want)
 			}
 		}
-		if got := git(t, d, "check-attr", "binary", "x.bin"); got != "x.bin: binary: set" {
-			t.Errorf("global attributes: %q", got)
+		if got, _ := cloneStdout(ctx, d, "check-attr", "binary", "x.bin"); string(got) != "x.bin: binary: set\n" {
+			t.Errorf("global attributes under the isolated git: %q", got)
 		}
 		os.WriteFile(filepath.Join(d, "secret.env"), []byte("x"), 0o644)
 		// .gitignore still outranks the global excludes, as in the main repo.

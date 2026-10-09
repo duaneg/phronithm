@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"regexp"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -313,7 +314,7 @@ func (s *Stub) runGateStep(ctx context.Context, c Call, fn func(context.Context,
 func (s *Stub) PinHosts(hosts []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.Pins = append(s.Pins, hosts)
+	s.Pins = append(s.Pins, slices.Clone(hosts))
 }
 
 // Repo is "": the stub has no repository.

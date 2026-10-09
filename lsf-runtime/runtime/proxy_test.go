@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -213,6 +214,8 @@ func TestProxyRereads(t *testing.T) {
 		// Same length, rewritten in place: only the modification time
 		// tells (set apart, as a coarse clock might not).
 		writeCreds(t, creds, "token-4")
+		sooner := time.Now().Add(30 * time.Second)
+		os.Chtimes(creds, sooner, sooner)
 		proxyReq(t, p, bearer, nil)
 		writeCreds(t, creds, "token-5")
 		later := time.Now().Add(time.Minute)
@@ -380,5 +383,38 @@ func TestProxyConfig(t *testing.T) {
 	var none *Runtime = &Runtime{}
 	if none.Proxy() != (ProxyInfo{}) {
 		t.Error("no proxy, empty info")
+	}
+}
+
+// Requests in parallel with rotations of the credentials file: each sees a
+// whole token, one written at some point (run under -race).
+func TestProxyConcurrentRotation(t *testing.T) {
+	cfg, creds, seen := proxyConfig(t, "token-00")
+	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		p := rt.Proxy()
+		var wg sync.WaitGroup
+		for range 8 {
+			wg.Go(func() {
+				for range 10 {
+					proxyReq(t, p, []string{"Bearer " + p.Placeholder}, nil)
+				}
+			})
+		}
+		for i := 1; i <= 20; i++ {
+			tmp := creds + ".new"
+			writeCreds(t, tmp, fmt.Sprintf("token-%02d", i))
+			os.Rename(tmp, creds)
+		}
+		wg.Wait()
+		return nil, nil
+	})
+	if seen.n() != 80 {
+		t.Fatalf("%d requests upstream", seen.n())
+	}
+	for _, r := range seen.reqs {
+		var n int
+		if _, err := fmt.Sscanf(r.Header.Get("Authorization"), "Bearer token-%02d", &n); err != nil || n > 20 {
+			t.Errorf("authorization %q", r.Header.Get("Authorization"))
+		}
 	}
 }

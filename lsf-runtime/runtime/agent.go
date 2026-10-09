@@ -93,7 +93,6 @@ func (rt *Runtime) Call(ctx context.Context, prompt string, o Opts) (CallResult,
 				// The credential failed, not the call: the run stops and
 				// the call is not journaled, so a relaunch re-runs it. A
 				// kept clone stays as found.
-				rt.Log(fmt.Sprintf("%s: authentication failed (status 401 or authentication_failed); renew the credential and relaunch", o.Label))
 				return *res, rt.setStop(StopAuthFailed, o.Label+": authentication failed (status 401 or authentication_failed); renew the credential and relaunch")
 			}
 			err := rt.checkNull(ctx, c, res)

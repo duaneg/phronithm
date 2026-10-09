@@ -331,6 +331,8 @@
 //     decision re-plan's prompt, like the wave re-plan's, says not to edit a
 //     block the plan has. A requester changes the block by committing the
 //     plan and relaunching at the new SHA. The termination prompt says so
-//     too. The pin reports gate-block problems only; the plan block's are
-//     the first load's. JS has no pin; promptparity leaves the step out.
+//     too. A plan with no block gets no such clause (an undeclared plan's
+//     prompts are JS's), so a re-plan that adds one stops the run at the
+//     next load. The pin reports gate-block problems only; the plan block's
+//     are the first load's. JS has no pin; promptparity leaves the step out.
 package orchestrator
