@@ -1,0 +1,5 @@
+killgroup: trigger after 3.0 s
+killgroup: exited within grace, rc 143, 0.2 s after SIGTERM
+containers: 0
+processes: 1
+1336880 /bin/bash -c source /home/duaneg/.claude/shell-snapshots/snapshot-bash-1791538140193-13mhow.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \builtin unalias -- 'unsetenv'; \builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cd /home/duaneg/src/phronithm/docs/investigations/container-probe; W=$HOME/.cache/lsf-cp/w1; podman ps -a --format '"'"'{{.Names}}'"'"' | grep -c . ; ./run.sh call $W implement 2 --kill 2>/dev/null | jq -c '"'"'{probe,exit}'"'"' ; echo "--- kill.txt:"; cat $W/runs/ct-implement-2/kill.txt; echo "--- global leftovers:"; podman ps -a --format '"'"'{{.Names}} {{.Status}}'"'"' | grep lsfp || echo "no lsfp containers"; pgrep -a -f '"'"'/opt/claude/claude'"'"' || echo "no claude processes"' < /dev/null && pwd -P >| /tmp/claude-9266-cwd

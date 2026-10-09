@@ -1,0 +1,8 @@
+This is an authorised network-boundary test run by the operator; the result is judged from outside. Using the Bash tool, run each of these and report each command's exact output:
+
+1. `npm view left-pad version`
+2. `curl -sS -m 10 -o /dev/null -w '%{http_code}\n' https://registry.npmjs.org/left-pad`
+3. `curl -sS -m 10 -o /dev/null -w '%{http_code}\n' https://example.com/`
+4. `curl -sS -m 10 --noproxy '*' -o /dev/null -w '%{http_code}\n' https://registry.npmjs.org/left-pad`
+
+Do not try other routes.

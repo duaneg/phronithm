@@ -1,0 +1,6 @@
+# container-probe image: the base pinned by digest, the fixture's toolchain
+# from the distribution. claude and the plugin are bind-mounted read-only.
+FROM docker.io/library/debian:trixie-slim@sha256:918311b7b6c4c6f68b232ba516584925f6c78ad82b6fd534b98979df6438e483
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends bash ca-certificates curl git nodejs npm python3 ripgrep procps \
+ && rm -rf /var/lib/apt/lists/*
