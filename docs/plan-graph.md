@@ -182,10 +182,11 @@ meets it, and is a fault if its gates fail.
 
 The runtime pins the block from the plan at the launch's `planSha`, before
 any agent call. Values compare as written, so `1h` and `60m` differ. A
-re-plan, wave or decision, that changes the block stops the run with
-`declared-gates-changed`, and a relaunch at the re-plan's SHA takes the
-changed block. A requester changes the block by committing the plan and
-relaunching at the new SHA. The commands run with the runtime's
+re-plan in the run, wave or decision, that changes the block stops it with
+`declared-gates-changed`; a relaunch at the re-plan's SHA, which the
+requester approves, takes the changed block. A requester changes the block
+between launches by committing the plan and relaunching at the new SHA.
+Without `hosts`, the plan declares no network allowance. The commands run with the runtime's
 environment, credentials included, and are trusted as the plan document is;
 the last 4 KB of a failing gate's output goes to the reviewers' prompts and
 the journal.
