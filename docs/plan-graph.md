@@ -153,7 +153,8 @@ hosts:
 
 Each command runs through `sh` on a clean detached checkout of the commit
 being gated, so it sees only committed files (submodules are not
-initialised: `setup` does that). A command must depend on the checkout's files
+initialised: `setup` does that; the checkout has the commit's history but no
+tags or branches). A command must depend on the checkout's files
 alone, not on history, branch names or the machine's state, because results
 are kept per tree. A gate whose shell is killed by a signal is not run; a
 command the shell runs that is killed (an OOM kill) exits 128+N, red. The

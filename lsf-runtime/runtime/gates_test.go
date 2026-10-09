@@ -317,3 +317,55 @@ func TestGateConfigDefaults(t *testing.T) {
 		t.Errorf("negative gateTimeout: %v", err)
 	}
 }
+
+// The gate checkout is a plain clone, not a worktree: its .git is a
+// directory, and the main repo lists no gate worktree during or after the
+// run. A commit reachable only from a refs/lsf transfer ref, or from no ref
+// at all, is gated.
+func TestRunGatesPlainClone(t *testing.T) {
+	cfg, _ := testConfig(t)
+	gateRepo(t, &cfg)
+	git(t, cfg.Repo, "checkout", "-q", "-b", "candidate")
+	os.WriteFile(filepath.Join(cfg.Repo, "cand.txt"), []byte("candidate\n"), 0o644)
+	git(t, cfg.Repo, "add", "cand.txt")
+	git(t, cfg.Repo, "commit", "-q", "-m", "candidate")
+	xfer := git(t, cfg.Repo, "rev-parse", "HEAD")
+	git(t, cfg.Repo, "update-ref", "refs/lsf/01234567/xfer/w1", xfer)
+	os.WriteFile(filepath.Join(cfg.Repo, "cand.txt"), []byte("dangling\n"), 0o644)
+	git(t, cfg.Repo, "commit", "-q", "-am", "dangling")
+	dangling := git(t, cfg.Repo, "rev-parse", "HEAD")
+	git(t, cfg.Repo, "checkout", "-q", "main")
+	git(t, cfg.Repo, "branch", "-q", "-D", "candidate")
+	git(t, cfg.Repo, "reflog", "expire", "--expire=now", "--all")
+
+	listed := filepath.Join(t.TempDir(), "worktrees")
+	for _, c := range []struct{ commit, want string }{{xfer, "candidate"}, {dangling, "dangling"}} {
+		runs, err, _ := runGates(t, cfg, "gates:x", c.commit, "", []GateSpec{
+			{Name: "plain", Command: "test -d .git && test \"$(cat cand.txt)\" = " + c.want + " && test \"$(git rev-parse HEAD)\" = " + c.commit},
+			{Name: "unlisted", Command: "git -C " + cfg.Repo + " worktree list --porcelain > " + listed},
+		})
+		if err != nil || runs[0].Status != GateGreen || runs[1].Status != GateGreen {
+			t.Fatalf("%s: %v %+v", c.want, err, runs)
+		}
+		if b, _ := os.ReadFile(listed); strings.Count(string(b), "worktree ") != 1 {
+			t.Errorf("%s: a gate worktree is registered during the run:\n%s", c.want, b)
+		}
+	}
+	if out := git(t, cfg.Repo, "worktree", "list", "--porcelain"); strings.Count(out, "worktree ") != 1 {
+		t.Errorf("a gate worktree is registered after the run:\n%s", out)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(cfg.StateDir, "gates")); len(entries) != 1 || entries[0].Name() != "logs" {
+		t.Errorf("gate checkouts left: %v", entries)
+	}
+}
+
+// A gate checkout half-built by a killed launch goes at the next launch.
+func TestGatePartialWiped(t *testing.T) {
+	cfg, _ := testConfig(t)
+	partial := filepath.Join(cfg.StateDir, "gates", "gates_x-0123"+partialSuffix)
+	os.MkdirAll(partial, 0o755)
+	launch(t, cfg, func(context.Context, *Runtime) (json.RawMessage, error) { return nil, nil })
+	if exists(partial) {
+		t.Error("partial gate checkout kept")
+	}
+}

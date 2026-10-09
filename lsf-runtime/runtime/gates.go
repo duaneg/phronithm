@@ -140,8 +140,13 @@ func (rt *Runtime) RunGates(ctx context.Context, label, commit, setup string, ga
 	return runs, nil
 }
 
-// gateCheckout makes a clean detached worktree of commit at dir.
-func (rt *Runtime) gateCheckout(ctx context.Context, label, dir, commit string) error {
+// gateCheckout makes a clean detached checkout of commit at dir: a plain
+// clone holding commit's history alone, made with the clone helpers (no
+// global or system config) at dir.partial and renamed into place. The
+// commit is resolved in the main repo and fetched by its full object ID,
+// so one reachable only from a refs/lsf transfer ref, or from no ref, is
+// gated too.
+func (rt *Runtime) gateCheckout(ctx context.Context, label, dir, commit string) (err error) {
 	if strings.HasPrefix(commit, "-") || commit == "" {
 		return fmt.Errorf("%s: %q is not a commit", label, commit)
 	}
@@ -152,17 +157,55 @@ func (rt *Runtime) gateCheckout(ctx context.Context, label, dir, commit string) 
 	gctx, cancel := rt.gitContext(ctx)
 	defer cancel()
 	rt.removeGateDir(gctx, dir)
-	out, err := gitOut(gctx, rt.cfg.Repo, "worktree", "add", "--detach", dir, commit+"^{commit}")
-	if err != nil {
+	tmp := dir + partialSuffix
+	defer func() {
+		if err == nil {
+			return
+		}
+		os.RemoveAll(tmp)
 		if s := rt.stopped(); s != nil {
-			return s
+			err = s
+		} else if ctx.Err() != nil {
+			err = &StopError{Reason: StopCancelled}
 		}
-		if ctx.Err() != nil {
-			return &StopError{Reason: StopCancelled}
-		}
-		return fmt.Errorf("%s: gate checkout of %s: %w: %s", label, commit, err, strings.TrimSpace(string(out)))
+	}()
+	if err := os.RemoveAll(tmp); err != nil {
+		return err
 	}
-	return nil
+	b, err := gitStdout(gctx, rt.cfg.Repo, "rev-parse", "--verify", "-q", "--end-of-options", commit+"^{commit}")
+	sha := strings.TrimSpace(string(b))
+	if err != nil || !fullObjectID(sha) {
+		return fmt.Errorf("%s: gate checkout of %s: it does not resolve to a commit", label, commit)
+	}
+	run := func(in string, args ...string) error {
+		if out, err := cloneOut(gctx, in, args...); err != nil {
+			return fmt.Errorf("%s: gate checkout of %s: git %s: %w: %s", label, commit, args[0], err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+	if err := run(filepath.Dir(dir), "init", "-q", "--", tmp); err != nil {
+		return err
+	}
+	// The line-ending config and attributes shape the work tree; no hook
+	// runs, the hooks path naming dir, which does not yet exist.
+	if err := rt.copyRepoSetup(gctx, tmp, dir); err != nil {
+		return fmt.Errorf("%s: gate checkout of %s: %w", label, commit, err)
+	}
+	if err := run(tmp, "fetch", "--no-tags", "-q", "--end-of-options", rt.cfg.Repo, sha); err != nil {
+		return err
+	}
+	if err := run(tmp, "rev-parse", "--verify", "-q", "--end-of-options", sha+"^{commit}"); err != nil {
+		return err
+	}
+	if err := run(tmp, "-c", "advice.detachedHead=false", "checkout", "-q", "--detach", sha, "--"); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dir)
+}
+
+// fullObjectID reports whether s is a full SHA-1 or SHA-256 object ID.
+func fullObjectID(s string) bool {
+	return (len(s) == 40 || len(s) == 64) && strings.Trim(s, "0123456789abcdef") == ""
 }
 
 // gateRemove removes the checkout. A failure is logged: the results stand,
@@ -179,15 +222,11 @@ func (rt *Runtime) gateRemove(ctx context.Context, label, dir string) {
 	}
 }
 
-// removeGateDir force-removes a gate worktree at dir, registered or not, and
-// prunes stale registrations. The caller holds wtSem.
+// removeGateDir removes a gate checkout at dir and prunes the main repo's
+// stale worktree registrations, which a gate checkout made as a worktree
+// before plain clones may have left. The caller holds wtSem.
 func (rt *Runtime) removeGateDir(ctx context.Context, dir string) error {
-	var err error
-	if _, statErr := os.Stat(dir); statErr == nil {
-		if gitRun(ctx, rt.cfg.Repo, "worktree", "remove", "--force", "--force", dir) != nil {
-			err = os.RemoveAll(dir)
-		}
-	}
+	err := os.RemoveAll(dir)
 	gitRun(ctx, rt.cfg.Repo, "worktree", "prune")
 	return err
 }

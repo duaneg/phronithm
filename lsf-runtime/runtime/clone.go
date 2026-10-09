@@ -546,7 +546,7 @@ func (rt *Runtime) wipeScratch() {
 		rt.Log("scratch: " + err.Error())
 	}
 	os.MkdirAll(dir, 0o755)
-	for _, sub := range []string{"clone", "merge"} {
+	for _, sub := range []string{"clone", "merge", "gates"} {
 		partial, _ := filepath.Glob(filepath.Join(rt.cfg.StateDir, sub, "*"+partialSuffix))
 		for _, p := range partial {
 			if err := os.RemoveAll(p); err != nil {
