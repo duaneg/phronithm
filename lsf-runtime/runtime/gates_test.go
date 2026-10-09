@@ -369,3 +369,23 @@ func TestGatePartialWiped(t *testing.T) {
 		t.Error("partial gate checkout kept")
 	}
 }
+
+// A commit named by a branch gates; so does one in a SHA-256 repository,
+// whose gate checkout takes its object format.
+func TestRunGatesCommitForms(t *testing.T) {
+	cfg, _ := testConfig(t)
+	gateRepo(t, &cfg)
+	if runs, err, _ := runGates(t, cfg, "gates:x", "main", "", []GateSpec{{Name: "a", Command: "test -e f.txt"}}); err != nil || runs[0].Status != GateGreen {
+		t.Fatalf("branch name: %v %+v", err, runs)
+	}
+	cfg, _ = testConfig(t)
+	cfg.Repo = t.TempDir()
+	git(t, cfg.Repo, "init", "-q", "-b", "main", "--object-format=sha256")
+	sha := gateRepo(t, &cfg)
+	if len(sha) != 64 {
+		t.Fatalf("not a SHA-256 repo: %s", sha)
+	}
+	if runs, err, _ := runGates(t, cfg, "gates:x", sha, "", []GateSpec{{Name: "a", Command: "test \"$(git rev-parse HEAD)\" = " + sha}}); err != nil || runs[0].Status != GateGreen {
+		t.Fatalf("sha256: %v %+v", err, runs)
+	}
+}

@@ -39,7 +39,7 @@ const (
 type execGit struct{ clones *dirSet }
 
 // dirSet is a set of directories, safe for concurrent use; a nil set is
-// empty.
+// empty. A directory under one in the set counts as in it.
 type dirSet struct {
 	mu sync.Mutex
 	m  map[string]bool
@@ -57,13 +57,21 @@ func (s *dirSet) add(dir string) {
 	s.m[filepath.Clean(dir)] = true
 }
 
+// has reports whether dir is in the set or under a directory in it.
 func (s *dirSet) has(dir string) bool {
 	if s == nil {
 		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.m[filepath.Clean(dir)]
+	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
+		if s.m[d] {
+			return true
+		}
+		if d == filepath.Dir(d) {
+			return false
+		}
+	}
 }
 
 // run runs git in its own process group, so a timeout or cancellation

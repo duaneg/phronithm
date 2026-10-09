@@ -156,7 +156,9 @@ func (rt *Runtime) gateCheckout(ctx context.Context, label, dir, commit string) 
 	defer func() { <-rt.wtSem }()
 	gctx, cancel := rt.gitContext(ctx)
 	defer cancel()
-	rt.removeGateDir(gctx, dir)
+	if err := rt.removeGateDir(gctx, dir); err != nil {
+		return fmt.Errorf("%s: stale gate checkout %s not removable: %w", label, dir, err)
+	}
 	tmp := dir + partialSuffix
 	defer func() {
 		if err == nil {
@@ -179,11 +181,19 @@ func (rt *Runtime) gateCheckout(ctx context.Context, label, dir, commit string) 
 	}
 	run := func(in string, args ...string) error {
 		if out, err := cloneOut(gctx, in, args...); err != nil {
-			return fmt.Errorf("%s: gate checkout of %s: git %s: %w: %s", label, commit, args[0], err, strings.TrimSpace(string(out)))
+			sub := args[0]
+			if sub == "-c" {
+				sub = args[2]
+			}
+			return fmt.Errorf("%s: gate checkout of %s: git %s: %w: %s", label, commit, sub, err, strings.TrimSpace(string(out)))
 		}
 		return nil
 	}
-	if err := run(filepath.Dir(dir), "init", "-q", "--", tmp); err != nil {
+	format, err := gitStdout(gctx, rt.cfg.Repo, "rev-parse", "--show-object-format")
+	if err != nil {
+		return fmt.Errorf("%s: gate checkout of %s: object format: %w", label, commit, err)
+	}
+	if err := run(filepath.Dir(dir), "init", "-q", "--object-format="+strings.TrimSpace(string(format)), "--", tmp); err != nil {
 		return err
 	}
 	// The line-ending config and attributes shape the work tree; no hook
@@ -222,12 +232,15 @@ func (rt *Runtime) gateRemove(ctx context.Context, label, dir string) {
 	}
 }
 
-// removeGateDir removes a gate checkout at dir and prunes the main repo's
-// stale worktree registrations, which a gate checkout made as a worktree
-// before plain clones may have left. The caller holds wtSem.
+// removeGateDir removes a gate checkout at dir. When the main repo lists a
+// worktree under gates/ (a gate checkout made as a worktree before plain
+// clones), it prunes the stale registrations. The caller holds wtSem.
 func (rt *Runtime) removeGateDir(ctx context.Context, dir string) error {
 	err := os.RemoveAll(dir)
-	gitRun(ctx, rt.cfg.Repo, "worktree", "prune")
+	list, lerr := gitStdout(ctx, rt.cfg.Repo, "worktree", "list", "--porcelain")
+	if lerr == nil && strings.Contains(string(list), "\nworktree "+filepath.Join(rt.cfg.StateDir, "gates")+string(filepath.Separator)) {
+		gitRun(ctx, rt.cfg.Repo, "worktree", "prune")
+	}
 	return err
 }
 

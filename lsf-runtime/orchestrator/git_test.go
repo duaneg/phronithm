@@ -200,3 +200,18 @@ func TestIntactBareDigestScope(t *testing.T) {
 		t.Errorf("guard: %v", err)
 	}
 }
+
+func TestDirSet(t *testing.T) {
+	var none *dirSet
+	none.add("/a")
+	if none.has("/a") {
+		t.Error("a nil set holds nothing")
+	}
+	s := &dirSet{}
+	s.add("/state/merge/w1/")
+	for dir, want := range map[string]bool{"/state/merge/w1": true, "/state/merge/w1/sub/x": true, "/state/merge/w10": false, "/state/merge": false, "/": false} {
+		if s.has(dir) != want {
+			t.Errorf("has(%s) = %v", dir, !want)
+		}
+	}
+}

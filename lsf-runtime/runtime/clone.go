@@ -40,7 +40,7 @@ type placement struct {
 // The runtime's own git in a clone reads no global config, so whatever it
 // needs from there is here.
 var configCopied = []string{"user.name", "user.email", "core.autocrlf", "core.eol", "core.safecrlf", "commit.gpgsign", "tag.gpgsign", "user.signingkey", "gpg.format",
-	"gpg.program", "gpg.openpgp.program", "gpg.x509.program", "gpg.ssh.program"}
+	"gpg.program", "gpg.openpgp.program", "gpg.x509.program", "gpg.ssh.program", "gpg.ssh.defaultKeyCommand"}
 
 // usesClone reports whether a call with these options runs in a clone the
 // runtime makes.
@@ -226,10 +226,9 @@ func (rt *Runtime) makeClone(ctx context.Context, dir, branch, integration strin
 const partialSuffix = ".partial"
 
 // copyRepoSetup gives a new clone at dir, to be renamed to final, the main
-// repo's effective hooks, the configCopied values and its info/exclude and
-// info/attributes, each followed by the content of the file the main repo's
-// core.excludesFile or core.attributesFile names, when set: the clone's own
-// git reads no global config.
+// repo's effective hooks, the configCopied values, its info/exclude and
+// info/attributes, and a copy of each file its core.excludesFile and
+// core.attributesFile name: the clone's own git reads no global config.
 func (rt *Runtime) copyRepoSetup(ctx context.Context, dir, final string) error {
 	mainPath := func(p string) (string, error) {
 		b, err := gitStdout(ctx, rt.cfg.Repo, "rev-parse", "--git-path", p)
@@ -266,8 +265,8 @@ func (rt *Runtime) copyRepoSetup(ctx context.Context, dir, final string) error {
 			return fmt.Errorf("config %s: %v: %s", k, err, strings.TrimSpace(string(b)))
 		}
 	}
-	for _, f := range []struct{ path, global string }{{"info/exclude", "core.excludesFile"}, {"info/attributes", "core.attributesFile"}} {
-		src, err := mainPath(f.path)
+	for _, f := range []string{"info/exclude", "info/attributes"} {
+		src, err := mainPath(f)
 		if err != nil {
 			return err
 		}
@@ -275,33 +274,46 @@ func (rt *Runtime) copyRepoSetup(ctx context.Context, dir, final string) error {
 		if err != nil {
 			return err
 		}
-		v, err := gitStdout(ctx, rt.cfg.Repo, "config", "--type=path", "--get", f.global)
-		switch {
-		case exitStatus(err) == 1: // unset
-		case err != nil:
-			return fmt.Errorf("config --get %s: %w", f.global, err)
-		default:
-			g, err := readIfExists(strings.TrimSuffix(string(v), "\n"))
-			if err != nil {
+		if b != nil {
+			if err := writeGitFile(dir, f, b); err != nil {
 				return err
 			}
-			if len(b) > 0 && len(g) > 0 && b[len(b)-1] != '\n' {
-				b = append(b, '\n')
-			}
-			b = append(b, g...)
 		}
-		if b == nil {
-			continue
+	}
+	// The global excludes and attributes files keep their place in git's
+	// precedence, below .gitignore and .gitattributes: a copy in the clone
+	// set as its local core.excludesFile and core.attributesFile, so the
+	// clone needs no read of the user's files.
+	for _, f := range []struct{ key, name string }{{"core.excludesFile", "excludes"}, {"core.attributesFile", "attributes"}} {
+		v, err := gitStdout(ctx, rt.cfg.Repo, "config", "--type=path", "--get", f.key)
+		if exitStatus(err) == 1 {
+			continue // unset: git reads its default file in the clone as in the main repo
 		}
-		d := filepath.Join(dir, ".git", filepath.FromSlash(f.path))
-		if err := os.MkdirAll(filepath.Dir(d), 0o755); err != nil {
+		if err != nil {
+			return fmt.Errorf("config --get %s: %w", f.key, err)
+		}
+		b, err := readIfExists(strings.TrimSuffix(string(v), "\n"))
+		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(d, b, 0o644); err != nil {
+		rel := "lsf-global/" + f.name
+		if err := writeGitFile(dir, rel, b); err != nil {
 			return err
+		}
+		if out, err := cloneOut(ctx, dir, "config", f.key, filepath.Join(final, ".git", filepath.FromSlash(rel))); err != nil {
+			return fmt.Errorf("config %s: %v: %s", f.key, err, strings.TrimSpace(string(out)))
 		}
 	}
 	return nil
+}
+
+// writeGitFile writes b to rel under dir's .git directory.
+func writeGitFile(dir, rel string, b []byte) error {
+	d := filepath.Join(dir, ".git", filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(d), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(d, b, 0o644)
 }
 
 // readIfExists is p's content, nil when it does not exist.

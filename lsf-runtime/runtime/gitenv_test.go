@@ -34,7 +34,7 @@ func globalFilterConfig(t *testing.T, cfg Config, extra string) {
 func TestCloneIgnoresGlobalConfig(t *testing.T) {
 	cfg, _ := testConfig(t)
 	excludes, attrs := filepath.Join(t.TempDir(), "ignore"), filepath.Join(t.TempDir(), "attributes")
-	os.WriteFile(excludes, []byte("secret.env\n"), 0o644)
+	os.WriteFile(excludes, []byte("*.env\n"), 0o644)
 	os.WriteFile(attrs, []byte("*.bin binary\n"), 0o644)
 	globalFilterConfig(t, cfg, "[user]\n\tsigningkey = KEY1\n[gpg]\n\tprogram = /opt/fake-gpg\n[gpg \"ssh\"]\n\tprogram = /opt/fake-ssh\n"+
 		"[core]\n\texcludesFile = "+excludes+"\n\tattributesFile = "+attrs+"\n")
@@ -52,16 +52,20 @@ func TestCloneIgnoresGlobalConfig(t *testing.T) {
 				t.Errorf("%s: %q, want %q", k, got, want)
 			}
 		}
-		if b, _ := os.ReadFile(filepath.Join(d, ".git", "info", "attributes")); string(b) != "*.bin binary\n" {
-			t.Errorf("info/attributes: %q", b)
+		if got := git(t, d, "check-attr", "binary", "x.bin"); got != "x.bin: binary: set" {
+			t.Errorf("global attributes: %q", got)
 		}
 		os.WriteFile(filepath.Join(d, "secret.env"), []byte("x"), 0o644)
+		// .gitignore still outranks the global excludes, as in the main repo.
+		commitFile(t, d, ".gitignore", "!keep.env\n")
+		os.Remove(marker) // the test's own commit there ran under host config
+		os.WriteFile(filepath.Join(d, "keep.env"), []byte("x"), 0o644)
 		future := time.Now().Add(time.Hour)
 		if err := os.Chtimes(filepath.Join(d, "a.txt"), future, future); err != nil {
 			t.Fatal(err)
 		}
 		paths, err := rt.dirtyPaths(ctx, d, true)
-		if err != nil || len(paths) != 0 {
+		if err != nil || !slices.Equal(paths, []string{"keep.env"}) {
 			t.Errorf("isolated status: %q %v", paths, err)
 		}
 		if exists(marker) {
