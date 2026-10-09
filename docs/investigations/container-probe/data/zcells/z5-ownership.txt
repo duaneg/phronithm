@@ -1,0 +1,6 @@
+commit: 5c795e5
+cfg-write:  not write config file .git/config: Device or resource busy
+hook-write: h '.git/hooks/post-commit': Read-only file system
+uid=1000(duaneg) gid=1000(duaneg) groups=1000(duaneg)
+fetch-back: FAIL
+fetch-back: OK 5c795e5

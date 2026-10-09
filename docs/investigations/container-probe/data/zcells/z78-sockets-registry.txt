@@ -1,0 +1,10 @@
+socket:/var/run/docker.sock:absent
+socket:/run/docker.sock:absent
+socket:/run/containerd/containerd.sock:absent
+socket:/run/user/1000/podman/podman.sock:absent
+socket:/run/podman/podman.sock:absent
+registry-via-proxy:200
+undeclared-via-proxy:curl: (56) CONNECT tunnel failed, response 403
+000
+direct-no-proxy:(6) Could not resolve host: registry.npmjs.org
+000

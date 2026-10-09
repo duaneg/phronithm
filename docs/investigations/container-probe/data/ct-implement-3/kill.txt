@@ -1,0 +1,5 @@
+killgroup: trigger after 3.0 s
+killgroup: exited within grace, rc 143, 0.4 s after SIGTERM
+containers: 0
+podman-leftover: 0
+conmon-for-call: 0

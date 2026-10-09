@@ -101,7 +101,7 @@ call() {
   local id="ct-$probe-$n" clone="$w/calls/ct-$probe-$n" out="$w/runs/ct-$probe-$n"
   [ -e "$out" ] && die "$out exists"
   mkdir -p "$out"
-  git clone -q "$w/main" "$clone"
+  git clone -q --no-local "$w/main" "$clone"
   git -C "$clone" checkout -q -b unit/add-mean
   git -C "$clone" config user.name "lsf probe"; git -C "$clone" config user.email "probe@example.invalid"
   # shellcheck disable=SC1091
@@ -130,8 +130,9 @@ call() {
     grep '^killgroup:' "$out/stderr.txt" > "$out/kill.txt"
     sleep 2
     { echo "containers: $(podman ps -a --filter "name=$name" --format '{{.Names}} {{.Status}}' | wc -l)"
-      echo "processes: $(pgrep -f -c "$name|/opt/claude/claude" || true)"
-      podman ps -a --filter "name=$name" --format '{{.Names}} {{.Status}}'; pgrep -a -f "$name|/opt/claude/claude" || true
+      echo "podman-leftover: $(podman ps -a --filter "name=$name" --format '{{.Names}} {{.Status}}' | wc -l)"
+      echo "conmon-for-call: $(pgrep -a -f "conmon.*$name" | grep -c . || true)"
+      podman ps -a --filter "name=$name" --format '{{.Names}} {{.Status}}'; pgrep -a -f "conmon.*$name" || true
     } >> "$out/kill.txt"
     cat "$out/kill.txt"
   else
@@ -197,7 +198,7 @@ judge() {
 gate() {
   local w=$1
   local out="$w/runs/gate-ct" clone="$w/calls/gate-ct"
-  mkdir -p "$out"; git clone -q "$w/main" "$clone"
+  mkdir -p "$out"; git clone -q --no-local "$w/main" "$clone"
   # shellcheck disable=SC1091
   . "$w/canaries.env"
   export LSF_CANARY_SECRET
@@ -225,7 +226,7 @@ gate() {
 scripted() {
   local w=$1 n=$2 script=$3
   local clone="$w/calls/sc-$n"
-  git clone -q "$w/main" "$clone"
+  git clone -q --no-local "$w/main" "$clone"
   git -C "$clone" checkout -q -b unit/add-mean
   git -C "$clone" config user.name "lsf probe"; git -C "$clone" config user.email "probe@example.invalid"
   # shellcheck disable=SC1091

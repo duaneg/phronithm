@@ -1,0 +1,13 @@
+# Z6 start cost (seconds)
+## container cold start (podman run --rm true):
+.528295334 podman run --rm --userns=keep-id --network none localhost/lsf-probe:1 true
+.444067001 podman run --rm --userns=keep-id --network none localhost/lsf-probe:1 true
+.483395103 podman run --rm --userns=keep-id --network none localhost/lsf-probe:1 true
+## host claude --version:
+.015341024 env DISABLE_AUTOUPDATER=1 /home/duaneg/.local/share/claude/versions/2.1.294 --version
+.017414134 env DISABLE_AUTOUPDATER=1 /home/duaneg/.local/share/claude/versions/2.1.294 --version
+.015757405 env DISABLE_AUTOUPDATER=1 /home/duaneg/.local/share/claude/versions/2.1.294 --version
+## bwrap unshare-all true:
+.013640123 bwrap --ro-bind / / --dev /dev --proc /proc --unshare-all true
+.007774457 bwrap --ro-bind / / --dev /dev --proc /proc --unshare-all true
+.007695107 bwrap --ro-bind / / --dev /dev --proc /proc --unshare-all true

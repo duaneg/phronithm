@@ -1,0 +1,9 @@
+env-canary:absent
+file:/home/duaneg/.cache/lsf-cp/w1/secrets/canary.txt:denied
+file:/home/duaneg/.cache/lsf-s2-canary/canary.txt:denied
+egress-loopback:blocked
+egress-lan:blocked
+egress-internet-direct:blocked
+dns:none
+/bin/bash: line 8: .git/objects/06/7ada19982bc0b8ed1501ac4122add33b1df722: Permission denied
+write-objects-hardlink:denied

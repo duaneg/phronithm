@@ -1,0 +1,2 @@
+direct no-proxy placeholder: 404
+direct no-proxy no-auth: 400

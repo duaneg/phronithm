@@ -1,0 +1,4 @@
+# F3: teardown on SIGKILL to the podman run client (grace-expiry path)
+before: Up 3 seconds
+after SIGKILL of client: [lsfp-f3b Up 5 seconds]
+podman rm -f by name: lsfp-f3b; now []

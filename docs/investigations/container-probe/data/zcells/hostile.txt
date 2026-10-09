@@ -1,0 +1,15 @@
+env-canary:absent
+file:/home/duaneg/.cache/lsf-cp/w1/secrets/canary.txt:denied
+file:/home/duaneg/.cache/lsf-s2-canary/canary.txt:denied
+write:/home/duaneg/.cache/lsf-cp/w1/main:denied
+write:/:denied
+write:/work/..:denied
+write:/opt:denied
+write:/tmp:written
+egress-loopback:blocked
+egress-lan:blocked
+egress-internet:blocked
+socket:/var/run/docker.sock:absent
+socket:/run/docker.sock:absent
+socket:/run/user/1000/podman/podman.sock:absent
+host: main .gate-probe absent; / .gate-probe absent
