@@ -409,7 +409,7 @@ func (l *launch) terminate(ctx context.Context) (json.RawMessage, bool, error) {
 	c := l.ctx
 	l.terminationRan = true
 	t := c.tierFor("planning")
-	term, cs, err := call[terminationResult](ctx, l.orch, site{at: plan.At{Stage: "termination"}, writer: true}, terminationPrompt(c, l.ref()), lsfrt.Opts{Label: "termination", Model: t.Model, Effort: t.Effort, Phase: "Termination", Schema: terminationSchema})
+	term, cs, err := call[terminationResult](ctx, l.orch, site{at: plan.At{Stage: "termination"}, writer: true}, terminationPrompt(c, l.ref(), l.decl), lsfrt.Opts{Label: "termination", Model: t.Model, Effort: t.Effort, Phase: "Termination", Schema: terminationSchema})
 	if err != nil {
 		return nil, true, err
 	}

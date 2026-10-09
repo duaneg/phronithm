@@ -330,6 +330,7 @@
 //     block stops at the first load with declared-gates-changed; the
 //     decision re-plan's prompt, like the wave re-plan's, says not to edit a
 //     block the plan has. A requester changes the block by committing the
-//     plan and relaunching at the new SHA. JS has no pin; promptparity
-//     leaves the step out.
+//     plan and relaunching at the new SHA. The termination prompt says so
+//     too. The pin reports gate-block problems only; the plan block's are
+//     the first load's. JS has no pin; promptparity leaves the step out.
 package orchestrator

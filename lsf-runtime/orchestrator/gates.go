@@ -212,7 +212,7 @@ func (o *orch) gateStep(ctx context.Context, tree, commit string) (gateSet, stri
 var errGatesNotJournaled = errors.New("a gate was not run; not journaled")
 
 // declChanged is the stop for a load whose gate block differs from the one
-// the launch started with.
+// the launch pinned (D31).
 func declChanged(was, now *plan.Declaration, wave *int) *plan.Signal {
 	return plan.NewSignal(plan.Signal{Kind: "declared-gates-changed", Source: "structural", Stage: "load", Wave: wave,
 		Statement: "the plan's ```yaml " + plan.GatesTag + " block changed during the run: was " + was.Identity() + ", now " + now.Identity() + "; a relaunch takes the new block",

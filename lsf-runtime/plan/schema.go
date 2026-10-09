@@ -35,7 +35,7 @@ var StopKinds = []string{
 	"stage-fault",            // a code stage failed; the statement gives the reason
 	"gate-omitted",           // implement or code-fix stage: no gate reported, or a gate the implement stage ran left out
 	"branch-mismatch",        // driver: a worktree stage reported a branch other than the one the runtime gave it, or one that does not resolve
-	"declared-gates-changed", // load: the plan's lsf-gates block differs from the one the launch started with
+	"declared-gates-changed", // load: the plan's lsf-gates block differs from the one the launch pinned
 }
 
 // RecordKinds reach the ledger and, where the re-plan can act on them, the

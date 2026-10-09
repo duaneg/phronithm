@@ -139,7 +139,7 @@ Some decisions are not the plan's to carry out. Before relaunching, classify eac
 | `wave-cap` return (no escalation) | `phronithm:lsf-implement` again, `planSha` from the return's top-level `planSha`, no decisions |
 | `paused` return (no escalation) | Nothing until the requester resumes; then delete the ref (see *Pause*) and relaunch as for `wave-cap` |
 | Everything else: `cycle`, `unit-over-budget`, `gate-non-convergence`, `merge-conflict-unresolvable`, `merge-regression`, `environment-gate-drift`, `gate-not-run`, `no-ready-unit`, `standing-obligation-undischarged`, `agent-null`, `precondition`, `invalid-plan`, `unserialised-overlap`, `done-condition-unevaluable` (the decision is the rewritten condition), and `plan-defect-unabsorbed` otherwise | `phronithm:lsf-implement` again, with the decisions |
-| `declared-gates-changed` (Go runtime) | Again at the escalation's plan SHA when the changed block is intended (the launch pins it); otherwise the requester commits the block restored and relaunches at that SHA. A decision cannot change the block: the decision re-plan's change stops the run again |
+| `declared-gates-changed` (Go runtime) | Again at the escalation's plan SHA, with no decisions, when the changed block is intended (the launch pins it); otherwise the requester commits the block restored and relaunches at that SHA. A decision cannot change the block: the decision re-plan's change stops the run again |
 
 A mixed agenda takes the first matching row: the run returns to Phase 2, and every other decision travels in the startup prompt — one `Decision:` line per item — for the Phase 2 session to carry into the plan through `phronithm:breakdown`.
 

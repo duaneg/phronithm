@@ -336,7 +336,7 @@ func (l *launch) pinGates(ctx context.Context) (json.RawMessage, bool, error) {
 	case err != nil:
 		return nil, true, err
 	case fault != "":
-		stops = []*plan.Signal{stageFaultSignal(at, fault)}
+		stops = []*plan.Signal{stageFaultSignal(at, "gates-pin: "+fault)}
 	case r == nil:
 		stops = []*plan.Signal{plan.NullReturnSignal(at)}
 	}
@@ -441,7 +441,7 @@ func (l *launch) record(ev plan.WaveEval) { l.ledger = append(l.ledger, ev.All..
 // returns, plan validity) and on two adjudicated ones: the wave gate's
 // complete architecture invalidation and the re-plan's `cannot` verdict.
 // Everything else agents report is recorded in the ledger and handed to the
-// re-plan.
+// re-plan. The gate block is pinned before anything else runs (D31).
 func Run(ctx context.Context, rt Runtime) (json.RawMessage, error) {
 	a, err := parseArgs(rt.Args())
 	if err != nil {
