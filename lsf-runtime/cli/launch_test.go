@@ -80,6 +80,11 @@ func TestLaunchPausedThenRefused(t *testing.T) {
 	s, code = f.status()
 	eq(t, s.Driver, driverFailed)
 	eq(t, code, exitCrashed)
+	if s.Previous == nil || s.Previous.Launch != started.Launch || s.Previous.Summary.StopReason != "returned" {
+		t.Errorf("the last launch that ran is not shown as previous: %+v", s.Previous)
+	} else if o := outcomeStatus(t, report{Outcome: s.Previous.Outcome}); o != "paused" {
+		t.Errorf("previous outcome %s", o)
+	}
 	if s.Summary != nil || s.Outcome != nil {
 		t.Error("the earlier launch's outcome is reported as the current one")
 	}
@@ -102,6 +107,12 @@ func TestLaunchPausedThenRefused(t *testing.T) {
 	r = f.launch(nil, "-dry-run")
 	eq(t, r.code, 0, r.stderr)
 	contains(t, r.stdout, `"stop_reason": "dry-run"`)
+	if _, err := os.Stat(filepath.Join(f.stateDir(), "dry-run", "summary.json")); err != nil {
+		t.Errorf("the dry run's scratch dir: %v", err)
+	}
+	if _, err := os.Stat(f.stateDir() + ".dry-run"); err == nil {
+		t.Error("a dry run wrote a sibling of the state dir")
+	}
 }
 
 // (c) A config from before the container boundary is refused with the

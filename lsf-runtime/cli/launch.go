@@ -62,11 +62,14 @@ func cmdLaunch(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
-	state := defaultStateDir(repo, name)
+	var state string
 	if a.state != "" {
-		if state, err = filepath.Abs(a.state); err != nil {
-			return fail(stderr, err)
-		}
+		state, err = filepath.Abs(a.state)
+	} else {
+		state, err = defaultStateDir(repo, name)
+	}
+	if err != nil {
+		return fail(stderr, err)
 	}
 	in := launchIn{hostFile: *host, pluginDir: *plugin, repo: repo, stateDir: state, args: raw}
 	if *dry {
@@ -102,6 +105,23 @@ type driverRecord struct {
 	LaunchFile string    `json:"launchFile"` // its composed config, renamed to launch.json once it holds the lock
 }
 
+// launchLock takes <state>/launch.lock, held by a launch until it
+// returns and by a dry run until it ends.
+func launchLock(state string) (*os.File, error) {
+	ll, err := os.OpenFile(filepath.Join(state, "launch.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(ll.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		ll.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, fmt.Errorf("another launch or dry run is in progress on %s; see status", state)
+		}
+		return nil, fmt.Errorf("launch.lock: %w", err)
+	}
+	return ll, nil
+}
+
 // start composes the config, starts the detached driver and waits until
 // it has passed or failed the launch checks.
 func start(in launchIn, stdout, stderr io.Writer) int {
@@ -110,16 +130,11 @@ func start(in launchIn, stdout, stderr io.Writer) int {
 	}
 	// One launch at a time: two that both passed the probe would each
 	// record their driver in driver.json.
-	ll, err := os.OpenFile(filepath.Join(in.stateDir, "launch.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	ll, err := launchLock(in.stateDir)
 	if err != nil {
 		return fail(stderr, err)
 	}
 	defer ll.Close()
-	if err := syscall.Flock(int(ll.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); errors.Is(err, syscall.EWOULDBLOCK) {
-		return fail(stderr, fmt.Errorf("another launch is starting a driver on %s; see status", in.stateDir))
-	} else if err != nil {
-		return fail(stderr, fmt.Errorf("launch.lock: %w", err))
-	}
 	if held, err := lockHeld(in.stateDir); err != nil {
 		return fail(stderr, err)
 	} else if held {
@@ -135,6 +150,7 @@ func start(in launchIn, stdout, stderr io.Writer) int {
 			os.Remove(in.out)
 		}
 	}()
+	prev, _ := os.ReadFile(filepath.Join(in.stateDir, driverFile))
 	for attempt := 1; ; attempt++ {
 		r, err := spawn(in.stateDir, in.out)
 		if err != nil {
@@ -163,7 +179,25 @@ func start(in launchIn, stdout, stderr io.Writer) int {
 			}
 		}
 		fmt.Fprintf(stderr, "lsf-runtime: the driver refused to start (%s):\n%s", r.exit, r.log)
+		restoreDriver(in.stateDir, prev, stderr)
 		return exitError
+	}
+}
+
+// restoreDriver puts back the driver.json a refused launch replaced, when
+// the driver it named won the lock after this launch's probe and is
+// running: status and stop then still find it.
+func restoreDriver(state string, prev []byte, stderr io.Writer) {
+	var d driverRecord
+	if json.Unmarshal(prev, &d) != nil {
+		return
+	}
+	s, err := readStatus(state)
+	if held, _ := lockHeld(state); !held || err != nil || s.PID != d.PID || !isDriver(d.PID, d.State) {
+		return
+	}
+	if writeAtomic(filepath.Join(state, driverFile), prev) == nil {
+		fmt.Fprintf(stderr, "lsf-runtime: driver %d, an earlier launch's, is running on %s; see status\n", d.PID, state)
 	}
 }
 
@@ -218,22 +252,30 @@ func spawn(state, file string) (spawned, error) {
 	if err := writeAtomic(filepath.Join(state, driverFile), append(rec, '\n')); err != nil {
 		return spawned{pid: pid, left: fmt.Sprintf("driver %d left running, but %s: %v", pid, driverFile, err)}, nil
 	}
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+	defer signal.Stop(sig)
+
 	// Started: wait, briefly, for the body's rename of the composed file
 	// to launch.json, so a status right after launch reads this launch's.
 	startedAt := func(l string) spawned {
 		r := spawned{started: true, pid: pid, launch: l}
-		for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+		end := time.After(5 * time.Second)
+		for {
 			if _, err := os.Stat(file); errors.Is(err, os.ErrNotExist) {
 				return r
 			}
+			select {
+			case <-time.After(50 * time.Millisecond):
+				continue
+			case <-sig:
+			case <-end:
+			}
+			break
 		}
 		r.left = fmt.Sprintf("%s not yet renamed to %s; status may report the previous launch's repo and name until it is", filepath.Base(file), launchFile)
 		return r
 	}
-
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt)
-	defer signal.Stop(sig)
 	tick := time.NewTicker(launchPoll)
 	defer tick.Stop()
 	deadline := time.After(launchWait)
@@ -286,10 +328,19 @@ func logSince(path string, offset int64) string {
 }
 
 // dryRun runs the launch in the foreground with dryRun set, in the
-// scratch sibling <state>.dry-run, so the run's own files stay as they
-// were. It exits 0 only when the run stopped with dry-run.
+// scratch dir <state>/dry-run, so the run's own files stay as they were.
+// It holds the run's launch.lock throughout. It exits 0 only when the
+// run stopped with dry-run.
 func dryRun(in launchIn, stdout, stderr io.Writer) int {
-	dir := in.stateDir + ".dry-run"
+	if err := os.MkdirAll(in.stateDir, 0o700); err != nil {
+		return fail(stderr, fmt.Errorf("state dir: %w", err))
+	}
+	ll, err := launchLock(in.stateDir)
+	if err != nil {
+		return fail(stderr, err)
+	}
+	defer ll.Close()
+	dir := filepath.Join(in.stateDir, "dry-run")
 	if err := os.RemoveAll(dir); err != nil {
 		return fail(stderr, err)
 	}

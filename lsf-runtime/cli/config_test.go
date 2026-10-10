@@ -2,11 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/duaneg/phronithm/lsf-runtime/internal/testcfg"
 	lsfrt "github.com/duaneg/phronithm/lsf-runtime/runtime"
@@ -316,4 +318,34 @@ func TestClaudeBinReplacedMidLaunch(t *testing.T) {
 			t.Errorf("%v", err)
 		}
 	})
+}
+
+func TestXDGDir(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "rel/state")
+	t.Setenv("HOME", "/home/x")
+	d, err := xdgDir("XDG_STATE_HOME", ".local/state")
+	eq(t, d, "/home/x/.local/state", fmt.Sprint(err))
+	t.Setenv("XDG_STATE_HOME", "/abs")
+	d, _ = xdgDir("XDG_STATE_HOME", ".local/state")
+	eq(t, d, "/abs")
+	t.Setenv("XDG_STATE_HOME", "")
+	t.Setenv("HOME", "")
+	if _, err := defaultStateDir("/r", "n"); err == nil {
+		t.Error("no HOME: want an error, not a relative state dir")
+	}
+}
+
+// A summary.json that is not status.json's launch is refused.
+func TestReadSummaryStale(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 10, 8, 59, 19, 0, time.UTC)
+	b, _ := json.Marshal(lsfrt.Summary{StopReason: lsfrt.StopReturned, Started: at.Local()})
+	os.WriteFile(filepath.Join(dir, "summary.json"), b, 0o600)
+	if _, err := readSummary(dir, "20261010T085919-42"); err != nil {
+		t.Error(err)
+	}
+	_, err := readSummary(dir, "20261010T090000-43")
+	if err == nil || !strings.Contains(err.Error(), "not launch 20261010T090000-43") {
+		t.Errorf("stale summary: %v", err)
+	}
 }

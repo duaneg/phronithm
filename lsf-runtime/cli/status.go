@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -47,6 +48,9 @@ type report struct {
 
 	Summary *summaryView    `json:"summary,omitempty"` // ended only
 	Outcome json.RawMessage `json:"outcome,omitempty"` // ended only
+	// Previous is the last launch that ran, when a later one failed to
+	// start: its summary and outcome are still the ones to act on.
+	Previous *previousView `json:"previous,omitempty"`
 
 	Pause           *pauseView `json:"pause,omitempty"`
 	Leftovers       leftovers  `json:"leftovers"`
@@ -64,6 +68,34 @@ type summaryView struct {
 	CostUSD    float64   `json:"cost_usd"`
 	Started    time.Time `json:"started"`
 	Finished   time.Time `json:"finished"`
+}
+
+type previousView struct {
+	Launch  string          `json:"launch"`
+	Summary *summaryView    `json:"summary"`
+	Outcome json.RawMessage `json:"outcome,omitempty"`
+}
+
+// readSummary reads summary.json, refusing one that is not launch's:
+// Run writes it from the same start time that names the launch, and
+// only logs a failed write.
+func readSummary(state, launch string) (lsfrt.Summary, error) {
+	var sum lsfrt.Summary
+	b, err := os.ReadFile(filepath.Join(state, "summary.json"))
+	if err == nil {
+		err = json.Unmarshal(b, &sum)
+	}
+	if err != nil {
+		return sum, fmt.Errorf("summary.json: %w", err)
+	}
+	if !strings.HasPrefix(launch, sum.Started.UTC().Format("20060102T150405")+"-") {
+		return sum, fmt.Errorf("summary.json is from a launch started %s, not launch %s", sum.Started.UTC().Format(time.RFC3339), launch)
+	}
+	return sum, nil
+}
+
+func viewOf(sum lsfrt.Summary) *summaryView {
+	return &summaryView{StopReason: string(sum.StopReason), Detail: sum.Detail, Error: sum.Error, Calls: sum.Calls, CostUSD: sum.CostUSD, Started: sum.Started, Finished: sum.Finished}
 }
 
 type pauseView struct {
@@ -166,6 +198,10 @@ func driverState(held bool, d *driverRecord, s *statusFile) string {
 		return driverStarting
 	case d == nil:
 		return driverNone
+	case held && s != nil && s.PID != d.PID && s.State == "running" && isDriver(s.PID, d.State):
+		// An earlier launch's driver won the lock after a later launch,
+		// whose driver was then refused, replaced driver.json.
+		return driverRunning
 	case held && (s == nil || s.PID != d.PID):
 		return driverStarting
 	case held:
@@ -218,19 +254,19 @@ func statusOf(state string, fb fallback) report {
 	}
 	switch r.Driver {
 	case driverEnded:
-		var sum lsfrt.Summary
-		b, err := os.ReadFile(filepath.Join(state, "summary.json"))
-		if err == nil {
-			err = json.Unmarshal(b, &sum)
-		}
-		if err == nil {
-			r.Summary = &summaryView{StopReason: string(sum.StopReason), Detail: sum.Detail, Error: sum.Error, Calls: sum.Calls, CostUSD: sum.CostUSD, Started: sum.Started, Finished: sum.Finished}
-			r.Outcome = sum.Outcome
+		if sum, err := readSummary(state, sp.Launch); err == nil {
+			r.Summary, r.Outcome = viewOf(sum), sum.Outcome
 		} else {
-			r.Errors = append(r.Errors, "summary.json: "+err.Error())
+			r.Errors = append(r.Errors, err.Error())
 		}
 	case driverCrashed, driverFailed:
 		r.DriverLog = tail(filepath.Join(state, driverLog), 4096)
+		// status.json and summary.json are still the last launch that ran.
+		if r.Driver == driverFailed && sp != nil && sp.State != "running" {
+			if sum, err := readSummary(state, sp.Launch); err == nil && string(sum.StopReason) == sp.State {
+				r.Previous = &previousView{Launch: sp.Launch, Summary: viewOf(sum), Outcome: sum.Outcome}
+			}
+		}
 	}
 
 	podman, pauseRef := "podman", ""
@@ -318,11 +354,25 @@ func output(name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.WaitDelay = time.Second
 	out, err := cmd.Output()
-	if ctx.Err() != nil {
+	var ee *exec.ExitError
+	switch {
+	case ctx.Err() != nil:
 		err = fmt.Errorf("%s %s: timed out after %v", name, args[0], toolTimeout)
+	case errors.As(err, &ee) && len(bytes.TrimSpace(ee.Stderr)) > 0:
+		err = &toolError{ee, strings.TrimSpace(string(ee.Stderr))}
 	}
 	return out, err
 }
+
+// toolError is a command's exit with its stderr; it unwraps to the
+// *exec.ExitError.
+type toolError struct {
+	*exec.ExitError
+	stderr string
+}
+
+func (e *toolError) Error() string { return e.ExitError.Error() + ": " + e.stderr }
+func (e *toolError) Unwrap() error { return e.ExitError }
 
 func refExists(repo, ref string) (bool, error) {
 	_, err := output("git", "-C", repo, "show-ref", "--verify", "--quiet", ref)
@@ -362,10 +412,6 @@ func containers(podman, state string) ([]string, error) {
 	}
 	out, err := output(podman, "ps", "-a", "--filter", "label=lsf.state="+label, "--format", "{{.Names}}")
 	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			return nil, fmt.Errorf("podman ps: %v: %s", err, strings.TrimSpace(string(ee.Stderr)))
-		}
 		return nil, fmt.Errorf("podman ps: %v", err)
 	}
 	return strings.Fields(string(out)), nil

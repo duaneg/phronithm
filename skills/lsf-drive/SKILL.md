@@ -44,7 +44,7 @@ Design: [lsf-workflow](${CLAUDE_PLUGIN_ROOT}/docs/design/lsf-workflow.md), secti
 
 Follow the [pre-flight](${CLAUDE_PLUGIN_ROOT}/docs/pre-flight.md) check. Do not continue until it passes.
 
-**Route.** The CLI route runs the orchestrator on the Go runtime, each agent call in a container. Take it when a runtime host config exists: `${XDG_CONFIG_HOME:-~/.config}/lsf-runtime/config.json`, or a path the requester gives, passed as `-config` to every `launch` and `resume`. Otherwise take the Workflow route. On the CLI route, build the CLI once per session and run that binary, written `lsf-runtime` below:
+**Route.** The CLI route runs the orchestrator on the Go runtime, each agent call in a container. Take it when a runtime host config exists: `${XDG_CONFIG_HOME:-~/.config}/lsf-runtime/config.json`, or a path the requester gives, passed as `-config` to every `launch` and `resume`. Otherwise take the Workflow route. On the CLI route, build the CLI once per session and run that binary by its full path: it is not on `PATH`, and the commands below write it `lsf-runtime`:
 
 ```
 go -C ${CLAUDE_PLUGIN_ROOT}/lsf-runtime build -o "${XDG_CACHE_HOME:-$HOME/.cache}/lsf-runtime/lsf-runtime" ./cli
@@ -134,7 +134,7 @@ A tool result with no return value, or a task notification reporting the run die
 |---|---|
 | `ended` (0), `summary.stop_reason` `returned` | `outcome` is the return above |
 | `ended` (0), any other `stop_reason` | a runtime stop, with no outcome to present: `summary.detail` and `summary.error` say why; see *Relaunch*, runtime stops |
-| `crashed` (3), `failed-to-start` (3) | `driverLog` holds the driver's last output: go to Recovery |
+| `crashed` (3), `failed-to-start` (3) | `driverLog` holds the driver's last output: go to Recovery. A `failed-to-start` report with `previous` also holds the last launch that ran: its `summary` and `outcome` are read as the rows above, and a relaunch starts from that outcome |
 
 The report also lists the pause ref's state and what a fault left (`leftovers`, `xferRefs`, `containers`); present a non-empty one.
 

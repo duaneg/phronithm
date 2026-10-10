@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -213,7 +214,57 @@ func TestLaunchLock(t *testing.T) {
 	holdLock(t, filepath.Join(f.stateDir(), "launch.lock"))
 	r := f.launch(nil)
 	eq(t, r.code, exitError)
-	contains(t, r.stderr, "another launch is starting a driver")
+	contains(t, r.stderr, "another launch or dry run is in progress")
+	r = f.launch(nil, "-dry-run")
+	eq(t, r.code, exitError)
+	contains(t, r.stderr, "another launch or dry run is in progress")
+}
+
+// A launch that gave up waiting (5 minutes, SIGINT) before its driver
+// was refused leaves driver.json naming that driver, while an earlier
+// launch's driver runs: status still reports it running, stop signals it,
+// and once it ends its outcome is shown as the previous launch's.
+func TestStopAfterDriverRecordReplaced(t *testing.T) {
+	f := newFixture(t)
+	r := f.launch([]string{"STUB_MODE=hang"})
+	eq(t, r.code, 0, r.stderr)
+	d, _ := readDriver(f.stateDir())
+	t.Cleanup(func() { killRun(t, f, d.PID) })
+	waitFor(t, 20*time.Second, "the call's container", func() bool {
+		s, _ := f.status()
+		return len(s.Containers) > 0
+	})
+	gone := exec.Command("true")
+	gone.Run()
+	b, _ := json.Marshal(driverRecord{PID: gone.Process.Pid, State: d.State})
+	os.WriteFile(filepath.Join(f.stateDir(), driverFile), b, 0o600)
+	s, _ := f.status()
+	eq(t, s.Driver, driverRunning)
+	for range 2 {
+		r = f.cli(nil, "stop", "-state", f.stateDir())
+		eq(t, r.code, 0, r.stderr)
+		contains(t, r.stdout, fmt.Sprintf("driver %d", d.PID))
+	}
+	w, _ := f.decode(f.cli(nil, "watch", "-state", f.stateDir()))
+	eq(t, w.Driver, driverFailed)
+	if w.Previous == nil {
+		t.Fatalf("watch: no previous launch; errors %v", w.Errors)
+	}
+	eq(t, w.Previous.Summary.StopReason, "signal-SIGTERM")
+}
+
+// -name or -repo naming another run than -state's is refused.
+func TestAddressConflict(t *testing.T) {
+	f := newFixture(t)
+	f.git("update-ref", "refs/lsf/f/pause", "HEAD")
+	eq(t, f.launch(nil).code, 0)
+	f.cli(nil, "watch", "-state", f.stateDir())
+	r := f.cli(nil, "status", "-state", f.stateDir(), "-name", "g")
+	eq(t, r.code, exitUsage)
+	contains(t, r.stderr, "is run f's")
+	r = f.cli(nil, "status", "-state", f.stateDir(), "-repo", t.TempDir())
+	eq(t, r.code, exitError)
+	eq(t, f.cli(nil, "status", "-state", f.stateDir(), "-name", "f").code, 0)
 }
 
 // A launch that returned, then one that crashed, then one refused at its

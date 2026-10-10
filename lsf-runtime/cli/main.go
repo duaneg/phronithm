@@ -7,6 +7,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -113,7 +114,11 @@ func (a *addr) flags(fs *flag.FlagSet) {
 // repo and name.
 func (a *addr) stateDir() (string, error) {
 	if a.state != "" {
-		return filepath.Abs(a.state)
+		state, err := filepath.Abs(a.state)
+		if err != nil {
+			return "", err
+		}
+		return state, a.agrees(state)
 	}
 	if a.name == "" {
 		return "", usageError{error: errors.New("pass -state, or -name (with -repo outside the repository)")}
@@ -125,7 +130,33 @@ func (a *addr) stateDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return defaultStateDir(top, a.name), nil
+	return defaultStateDir(top, a.name)
+}
+
+// agrees refuses -name or -repo that name another run than the state
+// dir's launch.json; without one they only fill in what it would.
+func (a *addr) agrees(state string) error {
+	l, err := readLaunched(state)
+	if err != nil {
+		return nil
+	}
+	var args struct {
+		Name string `json:"name"`
+	}
+	json.Unmarshal(l.Args, &args)
+	if a.name != "" && a.name != args.Name {
+		return usageError{error: fmt.Errorf("-name %s, but %s is run %s's", a.name, state, args.Name)}
+	}
+	if a.repo != "" {
+		top, err := repoTop(a.repo)
+		if err != nil {
+			return err
+		}
+		if top != l.Repo {
+			return usageError{error: fmt.Errorf("-repo %s, but %s is a run in %s", top, state, l.Repo)}
+		}
+	}
+	return nil
 }
 
 // repoTop is the toplevel of dir's repository ("" for the current
@@ -143,12 +174,27 @@ func repoTop(dir string) (string, error) {
 
 // defaultStateDir is ${XDG_STATE_HOME:-~/.local/state}/lsf-runtime/<12 hex
 // of the repo toplevel's SHA-256>/<name>.
-func defaultStateDir(top, name string) string {
-	base := os.Getenv("XDG_STATE_HOME")
-	if base == "" {
-		home, _ := os.UserHomeDir()
-		base = filepath.Join(home, ".local", "state")
+func defaultStateDir(top, name string) (string, error) {
+	base, err := xdgDir("XDG_STATE_HOME", ".local/state")
+	if err != nil {
+		return "", err
 	}
 	sum := sha256.Sum256([]byte(top))
-	return filepath.Join(base, "lsf-runtime", hex.EncodeToString(sum[:])[:12], name)
+	return filepath.Join(base, "lsf-runtime", hex.EncodeToString(sum[:])[:12], name), nil
+}
+
+// xdgDir is the XDG base directory env names, else $HOME/fallback. A
+// relative value is ignored, as the XDG spec says.
+func xdgDir(env, fallback string) (string, error) {
+	if d := os.Getenv(env); filepath.IsAbs(d) {
+		return d, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("%s is unset and %v", env, err)
+	}
+	if !filepath.IsAbs(home) {
+		return "", fmt.Errorf("%s is unset and HOME (%q) is not absolute", env, home)
+	}
+	return filepath.Join(home, fallback), nil
 }

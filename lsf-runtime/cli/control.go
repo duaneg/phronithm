@@ -50,9 +50,8 @@ func cmdPause(args []string, stdout, stderr io.Writer) int {
 	}
 	was := r.Pause.Set
 	git := func(args ...string) error {
-		out, err := output("git", append([]string{"-C", r.Repo}, args...)...)
-		if err != nil {
-			return fmt.Errorf("git %s: %v %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		if _, err := output("git", append([]string{"-C", r.Repo}, args...)...); err != nil {
+			return fmt.Errorf("git %s: %v", strings.Join(args, " "), err)
 		}
 		return nil
 	}
@@ -110,14 +109,24 @@ func cmdStop(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, fmt.Errorf("no driver is running on %s (driver %s)", state, st))
 	case dp == nil:
 		return fail(stderr, fmt.Errorf("the run on %s was not launched by this CLI (no %s); signal its process yourself", state, driverFile))
-	case !isDriver(dp.PID, dp.State):
-		return fail(stderr, fmt.Errorf("pid %d is not this state dir's driver", dp.PID))
+	case !isDriver(sp.PID, dp.State):
+		return fail(stderr, fmt.Errorf("pid %d is not this state dir's driver", sp.PID))
 	}
-	if err := syscall.Kill(dp.PID, syscall.SIGTERM); err != nil {
-		return fail(stderr, fmt.Errorf("SIGTERM to driver %d: %w", dp.PID, err))
+	// status.json's pid: driver.json's, unless a refused later launch
+	// replaced driver.json (driverState).
+	pid := sp.PID
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		return fail(stderr, fmt.Errorf("SIGTERM to driver %d: %w", pid, err))
 	}
-	fmt.Fprintf(stdout, "SIGTERM sent to driver %d: in-flight calls finish first, which can take as long as the longest call; stop again to cancel them\n", dp.PID)
+	fmt.Fprintf(stdout, "SIGTERM sent to driver %d: in-flight calls finish first, which can take as long as the longest call; stop again to cancel them\n", pid)
 	return exitOK
+}
+
+func absPath(p string) string {
+	if a, err := filepath.Abs(p); err == nil {
+		return a
+	}
+	return p
 }
 
 // cmdResume replays the last launch: its stored args, re-composed
@@ -150,24 +159,28 @@ func cmdResume(args []string, stdout, stderr io.Writer) int {
 	// after it, says that run returned. A crash leaves status.json at
 	// running, and summary.json an earlier launch's.
 	if s, err := readStatus(state); err == nil && s.State == string(lsfrt.StopReturned) {
-		var sum lsfrt.Summary
-		b, err := os.ReadFile(filepath.Join(state, "summary.json"))
-		if err == nil && json.Unmarshal(b, &sum) == nil && sum.StopReason == lsfrt.StopReturned {
+		if sum, err := readSummary(state, s.Launch); err == nil && sum.StopReason == lsfrt.StopReturned {
 			var o struct {
 				Status  string `json:"status"`
 				PlanSha string `json:"planSha"`
 			}
 			if json.Unmarshal(sum.Outcome, &o) != nil || o.Status == "" {
-				return fail(stderr, errors.New("the last launch returned (summary.json): read its outcome with status, and relaunch with launch -args, as phronithm:lsf-drive's Relaunch says"))
+				return fail(stderr, errors.New("the last launch returned (summary.json): read its outcome there or in status (outcome, or previous after a failed start), and relaunch with launch -args, as phronithm:lsf-drive's Relaunch says"))
 			}
-			return fail(stderr, fmt.Errorf("the last launch returned an outcome (status %s): relaunch with launch -args from its planSha %s, passing its unscribed rows, as phronithm:lsf-drive's Relaunch says", o.Status, o.PlanSha))
+			return fail(stderr, fmt.Errorf("the last launch returned an outcome (status %s): relaunch with launch -args from its planSha %s, passing its unscribed rows (status shows the outcome, under previous after a failed start), as phronithm:lsf-drive's Relaunch says", o.Status, o.PlanSha))
 		}
 	}
 	if err := checkGit(); err != nil {
 		return fail(stderr, err)
 	}
-	if *plugin == "" {
+	switch {
+	case *plugin == "":
 		*plugin = l.PluginDir
+		if _, err := os.Stat(l.PluginDir); err != nil {
+			return fail(stderr, fmt.Errorf("the last launch's plugin dir: %v; pass -plugin-dir", err))
+		}
+	case absPath(*plugin) != l.PluginDir:
+		fmt.Fprintf(stderr, "lsf-runtime: resuming with plugin dir %s; the last launch used %s, and its completed calls replay as they were\n", *plugin, l.PluginDir)
 	}
 	return start(launchIn{hostFile: *host, pluginDir: *plugin, repo: l.Repo, stateDir: state, args: l.Args}, stdout, stderr)
 }

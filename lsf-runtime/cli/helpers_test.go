@@ -208,7 +208,13 @@ func (f *fixture) argsFile() string {
 }
 
 // stateDir is the fixture run's default state dir.
-func (f *fixture) stateDir() string { return defaultStateDir(f.repo, "f") }
+func (f *fixture) stateDir() string {
+	s, err := defaultStateDir(f.repo, "f")
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
 
 // result is a CLI run's output.
 type result struct {

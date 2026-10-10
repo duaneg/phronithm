@@ -37,10 +37,9 @@ const configDoc = "docs/design/lsf-runtime.md, CLI → Configuration"
 
 // hostConfigPath is the host file's default location.
 func hostConfigPath() string {
-	dir := os.Getenv("XDG_CONFIG_HOME")
-	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".config")
+	dir, err := xdgDir("XDG_CONFIG_HOME", ".config")
+	if err != nil {
+		return "$XDG_CONFIG_HOME/lsf-runtime/config.json (" + err.Error() + ")"
 	}
 	return filepath.Join(dir, "lsf-runtime", "config.json")
 }

@@ -52,7 +52,9 @@ func drive(state, file string) (lsfrt.Summary, error) {
 		if err := os.Rename(file, filepath.Join(state, launchFile)); err != nil {
 			return nil, fmt.Errorf("launch.json: %w", err)
 		}
-		// Composed files of launches that gave up waiting on a refused driver.
+		// Composed files of launches that gave up waiting on a refused
+		// driver. Their drivers cannot reach this body: this one holds the
+		// lock until it exits.
 		stale, _ := filepath.Glob(filepath.Join(state, "launch.*.json"))
 		for _, p := range stale {
 			os.Remove(p)
