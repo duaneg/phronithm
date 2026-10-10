@@ -109,14 +109,44 @@ func CloneGitlinks(ctx context.Context, dir string) error {
 			}
 			return fmt.Errorf("git %s in %s: %w", args[0], dir, err)
 		}
-		for _, rec := range strings.Split(string(out), "\x00") {
-			if strings.HasPrefix(rec, "160000 ") {
-				_, path, _ := strings.Cut(rec, "\t")
-				return fmt.Errorf("%s holds a nested repository (gitlink %s), which an agent made (a main repo with one is refused at launch); the runtime's git does not run there", dir, path)
-			}
+		if path, ok := gitlink(out); ok {
+			return fmt.Errorf("%s holds a nested repository (gitlink %s), which an agent made (a main repo with one is refused at launch); the runtime's git does not run there", dir, path)
 		}
 	}
 	return nil
+}
+
+// RevGitlinks refuses a clone whose commit rev holds a gitlink, reading
+// only its tree: for a fetch from the clone, which takes the commit, not
+// the index.
+func RevGitlinks(ctx context.Context, dir, rev string) error {
+	cmd := exec.CommandContext(ctx, "git", append(slices.Clone(CloneArgs), "ls-tree", "-r", "-z", "--end-of-options", rev)...)
+	cmd.Dir = dir
+	cmd.Env = append(Env(true), Ceiling(dir))
+	out, err := cmd.Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			err = fmt.Errorf("%w: %s", err, strings.TrimSpace(string(ee.Stderr)))
+		}
+		return fmt.Errorf("git ls-tree %s in %s: %w", rev, dir, err)
+	}
+	if path, ok := gitlink(out); ok {
+		return fmt.Errorf("%s holds a nested repository (gitlink %s at %s), which an agent made (a main repo with one is refused at launch); the runtime does not fetch it", dir, path, rev)
+	}
+	return nil
+}
+
+// gitlink finds a 160000 record in ls-files --stage -z or ls-tree -z
+// output, returning its path.
+func gitlink(out []byte) (string, bool) {
+	for _, rec := range strings.Split(string(out), "\x00") {
+		if strings.HasPrefix(rec, "160000 ") {
+			_, path, _ := strings.Cut(rec, "\t")
+			return path, true
+		}
+	}
+	return "", false
 }
 
 // IgnoreSubmodules adds --ignore-submodules=all after a status or diff

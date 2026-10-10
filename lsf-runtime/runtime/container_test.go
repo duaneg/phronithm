@@ -403,18 +403,24 @@ func TestDryRunReportsOrphans(t *testing.T) {
 }
 
 // A nested repository an agent commits as a gitlink, with a filter in its
-// own config, is not looked into by the runtime's git: the uncommitted
-// check's status does not run the filter on the host.
+// own config and a .gitmodules ignore=none, is not looked into by the
+// runtime's git, so the filter never runs on the host; the fetch-back
+// refuses the branch, so it never reaches the main repo or a merge.
 func TestNestedRepoFilterNotRun(t *testing.T) {
 	cfg, _ := testConfig(t)
 	marker := filepath.Join(t.TempDir(), "MARKER")
 	t.Setenv("STUB_SCRIPT", "nested:"+marker)
-	res, err := call(t, cfg, vOpts)
-	if err != nil || res.Value == nil {
-		t.Fatalf("res %+v err %v", res, err)
+	_, err := call(t, cfg, vOpts)
+	s := readSummary(t, cfg)
+	if err == nil || s.StopReason != StopRuntimeError || !strings.Contains(s.Detail, "nested repository (gitlink sub") {
+		t.Errorf("err %v summary %+v", err, s)
 	}
 	if _, err := os.Stat(marker); err == nil {
 		t.Error("the nested repo's filter ran on the host")
+	}
+	// The fetch-back refused it: the gitlink never reaches the main repo.
+	if out, _ := exec.Command("git", "-C", cfg.Repo, "branch", "--list", "lsf/*").Output(); len(out) > 0 {
+		t.Errorf("fetched back: %s", out)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/duaneg/phronithm/lsf-runtime/internal/gitenv"
@@ -172,6 +173,12 @@ func isCloneOn(ctx context.Context, dir, branch string) error {
 	if fi, err := os.Lstat(filepath.Join(dir, ".git")); err != nil || !fi.IsDir() {
 		return errors.New("is not a clone")
 	}
+	if err := gitenv.CloneGitDir(dir); err != nil {
+		return err
+	}
+	if err := gitenv.CloneGitlinks(ctx, dir); err != nil {
+		return err
+	}
 	top, err := cloneStdout(ctx, dir, "rev-parse", "--show-toplevel")
 	resolved, _ := filepath.EvalSymlinks(dir)
 	if err != nil || strings.TrimSpace(string(top)) != resolved {
@@ -222,6 +229,13 @@ func (rt *Runtime) makeClone(ctx context.Context, dir, branch, integration strin
 	}
 	if err := rt.copyRepoSetup(ctx, tmp, dir); err != nil {
 		return err
+	}
+	// The read-only binds' sources, made now so the merge step's digest of
+	// the clone's git setup, taken before a conflict call, includes them.
+	for _, d := range []string{"hooks", "info"} {
+		if err := os.MkdirAll(filepath.Join(tmp, ".git", d), 0o755); err != nil {
+			return err
+		}
 	}
 	if cloneRun(ctx, tmp, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch) == nil {
 		err = run(tmp, "checkout", "-q", branch, "--")
@@ -415,9 +429,14 @@ func (rt *Runtime) fetchBack(ctx context.Context, label string, p placement, res
 			rt.Log(fmt.Sprintf("%s: the replay moved %s from %s to %s, its clone's tip", label, p.dest, w, n))
 		}
 	}()
-	// The fetch runs upload-pack in the clone under the host's config.
+	// The fetch runs upload-pack in the clone under the host's config. A
+	// gitlink in the fetched branch stops here, before it reaches the main repo and a merge clone,
+	// where the guard would then refuse every git command, cleanup included.
 	if err := gitenv.CloneGitDir(p.dir); err != nil {
 		return fmt.Errorf("fetching %s from its clone: %w", p.branch, err)
+	}
+	if err := gitenv.RevGitlinks(gctx, p.dir, "refs/heads/"+p.branch); err != nil {
+		return fmt.Errorf("fetching %s from its clone: %w; remove the nested repository from the branch and relaunch", p.branch, err)
 	}
 	if b, err := gitOut(gctx, rt.cfg.Repo, "fetch", "--no-tags", "-q", p.dir, "+refs/heads/"+p.branch+":refs/heads/"+p.dest); err != nil {
 		return fmt.Errorf("fetching %s from its clone %s: %v: %s", p.branch, p.dir, err, strings.TrimSpace(string(b)))
@@ -462,12 +481,16 @@ func (rt *Runtime) mergeDirOf(dir string) (string, error) {
 	return d, nil
 }
 
+// mergeCloneName is a merge clone's name: a path component that is also a
+// valid bind-mount source (no ':').
+var mergeCloneName = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]*$`)
+
 // MergeClone is the merge clone <stateDir>/merge/<name> on the integration
 // branch: created, or the existing one when it is a clone on that branch.
 // An existing clone is not refreshed, since a merge may be in progress in
 // it.
 func (rt *Runtime) MergeClone(ctx context.Context, name string) (string, error) {
-	if name == "" || strings.ContainsAny(name, `/\`) || strings.HasPrefix(name, ".") {
+	if !mergeCloneName.MatchString(name) {
 		return "", fmt.Errorf("merge clone name %q", name)
 	}
 	args, err := rt.cloneArgs(Opts{Label: "merge clone " + name})
@@ -499,7 +522,7 @@ func (rt *Runtime) MergeClone(ctx context.Context, name string) (string, error) 
 
 // RemoveMergeClone removes <stateDir>/merge/<name>, if it exists.
 func (rt *Runtime) RemoveMergeClone(ctx context.Context, name string) error {
-	if name == "" || strings.ContainsAny(name, `/\`) || strings.HasPrefix(name, ".") {
+	if !mergeCloneName.MatchString(name) {
 		return fmt.Errorf("merge clone name %q", name)
 	}
 	if err := rt.withWorktreeLock(ctx); err != nil {

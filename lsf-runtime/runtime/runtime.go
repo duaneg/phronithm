@@ -30,7 +30,7 @@ type Runtime struct {
 	telFile *os.File
 
 	childMu  sync.Mutex
-	children map[string]int // session id → pid (0 before Start)
+	children map[string]int // gate marker → pid (0 before Start)
 
 	sem chan struct{} // concurrency slots
 
@@ -74,6 +74,13 @@ func Run(ctx context.Context, cfg Config, body func(ctx context.Context, rt *Run
 	// proxy.
 	if err := os.MkdirAll(cfg.StateDir, 0o700); err != nil {
 		return Summary{}, fmt.Errorf("lsf-runtime: state dir: %w", err)
+	}
+	tightened := false
+	if fi, err := os.Stat(cfg.StateDir); err == nil && fi.Mode().Perm()&0o077 != 0 {
+		if err := os.Chmod(cfg.StateDir, 0o700); err != nil {
+			return Summary{}, fmt.Errorf("lsf-runtime: state dir %s is readable by others and cannot be made private: %w", cfg.StateDir, err)
+		}
+		tightened = true
 	}
 	// Resolved once, so a clone's config, its mount and a merge clone's
 	// resolved path name it alike.
@@ -143,6 +150,9 @@ func Run(ctx context.Context, cfg Config, body func(ctx context.Context, rt *Run
 	rt.wipeScratch()
 
 	rt.Log(fmt.Sprintf("launch %s: state dir %s", rt.launchID, cfg.StateDir))
+	if tightened {
+		rt.Log("state dir was readable by other users; made 0700 (transcripts can carry the placeholder bearer)")
+	}
 	rt.event("launch", map[string]any{"launch": rt.launchID, "pid": os.Getpid(), "dryRun": cfg.DryRun})
 	if rt.proxy, err = rt.startProxy(); err != nil {
 		rt.Log("proxy: " + err.Error())

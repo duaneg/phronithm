@@ -464,3 +464,16 @@ func TestCloneHooksTreeAndStaleDirt(t *testing.T) {
 		t.Errorf("stale dirty clone: %v", err)
 	}
 }
+
+// A merge clone's name must be a plain path component without ':'.
+func TestMergeCloneName(t *testing.T) {
+	cfg, _ := testConfig(t)
+	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		for _, n := range []string{"", ".x", "a/b", "w1:x", "-x"} {
+			if _, err := rt.MergeClone(ctx, n); err == nil {
+				t.Errorf("%q accepted", n)
+			}
+		}
+		return nil, nil
+	})
+}

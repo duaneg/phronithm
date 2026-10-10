@@ -7,13 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/duaneg/phronithm/lsf-runtime/internal/gitenv"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 
+	"github.com/duaneg/phronithm/lsf-runtime/internal/gitenv"
 	"github.com/duaneg/phronithm/lsf-runtime/plan"
 	lsfrt "github.com/duaneg/phronithm/lsf-runtime/runtime"
 )
@@ -112,7 +112,8 @@ func (m mergeGit) toMain(ctx context.Context, sha string) error {
 	if _, err := m.r.run(ctx, m.dir, "update-ref", "refs/lsf/xfer", sha); err != nil {
 		return err
 	}
-	// The fetch runs upload-pack in the merge clone under the host's config.
+	// The fetch runs upload-pack in the merge clone under the host's config;
+	// checked here, not only by update-ref's run, so a reorder keeps it.
 	if err := gitenv.CloneGitDir(m.dir); err != nil {
 		return err
 	}

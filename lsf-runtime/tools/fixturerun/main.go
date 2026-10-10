@@ -290,7 +290,11 @@ try { mean([]); throw new Error('mean([]) did not throw'); } catch (e) { if (!(e
 			problems = append(problems, fmt.Sprintf("%s on main: %v\n%s", strings.Join(gate, " "), err, b))
 		}
 	}
-	if left, err := exec.Command(o.podman, "ps", "-a", "--filter", "label=lsf.state", "--format", "{{.Names}}").Output(); err != nil {
+	label, err := lsfrt.StateLabel(cfg.StateDir)
+	if err != nil {
+		return err
+	}
+	if left, err := exec.Command(o.podman, "ps", "-a", "--filter", "label=lsf.state="+label, "--format", "{{.Names}}").Output(); err != nil {
 		problems = append(problems, fmt.Sprintf("podman ps: %v", err))
 	} else if names := strings.Fields(string(left)); len(names) > 0 {
 		problems = append(problems, fmt.Sprintf("containers left: %v", names))

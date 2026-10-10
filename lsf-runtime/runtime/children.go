@@ -177,24 +177,24 @@ func running(pid int) bool {
 // Start), so a later launch can terminate gates a killed launch left
 // running. Calls are found by their containers' label.
 
-func (rt *Runtime) addChild(sessionID string) {
+func (rt *Runtime) addChild(marker string) {
 	rt.childMu.Lock()
 	defer rt.childMu.Unlock()
-	rt.children[sessionID] = 0
+	rt.children[marker] = 0
 	rt.saveChildrenLocked()
 }
 
-func (rt *Runtime) setChildPid(sessionID string, pid int) {
+func (rt *Runtime) setChildPid(marker string, pid int) {
 	rt.childMu.Lock()
 	defer rt.childMu.Unlock()
-	rt.children[sessionID] = pid
+	rt.children[marker] = pid
 	rt.saveChildrenLocked()
 }
 
-func (rt *Runtime) removeChild(sessionID string) {
+func (rt *Runtime) removeChild(marker string) {
 	rt.childMu.Lock()
 	defer rt.childMu.Unlock()
-	delete(rt.children, sessionID)
+	delete(rt.children, marker)
 	rt.saveChildrenLocked()
 }
 

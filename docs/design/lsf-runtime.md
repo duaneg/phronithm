@@ -286,7 +286,7 @@ podman run --rm -i --init --pull=never --log-driver=none --name <name> --label l
   - the runtime's and orchestrator's git refuses to run in a clone whose index or `HEAD` holds a gitlink (`ls-files --stage` and `ls-tree`, which read no work tree); a main repo with submodules is refused at launch, so any gitlink there is an agent's;
   - every `status` and `diff` in a clone gets `--ignore-submodules=all` on the command line, with `-c diff.ignoreSubmodules=all -c submodule.recurse=false` before every command.
 
-  A refused clone's checks fail as git failures do: the uncommitted check flags `uncommitted-unchecked`, a merge step stops.
+  A refused clone's checks fail as git failures do: the uncommitted check flags `uncommitted-unchecked`, a merge step stops. A kept clone's fetch-back refuses a branch whose tree holds a gitlink, so it never reaches the main repo or a merge clone (where the guard would refuse cleanup too): the run stops with `runtime-error` naming the path. An agent that commits a nested repository (a vendored or fixture repo added with `git add -A`) therefore ends the run; routing it back to the unit is not done.
 - **The conflict call** gets the merge clone at its host path, with the same binds.
 - **A reviewer's clone is mounted read-write too.** A reviewer that re-runs tests writes build output, and the clone is discarded.
 - **Environment:** replaced, not inherited.
@@ -563,7 +563,7 @@ Every call in a kept clone that spawned and returns a value or a null reports th
 - **Step records.** A step writes an intent, runs, records its return (null included) and removes the intent. A step that errors keeps its intent, so the next run of that step, in this launch or a later one, gets `interrupted=true` for its own effect check. An unreadable record of a step stops the run with `runtime-error` rather than rerun it blind.
 - **Replays.** A replayed value is byte-identical to the live one (compacted JSON).
 - **File writes.** Records, intents, `children.json`, the status and the summary are written by temp file and rename.
-- **Mode.** A state dir the launch creates is `0700`: a transcript can carry the placeholder bearer (an agent's `env`), which spends the credential through the proxy. One made beforehand keeps its mode. The launch resolves the state dir's symlinks once and uses that path throughout.
+- **Mode.** The state dir is made `0700`, and one readable by group or others (an earlier runtime made them `0755`) is changed to `0700`, logged: a transcript can carry the placeholder bearer (an agent's `env`), which spends the credential through the proxy. The launch resolves the state dir's symlinks once and uses that path throughout.
 
 ### Supervision
 

@@ -170,6 +170,10 @@ func (rt *Runtime) containerName(sessionID string) string {
 	return "lsf-" + rt.stateHash[:8] + "-" + sessionID
 }
 
+// StateLabel is the lsf.state label value of a state dir's containers,
+// for tools that look for them.
+func StateLabel(stateDir string) (string, error) { return stateHashOf(stateDir) }
+
 // stateHashOf is the label value of a state dir's containers: the first 16
 // hex digits of the SHA-256 of its resolved path, so every spelling of it
 // gets the same label.
@@ -194,8 +198,17 @@ func prepareGitBinds(dir string) error {
 		return fmt.Errorf("%s/config is not a regular file", git)
 	}
 	for _, d := range []string{"hooks", "info"} {
-		if err := os.MkdirAll(filepath.Join(git, d), 0o755); err != nil {
+		p := filepath.Join(git, d)
+		fi, err := os.Lstat(p)
+		switch {
+		case os.IsNotExist(err):
+			if err := os.Mkdir(p, 0o755); err != nil {
+				return err
+			}
+		case err != nil:
 			return err
+		case !fi.IsDir(): // a symlink would make its target the bind source
+			return fmt.Errorf("%s is not a directory", p)
 		}
 	}
 	return nil
