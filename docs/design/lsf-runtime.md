@@ -589,7 +589,6 @@ Every call in a kept clone that spawned and returns a value or a null reports th
 
 - Cleanup's ignored-file policy: `code-merge-cleanup`.
 - The `Retains:` move: `retained-artefacts-impl`.
-- A stop file, status readers and detaching: `runtime-cli-drive`.
 - The roles' content: `s2-permissions-design`.
 - Presenting `auth-failed` to the requester ("renew the credential and relaunch"): `runtime-cli-drive` and `phronithm:lsf-drive`.
 
@@ -658,18 +657,29 @@ A load error reaches the requester as the runtime gives it. One naming `allow`, 
 | `launch -args FILE\|- [addr] [-config FILE] [-plugin-dir DIR] [-dry-run]` | Checks the args and git, composes the config, starts the detached driver and waits, at most 5 minutes, until it has passed or failed the launch checks. Prints `{"stateDir","pid","launch"}`. |
 | `status [addr]` | Prints the status report without blocking. |
 | `watch [addr]` | Blocks until no driver holds the state dir's lock, then prints the status report. |
+| `pause [-lift] [addr]` | Sets the pause ref to the repo's `HEAD` (`git update-ref`), or with `-lift` deletes it, and verifies it (`git show-ref --verify`). The orchestrator reads it at its next wave boundary, not at once. |
+| `stop [addr]` | SIGTERM to the running driver (Supervision → Signals). The first lets in-flight calls finish, which can take as long as the longest call; a second `stop` cancels them. |
+| `resume [addr] [-config FILE] [-plugin-dir DIR]` | Replays the last launch (below). |
 | `drive -state DIR -launch FILE` | Hidden: the driver. |
 
 Exit codes: 0 success; 1 a refusal or error, with its message on stderr; 2 usage. `status` and `watch` exit 3 for `crashed` or `failed-to-start` and 4 for `none`; the report is authoritative. Run a built binary: `go run` reports every non-zero exit as 1, and its binary is removed when it exits, while the driver re-executes it.
 
 ### Launch
 
-1. `args` is a JSON object whose `name` follows the name rule. git is checked, the state dir made (`0700`), and a running driver on it refuses the launch. The config is composed into `<state>/launch.<launcher pid>.json`.
-2. The driver is the same executable, run as `drive` in a session of its own (`Setsid`), stdin `/dev/null`, stdout and stderr appended to `<state>/driver.log`, with `LSF_CLAUDE_BIN` removed and `DISABLE_AUTOUPDATER=1`. `launch` records it in `<state>/driver.json` (`pid`, `started`, `state`, `launchFile`), the CLI's own record of the current launch. The driver runs `lsfrt.Run` with `orchestrator.Body`; its body first renames the composed file to `<state>/launch.json`, as the lock is held by then, so a refused launch never replaces the last good one.
-3. `launch` polls `status.json` every 200 ms. Its `pid` equal to the driver's means the launch checks passed: `launch` prints and exits 0, and the driver runs on after it, and after the session that started it. If the driver exits first, `status.json` is read once more, since a run can start and end within one poll. Otherwise the driver's `driver.log` output is printed and `launch` exits 1, removing the composed file: an old config, a launch-check refusal, a failed reaping or proxy reach the requester this way. A refusal because the lock was in use while no driver runs (a `status` or `watch` held it for an instant) is retried once. After 5 minutes, or on SIGINT, `launch` exits 1 and leaves the driver running.
+1. `args` is a JSON object whose `name` follows the name rule. git is checked and the state dir made (`0700`). `launch` takes an exclusive `flock` on `<state>/launch.lock` until it returns, so a second launch meanwhile is refused, and a running driver on the state dir refuses the launch. The config is composed into `<state>/launch.<launcher pid>.json`.
+2. The driver is the same executable, run as `drive` in a session of its own (`Setsid`), stdin `/dev/null`, stdout and stderr appended to `<state>/driver.log`, with `LSF_CLAUDE_BIN` removed and `DISABLE_AUTOUPDATER=1`. `launch` records it in `<state>/driver.json` (`pid`, `started`, `state`, `launchFile`), the CLI's own record of the current launch. The driver runs `lsfrt.Run` with `orchestrator.Body`; its body first renames the composed file to `<state>/launch.json`, as the lock is held by then, so a refused launch never replaces the last good one, and removes any other `launch.*.json` a launch left.
+3. `launch` polls `status.json` every 200 ms. Its `pid` equal to the driver's means the launch checks passed: `launch` waits up to 5 s for the rename to `launch.json`, prints and exits 0, and the driver runs on after it, and after the session that started it. If the driver exits first, `status.json` is read once more, since a run can start and end within one poll. Otherwise the driver's `driver.log` output and its exit are printed and `launch` exits 1, removing the composed file: an old config, a launch-check refusal, a failed reaping or proxy reach the requester this way. A refusal because the lock was in use while no driver runs (a `status` or `watch` probe held it for an instant) is retried, up to four starts in all. After 5 minutes, or on SIGINT, `launch` exits 1 and leaves the driver running, and its composed file with it.
 4. `-dry-run` runs in the foreground, in the scratch sibling `<state>.dry-run`, wiped first, so the run's own `launch.json`, `status.json` and `summary.json` stay as they were. It prints the summary, and exits 0 only when the `stop_reason` is `dry-run`; a setup refusal exits 1 with its message.
 
-`watch` takes a blocking shared `flock` on `<state>/lock`, granted when the driver's exclusive one is released at its exit, crash included. The probe `launch` and `status` use is the non-blocking form, released at once.
+`watch` takes a blocking shared `flock` on `<state>/lock`, granted when the driver's exclusive one is released at its exit, crash included, then reads the status; while that says `starting` or `running` (a driver spawned but not yet holding the lock, or a new launch), it waits again. The probe `launch` and `status` use is the non-blocking form, released at once.
+
+### Resume
+
+`resume` relaunches the state dir's `launch.json`: its stored args and repo, re-composed against the current host config, so a renewed credential or a raised cap applies; `-plugin-dir` defaults to the stored `pluginDir`. The journal replays completed calls. It serves a run that ended with no outcome to act on: a runtime stop (`auth-failed`, `runtime-error`, a cap, a signal), a crash, or a failed start. It refuses while a driver runs, without a `launch.json`, and when the last summary is `returned`: an outcome (`paused`, `wave-cap`, `stopped`, `complete`) is relaunched with `launch -args`, from the outcome's `planSha` and with its `unscribed`, as `phronithm:lsf-drive`'s Relaunch says. After a crash, `summary.json` is an earlier launch's and is not read.
+
+### Stop
+
+`stop` signals only a `running` driver: the lock held and `status.json`'s pid equal to `driver.json`'s, whose `/proc/<pid>/cmdline` must also be `drive -state <state>`. `status.json` says `running` only after `Run` has installed its signal handlers, so the SIGTERM is caught; while the driver is `starting` (its launch checks), `stop` refuses and is retried later, as SIGTERM's default action would kill it with no summary. A run not launched by the CLI (no `driver.json`) is not signalled.
 
 ### Status
 
@@ -691,12 +701,12 @@ The report is JSON:
 
 | Lock | D | S's pid | S's state | `driver` |
 |---|---|---|---|---|
-| free | none | — | — | `none` |
+| free | none | — | — | `none`, whatever `status.json` or `launch.json` hold |
 | held | none | — | — | `running`, or `starting` before S says running (a launch not made by the CLI) |
 | held | yes | ≠ D's | — | `starting` |
 | held | yes | = D's | — | `running` |
 | free | yes | = D's | not `running` | `ended` |
-| free | yes | = D's | `running` | `crashed` |
+| free | yes | = D's | `running` | `crashed` (the lock re-probed after `status.json` is read) |
 | free | yes | ≠ D's | — | `starting` while D's pid is a live `drive` on this state dir (spawned, the lock not yet taken), else `failed-to-start` |
 
-`summary` and `outcome` are shown only for `ended`, so an earlier launch's outcome is never reported as the current one. `leftovers` lists the entries of `clone/`, `scratch/` and `merge/`, and `partial` the `*.partial` entries of those and `gates/`. `xferRefs` are the main repo's `refs/lsf/<plan8>/xfer/w<n>` refs. `containers` are those carrying the state dir's `lsf.state` label (`podman ps -a`); a failure is reported in `containersError`. `repo`, `name`, `podmanBin` and the pause ref (`args.pauseRef`, else `refs/lsf/<name>/pause`) come from `launch.json`, or without one from the address. A piece that cannot be read is named in `errors`; `status` itself does not fail.
+`summary` and `outcome` are shown only for `ended`, so an earlier launch's outcome is never reported as the current one. `leftovers` lists the entries of `clone/`, `scratch/` and `merge/`, and `partial` the `*.partial` entries of those and `gates/`. `xferRefs` are the main repo's `refs/lsf/<plan8>/xfer/w<n>` refs. `containers` are those carrying the state dir's `lsf.state` label (`podman ps -a`); a failure is reported in `containersError`. `repo`, `name`, `podmanBin` and the pause ref (`args.pauseRef`, else `refs/lsf/<name>/pause`) come from `launch.json`, or without one from the address. A piece that cannot be read is named in `errors` (a missing file is not); each git and podman command is bounded by 10 s, and `status` itself does not fail.

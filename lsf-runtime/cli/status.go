@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -210,6 +211,11 @@ func statusOf(state string, fb fallback) report {
 		note(err)
 	}
 	r.Driver = driverState(held, dp, sp)
+	if r.Driver == driverCrashed { // the lock was probed before status.json was read
+		if held, _ := lockHeld(state); held {
+			r.Driver = driverRunning
+		}
+	}
 	switch r.Driver {
 	case driverEnded:
 		var sum lsfrt.Summary
@@ -302,8 +308,24 @@ func tail(path string, n int64) string {
 	return string(b)
 }
 
+// toolTimeout bounds each git and podman command status runs.
+const toolTimeout = 10 * time.Second
+
+// output runs a git or podman command under toolTimeout.
+func output(name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), toolTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = time.Second
+	out, err := cmd.Output()
+	if ctx.Err() != nil {
+		err = fmt.Errorf("%s %s: timed out after %v", name, args[0], toolTimeout)
+	}
+	return out, err
+}
+
 func refExists(repo, ref string) (bool, error) {
-	err := exec.Command("git", "-C", repo, "show-ref", "--verify", "--quiet", ref).Run()
+	_, err := output("git", "-C", repo, "show-ref", "--verify", "--quiet", ref)
 	var ee *exec.ExitError
 	switch {
 	case err == nil:
@@ -319,7 +341,7 @@ var xferRef = regexp.MustCompile(`^refs/lsf/[^/]+/xfer/w[0-9]+$`)
 
 // xferRefs are the merge transfer refs left in the main repo.
 func xferRefs(repo string) ([]string, error) {
-	out, err := exec.Command("git", "-C", repo, "for-each-ref", "--format=%(refname)", "refs/lsf/").Output()
+	out, err := output("git", "-C", repo, "for-each-ref", "--format=%(refname)", "refs/lsf/")
 	if err != nil {
 		return nil, fmt.Errorf("git for-each-ref: %v", err)
 	}
@@ -338,7 +360,7 @@ func containers(podman, state string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	out, err := exec.Command(podman, "ps", "-a", "--filter", "label=lsf.state="+label, "--format", "{{.Names}}").Output()
+	out, err := output(podman, "ps", "-a", "--filter", "label=lsf.state="+label, "--format", "{{.Names}}")
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {

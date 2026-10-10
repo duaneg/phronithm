@@ -134,12 +134,14 @@ func TestLaunchDetachedCrash(t *testing.T) {
 	f := newFixture(t)
 	hang := []string{"STUB_MODE=hang"}
 	r := f.launch(hang)
-	eq(t, r.code, 0, r.stderr)
 	d, err := readDriver(f.stateDir())
+	if err == nil {
+		t.Cleanup(func() { killRun(t, f, d.PID) })
+	}
+	eq(t, r.code, 0, r.stderr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { killRun(t, f, d.PID) })
 	sid, ours := sessionOf(t, d.PID), sessionOf(t, os.Getpid())
 	if sid != d.PID || sid == ours {
 		t.Errorf("driver %d session %d; the test's %d", d.PID, sid, ours)
@@ -260,4 +262,41 @@ func sessionOf(t *testing.T, pid int) int {
 		t.Fatal(err)
 	}
 	return n
+}
+
+// With no poll firing, launch learns of a fast run only from the driver's
+// exit: a run that started and ended is still a start, and a refusal
+// carries the driver's output and exit.
+func TestSpawnExitBranch(t *testing.T) {
+	f := newFixture(t)
+	f.git("update-ref", "refs/lsf/f/pause", "HEAD")
+	t.Setenv("LSF_CLI_AS_MAIN", "1") // the re-exec'd test binary is the CLI
+	defer func(p time.Duration) { launchPoll = p }(launchPoll)
+	launchPoll = time.Hour
+	state := f.stateDir()
+	os.MkdirAll(state, 0o700)
+	composed := func() string {
+		out := filepath.Join(state, "launch.1.json")
+		if _, err := compose(launchIn{hostFile: f.host, repo: f.repo, stateDir: state, args: f.args(), out: out}); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	r, err := spawn(state, composed())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.started || r.launch == "" {
+		t.Errorf("a run that ended before any poll: %+v", r)
+	}
+	t.Setenv("STUB_PODMAN_NOIMAGE", "1")
+	r, err = spawn(state, composed())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.started {
+		t.Fatal("a refused driver reported started")
+	}
+	contains(t, r.log, "is not present")
+	eq(t, r.exit, "exit status 1")
 }

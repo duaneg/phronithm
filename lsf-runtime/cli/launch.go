@@ -29,6 +29,10 @@ var (
 	launchPoll = 200 * time.Millisecond
 )
 
+// lockRetries bounds the starts of a driver refused because a status or
+// watch probe held the lock.
+const lockRetries = 4
+
 func cmdLaunch(args []string, stdout, stderr io.Writer) int {
 	fs := newFlags("launch", stderr)
 	var a addr
@@ -104,6 +108,16 @@ func start(in launchIn, stdout, stderr io.Writer) int {
 	if err := os.MkdirAll(in.stateDir, 0o700); err != nil {
 		return fail(stderr, fmt.Errorf("state dir: %w", err))
 	}
+	// One launch at a time: two that both passed the probe would each
+	// record their driver in driver.json.
+	ll, err := os.OpenFile(filepath.Join(in.stateDir, "launch.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fail(stderr, err)
+	}
+	defer ll.Close()
+	if err := syscall.Flock(int(ll.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return fail(stderr, fmt.Errorf("another launch is starting a driver on %s; see status", in.stateDir))
+	}
 	if held, err := lockHeld(in.stateDir); err != nil {
 		return fail(stderr, err)
 	} else if held {
@@ -136,25 +150,28 @@ func start(in launchIn, stdout, stderr io.Writer) int {
 			return exitError
 		}
 		// The driver refused to start. A status or watch can hold the lock
-		// for an instant; retry that once.
-		if attempt == 1 && strings.Contains(r.log, "is in use by another launch") {
+		// for an instant; retry that a few times.
+		if attempt < lockRetries && strings.Contains(r.log, "is in use by another launch") {
 			if held, _ := lockHeld(in.stateDir); !held {
+				time.Sleep(time.Duration(attempt) * launchPoll)
 				continue
 			}
 		}
-		fmt.Fprintf(stderr, "lsf-runtime: the driver refused to start:\n%s", r.log)
+		fmt.Fprintf(stderr, "lsf-runtime: the driver refused to start (%s):\n%s", r.exit, r.log)
 		return exitError
 	}
 }
 
 // spawned is one driver start's result: started, left running (left says
-// why launch stopped waiting) or refused (log holds its output).
+// why launch stopped waiting) or refused (log holds its output, exit how
+// it ended).
 type spawned struct {
 	started bool
 	pid     int
 	launch  string
 	left    string
 	log     string
+	exit    string
 }
 
 // spawn starts the driver in a session of its own, records it in
@@ -183,10 +200,33 @@ func spawn(state, file string) (spawned, error) {
 	}
 	pid := cmd.Process.Pid
 	exited := make(chan struct{})
-	go func() { cmd.Wait(); close(exited) }()
+	var exit string
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			exit = err.Error()
+		} else {
+			exit = "exit status 0"
+		}
+		close(exited)
+	}()
 	rec, _ := json.Marshal(driverRecord{PID: pid, Started: time.Now().UTC(), State: state, LaunchFile: file})
 	if err := writeAtomic(filepath.Join(state, driverFile), append(rec, '\n')); err != nil {
-		return spawned{}, fmt.Errorf("driver %d started, but %s: %w", pid, driverFile, err)
+		return spawned{pid: pid, left: fmt.Sprintf("driver %d left running, but %s: %v", pid, driverFile, err)}, nil
+	}
+	// Started: wait, briefly, for the body's rename of the composed file
+	// to launch.json, so a status right after launch reads this launch's.
+	startedAt := func(l string) spawned {
+		for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(launchPoll / 4) {
+			if _, err := os.Stat(file); errors.Is(err, os.ErrNotExist) {
+				break
+			}
+			select {
+			case <-exited:
+				return spawned{started: true, pid: pid, launch: l}
+			default:
+			}
+		}
+		return spawned{started: true, pid: pid, launch: l}
 	}
 
 	sig := make(chan os.Signal, 1)
@@ -203,14 +243,14 @@ func spawn(state, file string) (spawned, error) {
 		select {
 		case <-tick.C:
 			if l, ok := ours(); ok {
-				return spawned{started: true, pid: pid, launch: l}, nil
+				return startedAt(l), nil
 			}
 		case <-exited:
 			// A run can start and end within one poll.
 			if l, ok := ours(); ok {
 				return spawned{started: true, pid: pid, launch: l}, nil
 			}
-			return spawned{pid: pid, log: logSince(filepath.Join(state, driverLog), offset)}, nil
+			return spawned{pid: pid, log: logSince(filepath.Join(state, driverLog), offset), exit: exit}, nil
 		case <-deadline:
 			return spawned{pid: pid, left: fmt.Sprintf("driver %d still starting after %v; see status", pid, launchWait)}, nil
 		case <-sig:
