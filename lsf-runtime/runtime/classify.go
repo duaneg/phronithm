@@ -88,8 +88,9 @@ func classify(a *attempt, schema json.RawMessage, skill string, prefixed bool) v
 		return v
 	}
 	r := a.acc.Result
-	// A bare 429, with no assistant error, is the session limit too: no
-	// container call emitted a rate_limit_event (R18).
+	// A bare 429 (no assistant error) is the session limit too, taking the
+	// reset from a rejected rate_limit_event when the stream has one. A 429
+	// with another assistant error is classed by that error.
 	bare429 := len(a.acc.AssistantErrors) == 0 && r != nil && r.IsError && r.APIErrorStatus == 429
 	if slices.Contains(a.acc.AssistantErrors, "rate_limit") || bare429 {
 		v := verdict{class: classSessionLimit}

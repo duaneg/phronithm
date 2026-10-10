@@ -24,7 +24,8 @@ import (
 // bound over itself, so it cannot be renamed away, and its config, hooks
 // and info are bound read-only over that. claude and the
 // plugin are bound read-only; the network is pasta's, spliced to the
-// credential proxy on the host's 127.0.0.1 and nothing else.
+// credential proxy on the host's 127.0.0.1 and, with hosts pinned, to the
+// egress proxy, and nothing else.
 
 // In-container paths.
 const (
@@ -38,6 +39,10 @@ const (
 	labelState = "lsf.state"
 	labelSmoke = "lsf.smoke=1"
 )
+
+// noProxy is NO_PROXY in every container: loopback stays in the
+// container's own network namespace.
+const noProxy = "127.0.0.1,localhost,::1"
 
 // gitROBinds are the clone's .git entries bound read-only over its
 // writable bind.
@@ -79,9 +84,12 @@ func (rt *Runtime) containerArgv(s containerSpec) []string {
 	for _, l := range s.labels {
 		a = append(a, "--label", l)
 	}
-	network := s.network
+	network, egress := s.network, ""
 	if network == "" {
 		network = "pasta:--splice-only,-T," + rt.proxyPort()
+		if egress = rt.egressPort(); egress != "" {
+			network += ",-T," + egress
+		}
 	}
 	a = append(a, "--userns=keep-id", "--cap-drop=all", "--security-opt", "no-new-privileges",
 		"--read-only", "--tmpfs", "/tmp:rw,exec", "--network", network,
@@ -102,7 +110,11 @@ func (rt *Runtime) containerArgv(s containerSpec) []string {
 	if s.network == "" { // the API's route: only a call spliced to the proxy gets it
 		a = append(a, "-e", "ANTHROPIC_BASE_URL="+rt.Proxy().URL, "-e", "ANTHROPIC_AUTH_TOKEN")
 	}
-	a = append(a, "-e", "NO_PROXY=127.0.0.1", "-e", "no_proxy=127.0.0.1")
+	if egress != "" {
+		u := "http://127.0.0.1:" + egress
+		a = append(a, "-e", "HTTPS_PROXY="+u, "-e", "HTTP_PROXY="+u, "-e", "https_proxy="+u, "-e", "http_proxy="+u)
+	}
+	a = append(a, "-e", "NO_PROXY="+noProxy, "-e", "no_proxy="+noProxy)
 	for _, e := range rt.cfg.Env {
 		a = append(a, "-e", e)
 	}

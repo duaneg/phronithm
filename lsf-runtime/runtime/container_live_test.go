@@ -191,7 +191,7 @@ func TestLiveProbe(t *testing.T) {
 	}
 	want := map[string]string{
 		"HOME": "/tmp/home", "SHELL": "/bin/bash", "DISABLE_AUTOUPDATER": "1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-		"ANTHROPIC_AUTH_TOKEN": placeholder, "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1",
+		"ANTHROPIC_AUTH_TOKEN": placeholder, "NO_PROXY": "127.0.0.1,localhost,::1", "no_proxy": "127.0.0.1,localhost,::1",
 		"STUB_SCRIPT": "probe", "LSF_TEST_PASS": "passed",
 	}
 	for k, v := range want {

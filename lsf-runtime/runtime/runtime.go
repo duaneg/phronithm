@@ -50,10 +50,13 @@ type Runtime struct {
 	seenMu sync.Mutex
 	seen   map[string]string // journal key → input hash, this launch
 
-	hostsMu sync.Mutex
-	hosts   []string // the plan's network allowance, as PinHosts set it
+	hostsMu     sync.Mutex
+	hosts       []string // the plan's network allowance, as PinHosts set it
+	hostsPinned bool
 
-	proxy *proxy // the credential proxy, nil without a proxy config
+	proxy      *proxy                            // the credential proxy, nil without a proxy config
+	egress     atomic.Pointer[egressProxy]       // the egress proxy, nil without hosts
+	egressHook func(target string, allowed bool) // tests: every egress decision
 }
 
 // Run is a launch. It takes the state-dir lock, reaps orphans, installs
@@ -164,6 +167,9 @@ func Run(ctx context.Context, cfg Config, body func(ctx context.Context, rt *Run
 	if rt.proxy != nil {
 		rt.proxy.close() // calls are done; its count goes in the log before the end
 	}
+	if e := rt.egress.Load(); e != nil {
+		e.close()
+	}
 	s := rt.summarise(ctx, outcome, bodyErr, panicked)
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil { // an outcome that is not valid JSON
@@ -272,11 +278,32 @@ func (rt *Runtime) Log(msg string) {
 func (rt *Runtime) Args() json.RawMessage { return rt.cfg.Args }
 
 // PinHosts records the hosts the plan's gate block allows, as the launch
-// pinned them from the plan at args.planSha before any agent call.
+// pinned them from the plan at args.planSha before any agent call, and
+// starts the egress proxy that confines agent calls and setup to them when
+// there are any. A failed start, or a second pin with other hosts, sets the
+// runtime-error stop; the hosts stay pinned with no egress proxy, so setup
+// runs with no network. A second pin with the same hosts does nothing.
 func (rt *Runtime) PinHosts(hosts []string) {
 	rt.hostsMu.Lock()
 	defer rt.hostsMu.Unlock()
+	if rt.hostsPinned {
+		if !slices.Equal(rt.hosts, hosts) {
+			rt.setStop(StopRuntimeError, fmt.Sprintf("hosts pinned again with a different list (%v, was %v)", hosts, rt.hosts))
+		}
+		return
+	}
+	rt.hostsPinned = true
 	rt.hosts = slices.Clone(hosts)
+	if len(hosts) == 0 {
+		return
+	}
+	e, err := rt.startEgress(hosts)
+	if err != nil {
+		rt.Log("egress: " + err.Error())
+		rt.setStop(StopRuntimeError, "egress proxy: "+err.Error())
+		return
+	}
+	rt.egress.Store(e)
 }
 
 // Hosts are the pinned hosts, nil before PinHosts or for a plan with none.

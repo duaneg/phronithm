@@ -155,6 +155,8 @@ func TestClassifySynthetic(t *testing.T) {
 			classSessionLimit, time.Time{}},
 		{"bare 429 with a rejected event takes its reset", attempt{exitCode: 1, acc: accFromLines(initLine, limitEvent, limitResult)},
 			classSessionLimit, time.Unix(1791252000, 0)},
+		{"429 with overloaded is transient", attempt{exitCode: 1, acc: accFromLines(initLine,
+			`{"type":"assistant","error":"overloaded","message":{"content":[]}}`, limitResult)}, classTransient, time.Time{}},
 		{"null structured_output is invalid", attempt{acc: accFromLines(initLine,
 			`{"type":"result","subtype":"success","is_error":false,"structured_output":null}`)}, classInvalid, time.Time{}},
 		{"missing structured_output is invalid", attempt{acc: accFromLines(initLine,

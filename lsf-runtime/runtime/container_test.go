@@ -21,7 +21,7 @@ func wantArgv(rt *Runtime, cfg Config, name, dir string, git bool, o Opts, tools
 	_, port, _ := strings.Cut(strings.TrimPrefix(rt.Proxy().URL, "http://"), ":")
 	a := []string{"run", "--rm", "-i", "--init", "--pull=never", "--log-driver=none", "--name", name, "--label", "lsf.state=" + rt.stateHash,
 		"--userns=keep-id", "--cap-drop=all", "--security-opt", "no-new-privileges", "--read-only", "--tmpfs", "/tmp:rw,exec",
-		"--network", "pasta:--splice-only,-T," + port, "-v", dir + ":" + dir + ":rw"}
+		"--network", "pasta:--splice-only,-T," + port + egressSplice(rt), "-v", dir + ":" + dir + ":rw"}
 	if git {
 		a = append(a, "-v", dir+"/.git:"+dir+"/.git:rw")
 		for _, g := range []string{"config", "hooks", "info"} {
@@ -31,7 +31,8 @@ func wantArgv(rt *Runtime, cfg Config, name, dir string, git bool, o Opts, tools
 	}
 	a = append(a, "-v", cfg.ClaudeBin+":/opt/claude/claude:ro", "-v", cfg.PluginDir+":/opt/plugin:ro", "-w", dir,
 		"-e", "HOME=/tmp/home", "-e", "SHELL=/bin/bash", "-e", "DISABLE_AUTOUPDATER=1", "-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
-		"-e", "ANTHROPIC_BASE_URL="+rt.Proxy().URL, "-e", "ANTHROPIC_AUTH_TOKEN", "-e", "NO_PROXY=127.0.0.1", "-e", "no_proxy=127.0.0.1")
+		"-e", "ANTHROPIC_BASE_URL="+rt.Proxy().URL, "-e", "ANTHROPIC_AUTH_TOKEN")
+	a = append(a, proxyEnv(rt)...)
 	for _, e := range cfg.Env {
 		a = append(a, "-e", e)
 	}
@@ -45,6 +46,24 @@ func wantArgv(rt *Runtime, cfg Config, name, dir string, git bool, o Opts, tools
 	}
 	return append(a, "--strict-mcp-config", "--plugin-dir", "/opt/plugin", "--tools", tools,
 		"--dangerously-skip-permissions", "--json-schema", string(o.Schema))
+}
+
+// egressSplice is the network's egress splice, "" without hosts.
+func egressSplice(rt *Runtime) string {
+	if p := rt.egressPort(); p != "" {
+		return ",-T," + p
+	}
+	return ""
+}
+
+// proxyEnv is the proxy variables a call or setup gets.
+func proxyEnv(rt *Runtime) []string {
+	var a []string
+	if p := rt.egressPort(); p != "" {
+		u := "http://127.0.0.1:" + p
+		a = append(a, "-e", "HTTPS_PROXY="+u, "-e", "HTTP_PROXY="+u, "-e", "https_proxy="+u, "-e", "http_proxy="+u)
+	}
+	return append(a, "-e", "NO_PROXY=127.0.0.1,localhost,::1", "-e", "no_proxy=127.0.0.1,localhost,::1")
 }
 
 func flagValue(argv []string, flag string) string {
@@ -97,8 +116,15 @@ func TestCallContainerArgv(t *testing.T) {
 		return nil, nil
 	})
 	for i, w := range want {
-		if got := podmanRun(t, stub, runs[i]); !slices.Equal(got, w) {
+		got := podmanRun(t, stub, runs[i])
+		if !slices.Equal(got, w) {
 			t.Errorf("run %d argv\n got %q\nwant %q", runs[i], got, w)
+		}
+		if slices.ContainsFunc(got, func(a string) bool {
+			return strings.Contains(strings.ToUpper(a), "HTTPS_PROXY") || strings.Contains(strings.ToUpper(a), "HTTP_PROXY")
+		}) ||
+			strings.Count(flagValue(got, "--network"), "-T") != 1 {
+			t.Errorf("run %d: proxy variables or an egress splice without hosts: %q", runs[i], got)
 		}
 	}
 	runFiles, _ := filepath.Glob(filepath.Join(stub, "podman", "run.*"))
@@ -431,5 +457,32 @@ func TestRemovalRacingRm(t *testing.T) {
 	res, err := call(t, cfg, vOpts)
 	if err != nil || res.Value == nil {
 		t.Errorf("res %+v err %v", res, err)
+	}
+}
+
+// With hosts pinned a call's network splices the egress proxy and its env
+// carries the proxy variables; without, neither (TestCallContainerArgv).
+func TestCallContainerEgressArgv(t *testing.T) {
+	cfg, stub := testConfig(t)
+	t.Setenv("STUB_SCRIPT", "ok")
+	var port string
+	var want []string
+	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		rt.PinHosts([]string{"registry.npmjs.org"})
+		port = rt.egressPort()
+		o := Opts{Label: "implement:u1", Schema: json.RawMessage(verdictSchema)}
+		if _, err := rt.Call(ctx, "x", o); err != nil {
+			t.Fatal(err)
+		}
+		_, role := rt.cfg.roleFor(o)
+		want = wantArgv(rt, rt.cfg, flagValue(podmanRun(t, stub, 1), "--name"), filepath.Join(cfg.StateDir, "clone", journalKey(o.Label)), true, o, role.Tools)
+		return nil, nil
+	})
+	got := podmanRun(t, stub, 1)
+	if !slices.Equal(got, want) {
+		t.Errorf("argv\n got %q\nwant %q", got, want)
+	}
+	if port == "" || !strings.HasSuffix(flagValue(got, "--network"), ",-T,"+port) || !slices.Contains(got, "HTTPS_PROXY=http://127.0.0.1:"+port) || !slices.Contains(got, "http_proxy=http://127.0.0.1:"+port) {
+		t.Errorf("no egress splice or proxy variables for port %q: %q", port, got)
 	}
 }
