@@ -24,6 +24,7 @@
 #        nested:<marker> (commits a nested repo, sub, as a gitlink with a
 #        .gitmodules ignore=none, its own filter touching <marker>, then
 #        dirties it, then ok) |
+#        sh (runs $STUB_SH with bash in cwd, then ok) |
 #        probe (writes probe.txt in cwd: cwd, uid, which of .git/config,
 #        .git/hooks/x, .git/info/x and the index can be written, env, and the
 #        status of a request to $ANTHROPIC_BASE_URL with the bearer, then ok)
@@ -134,6 +135,7 @@ case "$mode" in
              [ "$code" = 0 ] && result_ok '{"verdict":"pass","n":3}' ;;
   stage:*)   f=${mode#stage:}; echo resolved > "$f"
              if git add -- "$f" >&2; then result_ok '{"verdict":"pass","n":3}'; else code=2; fi ;;
+  sh)        bash -c "${STUB_SH:-}" >&2; result_ok '{"verdict":"pass","n":3}' ;;
   probe)     {
                echo "cwd=$(pwd -P)"
                echo "uid=$(id -u)"

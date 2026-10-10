@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -404,5 +405,179 @@ func TestLiveGate(t *testing.T) {
 	}
 	if left := liveContainers(t, cfg); len(left) > 0 {
 		t.Errorf("containers left: %q", left)
+	}
+}
+
+// egressDecisions collects the egress proxy's decisions as "allowed T" or
+// "refused T".
+type egressDecisions struct {
+	mu  sync.Mutex
+	got []string
+}
+
+func (d *egressDecisions) hook(target string, ok bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if ok {
+		d.got = append(d.got, "allowed "+target)
+	} else {
+		d.got = append(d.got, "refused "+target)
+	}
+}
+
+func (d *egressDecisions) list() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Clone(d.got)
+}
+
+// liveNet skips a live test that needs the internet when the npm registry
+// is unreachable from the host, unless LSF_LIVE_REQUIRE=1.
+func liveNet(t *testing.T) {
+	t.Helper()
+	c := http.Client{Timeout: 15 * time.Second}
+	resp, err := c.Get("https://registry.npmjs.org/")
+	if err == nil {
+		resp.Body.Close()
+		return
+	}
+	if os.Getenv("LSF_LIVE_REQUIRE") == "1" {
+		t.Fatalf("live test required: registry.npmjs.org unreachable: %v", err)
+	}
+	t.Skip("live: registry.npmjs.org unreachable")
+}
+
+// L-egress: Bash in a call with hosts [registry.npmjs.org] reaches the
+// registry through the egress proxy, and is refused an undeclared host,
+// plain HTTP and the direct route (status/CONNECT status per URL).
+func TestLiveEgress(t *testing.T) {
+	cfg := liveConfig(t)
+	liveNet(t)
+	cfg.Env = append(cfg.Env, "STUB_SH")
+	t.Setenv("STUB_SCRIPT", "sh")
+	t.Setenv("STUB_SH", `{
+for u in https://registry.npmjs.org/ https://example.com/ http://registry.npmjs.org/; do
+  echo "$u $(curl -sS -o /dev/null -w '%{http_code}/%{http_connect}' --max-time 30 "$u" 2>/dev/null)"
+done
+echo "direct $(curl -sS --noproxy '*' -o /dev/null -w '%{http_code}' --max-time 10 https://registry.npmjs.org/ 2>&1 | tr '\n' ' ')"
+} > egress.txt`)
+	var d egressDecisions
+	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		rt.egressHook = d.hook
+		rt.PinHosts([]string{"registry.npmjs.org"})
+		_, err := rt.Call(ctx, "x", vOpts)
+		return nil, err
+	})
+	b, err := os.ReadFile(filepath.Join(cfg.StateDir, "clone", journalKey(vOpts.Label), "egress.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(b)
+	t.Logf("egress.txt:\n%s\ndecisions %q", out, d.list())
+	for _, want := range []string{"https://registry.npmjs.org/ 200/200", "https://example.com/ 000/403", "http://registry.npmjs.org/ 403/000"} {
+		if !strings.Contains(out, want+"\n") {
+			t.Errorf("want %q", want)
+		}
+	}
+	if strings.Contains(out, "direct 200") || !strings.Contains(out, "direct ") {
+		t.Errorf("the direct route: %q", out)
+	}
+	got := d.list()
+	for _, want := range []string{"allowed registry.npmjs.org:443", "refused example.com:443", "refused registry.npmjs.org"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("decisions %q lack %q", got, want)
+		}
+	}
+	if len(got) != 3 {
+		t.Errorf("decisions %q, want 3", got)
+	}
+}
+
+// L-setup-hosts: setup under hosts installs a dependency into the shared
+// gate home; a gate with no network uses it; a gate that reaches for the
+// registry is red; the egress proxy saw only setup's request.
+func TestLiveGatesSetupHosts(t *testing.T) {
+	cfg := liveConfig(t)
+	liveNet(t)
+	sha := gateRepo(t, &cfg)
+	var d egressDecisions
+	var runs []GateRun
+	var err error
+	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		rt.egressHook = d.hook
+		rt.PinHosts([]string{"registry.npmjs.org"})
+		runs, err = rt.RunGates(ctx, "gates:deps", sha,
+			`curl -fsSL --max-time 60 -o "$HOME/dep.tgz" https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz && tar -xzf "$HOME/dep.tgz" -C "$HOME"`,
+			[]GateSpec{
+				{Name: "uses", Command: `grep -q '"name": "is-number"' "$HOME/package/package.json"`},
+				{Name: "offline", Command: `curl -sS --max-time 10 -o /dev/null https://registry.npmjs.org/`},
+			})
+		return nil, err
+	})
+	if err != nil || len(runs) != 2 || runs[0].Status != GateGreen || runs[1].Status != GateRed {
+		t.Fatalf("%v %+v", err, runs)
+	}
+	if got := d.list(); !slices.Equal(got, []string{"allowed registry.npmjs.org:443"}) {
+		t.Errorf("decisions %q", got)
+	}
+	if left := liveContainers(t, cfg); len(left) > 0 {
+		t.Errorf("containers left: %q", left)
+	}
+}
+
+// L-gate-timeout: a gate that outlives its timeout is not-run and its
+// container is removed.
+func TestLiveGateTimeout(t *testing.T) {
+	cfg := liveConfig(t)
+	cfg.KillGrace = Duration(time.Second)
+	sha := gateRepo(t, &cfg)
+	runs, err, _ := runGates(t, cfg, "gates:slow", sha, "", []GateSpec{{Name: "slow", Command: "trap '' TERM; sleep 300", Timeout: 2 * time.Second}})
+	if err != nil || runs[0].Status != GateNotRun || runs[0].Secs > 30 {
+		t.Fatalf("%v %+v", err, runs)
+	}
+	if left := liveContainers(t, cfg); len(left) > 0 {
+		t.Errorf("containers left: %q", left)
+	}
+}
+
+// L-paid: one real Claude Code call (haiku, low effort) with hosts
+// [registry.npmjs.org] whose Bash curls the registry and an undeclared
+// host. Judged by the egress proxy's decisions, not the model's report.
+// Runs only with LSF_LIVE_PAID=1; spends real credit (capped at $0.50).
+func TestLivePaidEgress(t *testing.T) {
+	if os.Getenv("LSF_LIVE_PAID") != "1" {
+		t.Skip("paid: set LSF_LIVE_PAID=1")
+	}
+	cfg := liveConfig(t)
+	liveNet(t)
+	home, _ := os.UserHomeDir()
+	cfg.ClaudeBin = filepath.Join(home, ".local", "share", "claude", "versions", "2.1.294")
+	cfg.ClaudeVersion = "2.1.294"
+	cfg.Proxy = &ProxyConfig{Listen: "127.0.0.1:0", CredentialsFile: filepath.Join(home, ".claude", ".credentials.json")}
+	cfg.Caps = Caps{MaxCalls: 2, MaxCostUSD: 0.5}
+	cfg.Backoff = nil
+	cfg.Env = nil
+	o := Opts{Label: "implement:paid-egress", Model: "haiku", Effort: "low",
+		Schema: json.RawMessage(`{"type":"object","properties":{"registry":{"type":"string"},"example":{"type":"string"}},"required":["registry","example"]}`)}
+	var d egressDecisions
+	var res CallResult
+	s := launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		rt.egressHook = d.hook
+		rt.PinHosts([]string{"registry.npmjs.org"})
+		var err error
+		res, err = rt.Call(ctx, "Use the Bash tool to run these two commands, exactly as written, one after the other, and report each one's output (an HTTP status code) in the schema: "+
+			"`curl -sS -o /dev/null -w '%{http_code}' --max-time 30 https://registry.npmjs.org/` (as registry) and "+
+			"`curl -sS -o /dev/null -w '%{http_code}' --max-time 30 https://example.com/` (as example). Run nothing else.", o)
+		return nil, err
+	})
+	t.Logf("result %s class %s cost %.4f; summary cost %.4f; decisions %q", res.Value, res.Class, res.CostUSD, s.CostUSD, d.list())
+	got := d.list()
+	if !slices.Contains(got, "allowed registry.npmjs.org:443") || !slices.Contains(got, "refused example.com:443") {
+		t.Errorf("decisions %q", got)
+	}
+	for _, g := range got {
+		if g != "allowed registry.npmjs.org:443" && strings.HasPrefix(g, "allowed ") {
+			t.Errorf("an undeclared target was allowed: %s", g)
+		}
 	}
 }
