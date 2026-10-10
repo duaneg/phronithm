@@ -2,3 +2,7 @@
 # Distribution), written by dist/pin.sh <tag>. Lines: tag <tag>,
 # commit <sha> (the tag's commit, for dist/check-pin.sh), and
 # sha256 <arch> <hex>. With no tag, no release is pinned.
+tag lsf-runtime-v0.0.1-rc1
+commit fee8015ca58fb8a5cb7e5160cb3521c1ca10f06c
+sha256 amd64 f6bd578bf75bd180d09eeff3edc4afcd30179646daafe3913bd69c0670d685ff
+sha256 arm64 77e958f280b1cbb6fced095ca5cb3f9b95607149321c19f60fdf633ce8ec9c8c
