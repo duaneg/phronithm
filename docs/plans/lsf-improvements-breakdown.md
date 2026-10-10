@@ -2,7 +2,7 @@
 
 ## Summary
 
-A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 44 units, 24 complete; critical path 8 units, two chains joining at `script-retirement`: the empirical unit verdict through the retained-artefact move, and the runtime CLI through distribution, then the serialised orchestrator stream. Base commit `b3dac6a`.
+A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 44 units, 25 complete; critical path 8 units: the runtime CLI through distribution, then the serialised orchestrator stream. Base commit `b3dac6a`.
 
 The postmortem's problems are taken as accurate for archipeligo. The proposals in [lsf-improvements](../design/lsf-improvements.md) are candidate options, not designs: every decision unit states its problem without a solution, checks whether the problem holds outside archipeligo, and weighs the proposal against alternatives that include doing nothing.
 
@@ -64,6 +64,8 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 
 ### empirical-criteria-design — complete at `53404c5`; entry at `14f2a07`; report `docs/design/lsf-empirical-work.md` (Criteria)
 
+### empirical-unit-design — complete at `984e248`; entry at `9b92ee4`; report `docs/design/lsf-empirical-work.md` (Units)
+
 ### significant-precision-sample
 - **Type**: design
 - **Risk**: medium — a hand classification; the rubric decides the answer
@@ -76,19 +78,6 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **External gates**: `archipeligo-records` (data, `~/src/archipeligo-evolved` @ `c220c62`, 21 ledgers); `cartomancer-records` (data, `quality-bar-interiors-signals.md`, 1.3 MB)
 - **Done condition**: The record is committed with the sampling frame, sample size and classification rubric fixed before any row is classified and stated as such; ledger rows deduplicated into findings; and a precision estimate with an interval per source stage (plan critique, code critique, lens review) for each project. `phronithm:critique` passes at the gate bar.
 - **Description**: Postmortem §B and its data gap: Significant-finding precision is unmeasured. Run with `phronithm:investigate`. Without it, any consumer for these findings is chosen blind.
-
-### empirical-unit-design
-- **Type**: design
-- **Risk**: high — `phronithm:breakdown` is used outside lsf, so a change here reaches every plan
-- **Clarity**: exploratory
-- **Iteration**: write-once
-- **Effort**: medium
-- **Scope**: `docs/design/lsf-empirical-work.md::units`
-- **Publishes**: the decided plan-level shape of empirical work; where `Retains:` and the store are declared
-- **Depends on**: problem-register (knowledge, problem ids and generality classes); empirical-criteria-design (design, the criteria form a unit's registration cites); gate-results-integrity (knowledge, an empty gates list stops with `gate-not-run`)
-- **External gates**: `archipeligo-records` (data, `~/src/archipeligo-evolved` @ `c220c62`); `requester-verdict` (organisational)
-- **Done condition**: The Units section is committed. It decides how a plan represents work whose outcome is a measurement, comparing at least a new unit type, added entry fields, and routing the work to `phronithm:investigate`. It covers fail branches (P-A4), the risk and clarity rating of sampled work (P-A5), companion tuning units (P-A6), sizing under outcome uncertainty (P-A9), and a measurement that supersedes cited evidence without moving a decision (P-A10). It decides what a non-design unit declares as its gate in a project with no gate of its own, for measurement and docs units, since an empty gates list stops with `gate-not-run`; the options include a declared `lsf-gates` block, whose `gates` list may not be empty. It decides where a unit's `Retains:` declaration and a project's store are declared (`lsf-empirical-work.md`, Retained artefacts). A measurement unit's registration cites C2's form (`lsf-empirical-work.md`, Criteria). It is walked against `stage1-gate` at `arch@dc88280` and `stage2-horizon-confirm`. The requester's verdict is recorded.
-- **Description**: Postmortem §A's unit-level bullets: campaigns typed `feature` or `integration`, units sized by context and not by outcome uncertainty, measured values accumulating in the architecture document.
 
 ### findings-consumer-design
 - **Type**: design
@@ -124,9 +113,9 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Effort**: medium
 - **Scope**: `lsf-runtime/plan`, `lsf-runtime/orchestrator`, `lsf-runtime/runtime`, `docs/design/lsf-runtime.md::runtime`, `docs/design/lsf-workflow.md::wave-loop`
 - **Publishes**: the `Retains:` declaration's parse and store check; the journaled move to `<store>/<unit>/`
-- **Depends on**: retained-artefacts-design (design, the policy); empirical-unit-design (design, where `Retains:` and the store are declared); code-merge-cleanup (logical, cleanup as a code stage); s2-clones (logical, kept clones and their removal at cleanup); s2-egress-gates (logical, serialises the runtime files)
+- **Depends on**: retained-artefacts-design (design, the policy); empirical-unit-design (design, U8: `retains` per unit in the `lsf-plan` block, `store:` in the `lsf-gates` block); code-merge-cleanup (logical, cleanup as a code stage); s2-clones (logical, kept clones and their removal at cleanup); s2-egress-gates (logical, serialises the runtime files)
 - **External gates**: `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`)
-- **Done condition**: A unit's `Retains:` paths are read where `empirical-unit-design` places them, and a `Retains:` line in a project with no declared store fails the load, and so the pre-flight command. At cleanup, a merged unit's kept clones' `Retains:` paths are moved to `<store>/<unit>/`, `<unit>` being the plan's unit id, before the clone is removed; every other ignored or untracked file goes with it, listed in the report. The move is a journaled runtime step: a test kills it mid-move and the resume completes it without stopping on its own partial destination or losing a path, and a destination that exists before the move stops it with the clone kept. A test moves across filesystems and shows the source is removed only after the copy verifies by the method the unit decides. `code-merge-cleanup`'s cleanup tests pass. The tests pass.
+- **Done condition**: A unit's `retains: [paths]` is read from its `lsf-plan` block entry and the project's store from a `store:` key in the `lsf-gates` block, an absolute host path outside the repository, pinned at launch with the rest of the block (`lsf-empirical-work.md` §Units, U8). A `retains` path that is absolute or contains `..` fails the load, and the move refuses one that resolves outside the clone. A `retains` entry in a plan whose `lsf-gates` block has no `store` fails the load, and so the pre-flight command. A block holding `store` alone loads and declares no gates and no hosts. At cleanup, a merged unit's kept clones' `Retains:` paths are moved to `<store>/<unit>/`, `<unit>` being the plan's unit id, before the clone is removed; every other ignored or untracked file goes with it, listed in the report. The move is a journaled runtime step: a test kills it mid-move and the resume completes it without stopping on its own partial destination or losing a path, and a destination that exists before the move stops it with the clone kept. A test moves across filesystems and shows the source is removed only after the copy verifies by the method the unit decides. `code-merge-cleanup`'s cleanup tests pass. The tests pass.
 - **Description**: The runtime half of `lsf-empirical-work.md`'s Retained artefacts. The parse and the move land together, so no interim rule keeps a worktree for an unmoved declaration. Cleanup's removal is `lsfrt.Runtime.RemoveWorktree` (name kept by `s2-clones`), which removes a label's kept clone `clone/<key>` or a code step's worktree `wt/<key>`, keeps one with commits not fetched, deletes everything untracked or ignored and lists it, and every branch of a merged unit is deleted with it; the move runs before that call, per clone label. `lsf-empirical-work.md` states the policy for worktrees; a kept clone takes the worktree's place one for one (requester verdict, 2026-10-08). The runtime moves on the host; an agent's container mounts no path outside its clone. **Flag:** three code surfaces exceed the surface bound; the `plan` change is one field and its load check, so the excess is not context.
 
 ### runtime-cli-drive
@@ -163,23 +152,23 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Effort**: medium
 - **Scope**: `workflows/`, `lsf-runtime/tools`, `lsf-runtime/orchestrator`, `lsf-runtime/plan/graph.go`, `lsf-runtime/plan/gates.go`, `docs/plan-graph.md::gate-block`, `skills/breakdown/SKILL.md::phase-1`, `docs/design/lsf-workflow.md::constraints`, `docs/design/lsf-workflow.md::lifecycle-mapping`, `docs/design/lsf-workflow.md::wave-loop`, `docs/design/lsf-workflow.md::escalation`, `docs/design/lsf-workflow.md::persistence`, `docs/design/lsf-workflow.md::testing`, `CLAUDE.md`
 - **Publishes**: none
-- **Depends on**: runtime-cli-drive (testing, the replacement path runs through `phronithm:lsf-drive`); runtime-distribution (logical, plugin users get the runtime before the script is deleted); retained-artefacts-impl (logical, serialises the orchestrator and plan files; the runtime is the only path only once a `Retains:` line is honoured); empirical-unit-design (design, the gate a project with no gate of its own declares)
+- **Depends on**: runtime-cli-drive (testing, the replacement path runs through `phronithm:lsf-drive`); runtime-distribution (logical, plugin users get the runtime before the script is deleted); retained-artefacts-impl (logical, serialises the orchestrator and plan files; the runtime is the only path only once a `Retains:` line is honoured); empirical-unit-design (design, U9's `gates: []` for a project with no gate of its own)
 - **External gates**: none
-- **Done condition**: `workflows/` is deleted: the generated script, the JavaScript orchestrator and its tests, `build.js` and the spike. The JavaScript parity tools under `lsf-runtime/tools` (`graphparity`, `promptparity`) are deleted with it, and `go test` has no `node` dependency; the pinned plan fixtures and the divergence registers in `plan/doc.go` and `orchestrator/doc.go` stay. No `// js:` title in the orchestrator tests cites the deleted `implement.test.js` as if it existed: each is deleted, or amended to cite it at a named commit. `lsf-workflow.md` describes the runtime's stages, not the Workflow script's, in per-call clones and a merge clone as `lsf-runtime.md`'s Permissions places them, not worktrees: no copy, scribe or cleanup agent, load-stage agent, or model-call merge (the Go merge's conflict call stays) remains in the Constraints, Lifecycle mapping, Wave loop, Escalation, Persistence or Testing sections. No Go comment describes a stage the Go runs as code as an agent or copy stage (`plan/graph.go`, `orchestrator/report.go`, `prompts.go`, `orchtest/fixtures.go`, as of `code-stage-interface`), and `orchtest`'s `Stub.Call` has no branch for the JavaScript merge prompt. `CLAUDE.md`'s Structure section names `lsf-runtime/` and no longer `workflows/`. The unit decides whether a plan must declare its gates, consistent with `empirical-unit-design`'s gate for a project with none, and records it in `lsf-workflow.md::lifecycle-mapping` with the disposition of R11 and R12 for undeclared plans. If a plan must declare, the load rejects one with no `lsf-gates` block, and `docs/plan-graph.md` and `phronithm:breakdown`'s Phase 1 step 4 say so; otherwise stage-reported gates, `gate-omitted` and the long-gate recipe stay for undeclared plans and are described as the runtime's. The `lsf-runtime` tests pass.
+- **Done condition**: `workflows/` is deleted: the generated script, the JavaScript orchestrator and its tests, `build.js` and the spike. The JavaScript parity tools under `lsf-runtime/tools` (`graphparity`, `promptparity`) are deleted with it, and `go test` has no `node` dependency; the pinned plan fixtures and the divergence registers in `plan/doc.go` and `orchestrator/doc.go` stay. No `// js:` title in the orchestrator tests cites the deleted `implement.test.js` as if it existed: each is deleted, or amended to cite it at a named commit. `lsf-workflow.md` describes the runtime's stages, not the Workflow script's, in per-call clones and a merge clone as `lsf-runtime.md`'s Permissions places them, not worktrees: no copy, scribe or cleanup agent, load-stage agent, or model-call merge (the Go merge's conflict call stays) remains in the Constraints, Lifecycle mapping, Wave loop, Escalation, Persistence or Testing sections. No Go comment describes a stage the Go runs as code as an agent or copy stage (`plan/graph.go`, `orchestrator/report.go`, `prompts.go`, `orchtest/fixtures.go`, as of `code-stage-interface`), and `orchtest`'s `Stub.Call` has no branch for the JavaScript merge prompt. `CLAUDE.md`'s Structure section names `lsf-runtime/` and no longer `workflows/`. The unit decides whether a plan must declare its gates, a project with none declaring `gates: []` (`lsf-empirical-work.md` §Units, U9; implemented by `empirical-script-support`), and records it in `lsf-workflow.md::lifecycle-mapping` with the disposition of R11 and R12 for undeclared plans. If a plan must declare, the load rejects one with no `lsf-gates` block, and `docs/plan-graph.md` and `phronithm:breakdown`'s Phase 1 step 4 say so; otherwise stage-reported gates, `gate-omitted` and the long-gate recipe stay for undeclared plans and are described as the runtime's. The `lsf-runtime` tests pass.
 - **Description**: Ends `lsf-substrate.md`'s interim policy: the Workflow script is the supported Phase 3 path until this unit, and the design document describes it until then. **Flag:** five surfaces exceed the surface bound; four are deletions or comment edits, so the context load is the design document's rewrite; the declaration rule, if adopted, is a load check and two sentences.
 
 ### empirical-script-support
 - **Type**: feature
-- **Risk**: medium — provisional on `empirical-unit-design`
-- **Clarity**: exploratory
+- **Risk**: medium — changes the gate contract (a note, not an invalidation, for a listed open decision) and the re-plan's `document-text` definition
+- **Clarity**: specified
 - **Iteration**: write-once
 - **Effort**: medium
-- **Scope**: `lsf-runtime/plan`, `lsf-runtime/orchestrator`, `docs/design/lsf-workflow.md::wave-loop`
-- **Publishes**: the plan-block fields and gate behaviour the empirical design decided
-- **Depends on**: empirical-unit-design (design, plan-level shape); script-retirement (logical, serialises the orchestrator files)
+- **Scope**: `lsf-runtime/plan`, `lsf-runtime/orchestrator`, `docs/design/lsf-workflow.md::lifecycle-mapping`, `docs/design/lsf-workflow.md::wave-loop`, `docs/design/lsf-workflow.md::shared-stage-schema`
+- **Publishes**: the `measurement` type in the plan block; the implement return's Outcomes row; `gates: []`
+- **Depends on**: empirical-unit-design (design, U1, U3 and U9); script-retirement (logical, serialises the orchestrator and plan files)
 - **External gates**: `lsf-toolchain` (environment, Go 1.27.1, pinned in `lsf-runtime/go.mod`)
-- **Done condition**: Tests show the parser accepts every plan-block field the empirical design adds other than `Retains:`, which `retained-artefacts-impl` parses, that a measurement superseding a cited figure with no decision moved is handled as the design decided, and that a non-design unit in a project with no gate of its own reaches review with the gate the design decided. The tests pass.
-- **Description**: **Provisional.** Retired if the design routes empirical work outside the plan block and leaves the gate unchanged.
+- **Done condition**: Tests show each of `lsf-empirical-work.md` §Units' runtime halves. The plan block accepts the `measurement` type, which runs the project's gates like any non-design unit and is reviewed with `critique-code` and the `general` and `numerical` lenses (U1). A measurement unit's implement stage returns which Outcomes row held, its code critique is told to check it against the committed registration, and the re-plan receives it as an item (U2, U3). The gate is told that the outcome of the unit an open decision in the architecture's Open design decisions list waits on does not invalidate that decision and is returned as a note naming the section, the Outcomes row and the decision the entry gave; the same outcome falsifying another decision is still an invalidation (U3). The re-plan's `document-text` definition admits an open decision resolved to the option the architecture gave for the reported outcome, and an outcome whose decision the entry did not give is `cannot` (U3). An `lsf-gates` block may declare `gates: []`: `setup` is refused with it, stages are told no gates are declared and return `gates` empty, reviewers are told nothing ran, neither `gate-omitted` nor `gate-not-run` fires, and merges are not gated; a block holding `hosts` alone still means stages report their own gates (U9). The design's Lifecycle mapping, Wave loop and Shared stage schema sections describe each. The tests pass.
+- **Description**: The runtime half of the Units decision; the skill half is `empirical-unit-impl`'s and the `retains`/`store` parse `retained-artefacts-impl`'s. The frozen Workflow script does not learn the type or `gates: []` (U1, U9). Removing the dependants of Outcomes rows that did not hold is breakdown's re-plan rule (`empirical-unit-impl`); this unit carries the reported row to it. **Flag:** three surfaces exceed the surface bound; the design changes are paragraphs in sections the unit's behaviour already describes, so the excess is not context.
 
 ### findings-consumer-impl
 - **Type**: feature
@@ -204,7 +193,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: the decision on work that outlasts a stage
 - **Depends on**: substrate-spike (design, confirmed substrate); runtime-core (knowledge, the runtime's supervision of its calls); s2-permissions-design (design, per-call clones); s2-boundary-decision (design, the decided boundary); empirical-unit-design (design, plan-level shape); retained-artefacts-design (design, retained-artefact policy for a job's outputs); gate-results-integrity (knowledge, the `gate-not-run` stop and the long-gate recipe)
 - **External gates**: none
-- **Done condition**: `docs/design/lsf-long-running.md` is committed. It decides how work that outlasts one agent stage runs under the host runtime, and states the behaviour of the wave barrier, a re-plan while the work is in flight, resume, liveness, and a process left behind by a stopped run. On resume it distinguishes an interrupted attempt from one a re-plan or decision superseded, and states what happens to the interrupted attempt's commits and untracked outputs. It states the behaviour for a descendant that holds a call's stdout after the call exits (not group-killed; the call returns `killGrace` late) and for a retry after partial work. A call's container is removed when the call ends (`--rm`, `--init`, `podman rm -f` at teardown), so no process outlives its call inside it: the design states where a job that outlasts a stage runs (its own container, as a gate command does, or another route), that it reaches only the gate block's `hosts`, and how its outputs survive the clone, which stays until its unit's cleanup. It states the route for a project gate that cannot finish within one stage even with the long-gate recipe, which in a plan with no `lsf-gates` block stops with `gate-not-run` and has no exit through the workflow. For a declared plan, it states how gate runs count against `maxWallClock`: every gate checkout is a cold build in a plain clone fetching the commit's whole history, every merge but a wave's first reruns the gates, units gate one after another under `gateConcurrency` 1, a broken environment costs each waiting unit its full timeout, and a stop kills an in-flight gate, which reruns on relaunch (requester decision, 2026-10-08). It states how a job's outputs fall under the retained-artefact classes: cited by recipe if regenerable, otherwise declared by `Retains:` and moved to the store. `phronithm:critique` (critique-design) passes at the gate bar.
+- **Done condition**: `docs/design/lsf-long-running.md` is committed. It decides how work that outlasts one agent stage runs under the host runtime, and states the behaviour of the wave barrier, a re-plan while the work is in flight, resume, liveness, and a process left behind by a stopped run. On resume it distinguishes an interrupted attempt from one a re-plan or decision superseded, and states what happens to the interrupted attempt's commits and untracked outputs. It states the behaviour for a descendant that holds a call's stdout after the call exits (not group-killed; the call returns `killGrace` late) and for a retry after partial work. A call's container is removed when the call ends (`--rm`, `--init`, `podman rm -f` at teardown), so no process outlives its call inside it: the design states where a job that outlasts a stage runs (its own container, as a gate command does, or another route), that it reaches only the gate block's `hosts`, and how its outputs survive the clone, which stays until its unit's cleanup. It states the route for a project gate that cannot finish within one stage even with the long-gate recipe, which in a plan with no `lsf-gates` block stops with `gate-not-run` and has no exit through the workflow. For a declared plan, it states how gate runs count against `maxWallClock`: every gate checkout is a cold build in a plain clone fetching the commit's whole history, every merge but a wave's first reruns the gates, units gate one after another under `gateConcurrency` 1, a broken environment costs each waiting unit its full timeout, and a stop kills an in-flight gate, which reruns on relaunch (requester decision, 2026-10-08). It states how a job's outputs fall under the retained-artefact classes: cited by recipe if regenerable, otherwise declared by `Retains:` and moved to the store. It places a `measurement` unit's runs, and the route of an Outcomes row reported after a run outlasting its stage (`lsf-empirical-work.md` §Units, Plan consequences). `phronithm:critique` (critique-design) passes at the gate bar.
 - **Description**: Postmortem §A: 18 campaign stages took 39.7 of 62.1 implement agent-hours; one campaign outlived its stage and left an orphan process.
 
 ### long-running-impl
@@ -228,10 +217,10 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Effort**: medium
 - **Scope**: `docs/success-criteria.md`, `skills/large-scale-feature/SKILL.md::phase-1`, `skills/large-scale-feature/SKILL.md::phase-2`
 - **Publishes**: `docs/success-criteria.md` (C1–C5 and the critic's checks)
-- **Depends on**: empirical-criteria-design (design, `lsf-empirical-work.md` §Criteria)
+- **Depends on**: empirical-criteria-design (design, `lsf-empirical-work.md` §Criteria); empirical-unit-design (design, §Units U3's Phase 2 clause)
 - **External gates**: none
-- **Done condition**: `docs/success-criteria.md` states the Terms, C1–C5 and the Checking list of `lsf-empirical-work.md` §Criteria (Proposed decision), with C4's axes marked untested. `skills/large-scale-feature/SKILL.md` points to it by anchor from Phase 1 steps 6–7, Phase 2 steps 2–3 and exit criteria, and re-entry step a; Phase 1 step 7 and Phase 2 step 3 give the critic the document and its checks, and re-entry recommends a vision review after a criterion's second relaxation. The completion report maps each bullet of the Proposed decision to the line carrying it, or states why it is left out. `phronithm:critique` (critique-skill) passes at the gate bar over the document and the skill diff, and a `phronithm:edit` pass has been applied to both.
-- **Description**: Carries the decided criteria into Phases 1–2. The requirements live in their own document, which the skill points to as it does `critique-gate.md` (requester, 2026-10-10), so the skill's reading cost grows by pointers, not rules (R7). The record's Not covered cases (design-figure arithmetic, uncited reliance) are declined and get no text.
+- **Done condition**: `docs/success-criteria.md` states the Terms, C1–C5 and the Checking list of `lsf-empirical-work.md` §Criteria (Proposed decision), with C4's axes marked untested. `skills/large-scale-feature/SKILL.md` points to it by anchor from Phase 1 steps 6–7, Phase 2 steps 2–3 and exit criteria, and re-entry step a; Phase 1 step 7 and Phase 2 step 3 give the critic the document and its checks, and re-entry recommends a vision review after a criterion's second relaxation. Phase 2 says to list each decision that rests on a measurement still to run under the architecture's Open design decisions, naming the measurement, its expected outcomes and, for each outcome Phase 2 can design, the decision taken (§Units, U3). The completion report maps each bullet of the Criteria Proposed decision, and U3's Open-until-measured bullet, to the line carrying it, or states why it is left out. `phronithm:critique` (critique-skill) passes at the gate bar over the document and the skill diff, and a `phronithm:edit` pass has been applied to both.
+- **Description**: Carries the decided criteria, and U3's Phase 2 clause (requester, 2026-10-10), into Phases 1–2. The requirements live in their own document, which the skill points to as it does `critique-gate.md` (requester, 2026-10-10), so the skill's reading cost grows by pointers, not rules (R7). The record's Not covered cases (design-figure arithmetic, uncited reliance) are declined and get no text.
 
 ### phase2-gate-discipline
 - **Type**: feature
@@ -248,16 +237,16 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 
 ### empirical-unit-impl
 - **Type**: feature
-- **Risk**: medium — provisional on `empirical-unit-design`
+- **Risk**: medium — U5 and U6 bind every plan breakdown drafts, inside lsf or out; adds rules to a 32 KB skill (R7)
 - **Clarity**: specified
 - **Iteration**: write-once
 - **Effort**: medium
 - **Scope**: `skills/breakdown/SKILL.md`, `docs/plan-graph.md`
 - **Publishes**: none
-- **Depends on**: empirical-unit-design (design, plan-level shape); retained-artefacts-design (design, retained-artefact policy); empirical-criteria-impl (logical, `docs/success-criteria.md`'s C2, which a measurement unit's registration cites); empirical-script-support, retained-artefacts-impl (testing, the parser must accept what the skill emits, `Retains:` included); plan-preflight-check, declared-gates (logical, each serialises a section of `skills/breakdown/SKILL.md`; declared-gates also `docs/plan-graph.md`)
+- **Depends on**: empirical-unit-design (design, `lsf-empirical-work.md` §Units); retained-artefacts-design (design, retained-artefact policy); empirical-criteria-impl (logical, `docs/success-criteria.md`'s C2, which a measurement unit's registration cites; U3's Phase 2 entries, which breakdown drafts units from); empirical-script-support, retained-artefacts-impl (testing, the parser must accept what the skill emits: the `measurement` type, `gates: []`, `retains` and `store`); plan-preflight-check, declared-gates (logical, each serialises a section of `skills/breakdown/SKILL.md`; declared-gates also `docs/plan-graph.md`)
 - **External gates**: none
-- **Done condition**: `skills/breakdown/SKILL.md` and `docs/plan-graph.md` carry the decided shape and the retained-artefact policy: a record cites regenerable data by recipe, the regenerable and non-regenerable classes with the burden of proof on regenerability, the recipe's contents, and the `Retains:` and store declarations. The citation rule is stated as scoped to programmes whose records cite measured data. A fixture plan written to it passes the pre-flight command. `phronithm:critique` (critique-skill) passes at the gate bar and a `phronithm:edit` pass has been applied.
-- **Description**: **Provisional.**
+- **Done condition**: `skills/breakdown/SKILL.md` carries §Units' skill half: the `measurement` type and the type test the quality check asks of every unit whose done condition reads a sample (U1); the Registration, Outcomes and Retains entry fields, with the registration committed before any run stated in the done condition, and one measurement unit drafted per open-until-measured entry with Outcomes rows following it (U2, U3); the re-plan rule removing the dependants of Outcomes rows that did not hold (U3); clarity and risk rated as U4 gives; the outcome seam, which the wall-clock flag does not exempt (U5); the three-part test before existing tuning infrastructure discharges a companion (U6); and Phase 1 step 4 asking the requester for the store and, for a project with no gate commands, writing `gates: []` only on their answer (U8, U9). It carries the retained-artefact policy: a record cites regenerable data by recipe, the regenerable and non-regenerable classes with the burden of proof on regenerability, the recipe's contents, and the `Retains:` and store declarations, with the citation rule scoped to programmes whose records cite measured data. `docs/plan-graph.md` documents the `measurement` type, `retains`, `store` and `gates: []`, each as Go-runtime-only. A fixture plan with a `measurement` unit carrying Registration, Outcomes and `retains`, and an `lsf-gates` block with `store`, passes the pre-flight command, as does one declaring `gates: []`. `phronithm:critique` (critique-skill) passes at the gate bar and a `phronithm:edit` pass has been applied.
+- **Description**: The skill half of the Units decision. U7 (P-A10) adds no text. **Flag:** about eight items exceed the planned-steps bound; each is a few lines of skill text in one file, with a decided design to transcribe, so the excess is not context.
 
 ### programme-close-out
 - **Type**: feature
@@ -308,7 +297,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: a fixture plan covering the unit kinds the runtime claims to run
 - **Depends on**: long-running-impl (testing, the last script unit); empirical-unit-impl (testing, the plan form); drive-mechanics (testing, the launch path)
 - **External gates**: `claude-code-headless` (environment, Claude Code 2.1.294); `podman` (environment, 6.1.3 rootless, `pasta` 2026_10_02.cba3570)
-- **Done condition**: The runtime, launched through `phronithm:lsf-drive` in containers from an image built from the reference `Containerfile` extended with the fixture's gate toolchain, its digest recorded, on a fixture plan with at least one code unit whose gate runs past the 600 s tool timeout, one design unit that settles a decision the architecture document left open, and one empirical unit whose job outlasts the tool timeout, returns `complete`, with the design unit's change recorded as an architecture amendment. A second run, on a variant whose unit moves a decision the document made, stops with `architecture-invalidated`. The design's Status section cites both run ids, lists the unit kinds the runtime has run on, and records how the long gate completed.
+- **Done condition**: The runtime, launched through `phronithm:lsf-drive` in containers from an image built from the reference `Containerfile` extended with the fixture's gate toolchain, its digest recorded, on a fixture plan with at least one code unit whose gate runs past the 600 s tool timeout, one design unit that settles a decision the architecture document left open, and one `measurement` unit whose job outlasts the tool timeout, returns `complete`, with the design unit's change recorded as an architecture amendment. A second run, on a variant whose unit moves a decision the document made, stops with `architecture-invalidated`. The design's Status section cites both run ids, lists the unit kinds the runtime has run on, and records how the long gate completed.
 - **Description**: Postmortem §G: the workflow was shaken down on code units and met measurement units first on a live programme. The two architecture cases are the upgrade path for the gate half of `arch-pin-refresh`'s done condition, and the long gate for `gate-results-integrity`'s live long-gate claim; both were `conjectured` at completion. `tools/fixturerun` is a starting point for the launch; its caps (40 calls, $25, 1 h) suit one unit. **Flag:** the scope path moves if the fixture lives in the bench repository.
 
 ### programme-close
@@ -321,7 +310,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: none
 - **Depends on**: shakedown-fixture (testing, the run); phase2-gate-discipline, programme-close-out, empirical-criteria-impl (logical, their dispositions)
 - **External gates**: none
-- **Done condition**: Every register row has a disposition: `fixed` with a commit, `declined` with a reason, or `deferred` to a named successor. The Generality cells of P-A1 and P-A3 carry the evidence `lsf-empirical-work.md` §Criteria found outside the register's probe (dungeon-assistant S4; cartomancer-v2 `map-toolkit-mvp` SC1 and SC2, `quality-bar-interiors` SC4). `docs/design/lsf-improvements.md` is deleted. `CLAUDE.md`'s Structure section lists the documents and commands the programme added. The `lsf-runtime` tests pass.
+- **Done condition**: Every register row has a disposition: `fixed` with a commit, `declined` with a reason, or `deferred` to a named successor. The Generality cells of P-A1 and P-A3 carry the evidence `lsf-empirical-work.md` §Criteria found outside the register's probe (dungeon-assistant S4; cartomancer-v2 `map-toolkit-mvp` SC1 and SC2, `quality-bar-interiors` SC4). P-A6 reads that the companion unit was declined because a harness existed, not collapsed, and P-A10's cells say cartomancer's D5, D6 and D9 predate `document-text` and that archipeligo's R1 and R2 also moved decisions (§Units, Evidence). `docs/design/lsf-improvements.md` is deleted. `CLAUDE.md`'s Structure section lists the documents and commands the programme added. The `lsf-runtime` tests pass.
 - **Description**: The closure unit: it owns the completeness criterion the other units contribute to (Standing Obligations).
 
 ## Graph
@@ -436,7 +425,7 @@ units:
         kind: organisational
   - id: empirical-unit-design
     type: design
-    complete: false
+    complete: true
     dependencies: [problem-register, empirical-criteria-design, gate-results-integrity]
     scope: [docs/design/lsf-empirical-work.md::units]
     publishes: [empirical work plan shape]
@@ -713,8 +702,8 @@ units:
     type: feature
     complete: false
     dependencies: [empirical-unit-design, script-retirement]
-    scope: [lsf-runtime/plan, lsf-runtime/orchestrator, docs/design/lsf-workflow.md::wave-loop]
-    publishes: [empirical plan-block fields]
+    scope: [lsf-runtime/plan, lsf-runtime/orchestrator, docs/design/lsf-workflow.md::lifecycle-mapping, docs/design/lsf-workflow.md::wave-loop, docs/design/lsf-workflow.md::shared-stage-schema]
+    publishes: [measurement type, implement Outcomes row, empty gates declaration]
     gates:
       - name: lsf-toolchain
         kind: environment
@@ -749,7 +738,7 @@ units:
   - id: empirical-criteria-impl
     type: feature
     complete: false
-    dependencies: [empirical-criteria-design]
+    dependencies: [empirical-criteria-design, empirical-unit-design]
     scope: [docs/success-criteria.md, skills/large-scale-feature/SKILL.md::phase-1, skills/large-scale-feature/SKILL.md::phase-2]
     publishes: [docs/success-criteria.md]
     gates: []
@@ -836,7 +825,7 @@ graph TD
   PPC[plan-preflight-check: complete]
   SPS[significant-precision-sample]
   ECD[empirical-criteria-design: complete]
-  EUD[empirical-unit-design]
+  EUD[empirical-unit-design: complete]
   RAD[retained-artefacts-design: complete]
   FCD[findings-consumer-design]
   DDD[drive-decision-design]
@@ -964,6 +953,7 @@ graph TD
   PCO --> PC
   ECI --> PC
   ECI --> EUI
+  EUD -.-> ECI
 
   RV --> SO
   RV --> ECD
@@ -1041,9 +1031,9 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 
 ## Critical Path
 
-`empirical-unit-design` → `retained-artefacts-impl` → `script-retirement` → `empirical-script-support` → `findings-consumer-impl` → `long-running-impl` → `shakedown-fixture` → `programme-close`, and, as long, `runtime-cli-drive` → `runtime-distribution` → `script-retirement` → the same tail.
+`runtime-cli-drive` → `runtime-distribution` → `script-retirement` → `empirical-script-support` → `findings-consumer-impl` → `long-running-impl` → `shakedown-fixture` → `programme-close`.
 
-8 units on each. The first heads on a requester verdict (`empirical-unit-design`), the second carries one at `runtime-distribution`; both heads are ready, `runtime-cli-drive` with Go 1.27.1, `claude` 2.1.294 and rootless podman 6.1.3 confirmed at `s2-egress-gates`' close (2026-10-10). The S2 build's size is a conjectured estimate, and the runtime and the port each exceeded it (R1).
+8 units. `retained-artefacts-impl` → `script-retirement` → the same tail is one shorter. The head is ready, with Go 1.27.1, `claude` 2.1.294 and rootless podman 6.1.3 confirmed at `s2-egress-gates`' close (2026-10-10); `runtime-distribution` carries a requester verdict. The S2 build's size is a conjectured estimate, and the runtime and the port each exceeded it (R1).
 
 ## Meta-Tasks
 
@@ -1063,7 +1053,7 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
   | `plan-preflight-check` | P-D4 |
   | `empirical-criteria-design` | P-A1 (geometric part, declined), P-A2 (uncited reliance, declined) |
   | `empirical-criteria-impl` | P-A1 (statistical part), P-A2 (cited evidence), P-A3, P-A11 |
-  | `empirical-unit-design` | P-A4, P-A5, P-A6, P-A9, P-A10 |
+  | `empirical-unit-design` | P-A10 (declined: `document-text` absorbs the re-plan items; D16's residual accepted) |
   | `findings-consumer-design` | P-B1, P-B3 |
   | `programme-close-out` | P-B2, P-B4 |
   | `drive-decision-design` | P-E2, P-E3, P-E4, P-E5 |
@@ -1072,7 +1062,7 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
   | `code-merge-cleanup` | P-C8 (fabricated merge SHAs), P-C9 |
   | `runtime-signals` | P-C7, P-C8 (denied commits) |
   | `retained-artefacts-impl` | P-D5 (store and move) |
-  | `empirical-unit-impl` | P-D5 (citation rule) |
+  | `empirical-unit-impl` | P-A4, P-A5, P-A6, P-A9, P-D5 (citation rule) |
   | `runtime-cli-drive` | P-F1 |
   | `long-running-design` | P-A7, P-A8, P-A13, P-D6 |
   | `phase2-gate-discipline` | P-A12, P-G1, P-G2, P-G4 |
@@ -1089,7 +1079,7 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 
 - R1 cross-cutting — the spike estimated 1,500–2,500 lines, tests included, for all of S2; the runtime alone is about 2,190 lines and 1,730 of tests, and the orchestrator port about 2,600 lines, 2,800 of tests and 1,800 of harness and tools. The remaining S2 units are likely larger than estimated in wall-clock; runtime-core and the port finished with context comfortable, so the size budget holds.
 - R15 shakedown-fixture — the port's oracle is the ported tests, byte-identical prompts over 55 scenarios and one single-unit fixture run; the wave gate's and re-plan's behaviour on a real multi-unit plan is shown only here.
-- R2 cross-cutting — five units wait on one requester verdict; the schedule is bounded by verdicts, not by work.
+- R2 cross-cutting — four units wait on one requester verdict; the schedule is bounded by verdicts, not by work.
 - R3 cross-cutting — generality rests on cartomancer-v2, a stream of code units, plus dungeon-assistant's unrun Phase 1 brief for P-A1; 11 rows are `not testable` on `quality-bar-interiors` (P-A3, which `map-toolkit-mvp` does show, P-A4, P-A5, P-A7, P-A8, P-A12, P-A13, P-C3, P-G1, P-G3, P-G4), and a problem classed `archipeligo only so far` may be common to any measurement-heavy programme.
 - R4 significant-precision-sample — a hand classification by the model whose reviews produced the findings; the rubric is fixed first, and the requester may want a second rater.
 - R5 phase2-gate-discipline — the opus-tier adversary re-run that `critique-gate.md` waits on belongs to the critique-upgrade backlog and is left out of this programme by requester decision (2026-10-04); the unit sets an interim policy without it.
@@ -1100,7 +1090,7 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 - R10 cross-cutting — the gate can still misclassify a design unit's settled decision as a decision move, recurring run #8's false stop; per-unit diffs, unit type and the completion report narrow it, and `shakedown-fixture`'s first run is the check.
 - R11 script-retirement — in a plan with no `lsf-gates` block, and under the Workflow script, a stage that reports `green` for a gate it did not run passes the `gate-not-run` check; closed for declared plans by `declared-gates`.
 - R12 script-retirement — in a plan with no `lsf-gates` block, and under the Workflow script, the long-gate recipe is untested in live agents, and a gate over 600 s stops with `gate-not-run` if the harness kills the detached process; closed for declared plans by `declared-gates`.
-- R13 cross-cutting — until `empirical-script-support`, a non-design unit in a project with no gate of its own stops with `gate-not-run` on every launch.
+- R13 cross-cutting — until `empirical-script-support` implements `gates: []`, a non-design unit in a project with no gate of its own stops with `gate-not-run` on every launch, and fails the load if `script-retirement` makes declaration mandatory.
 - R17 cross-cutting — the `claude-code-headless` pin holds only while the auto-updater keeps its version in `~/.local/share/claude/versions/` (2.1.294 present beside 2.1.295 and 2.1.296 on 2026-10-10); the next pruning re-pins again. Most tests still read the 2.1.289 streams, with 2.1.294 re-recordings beside them under `testdata/streams/2.1.294/`.
 - R18 cross-cutting — the session-limit stream shape is conjectured (no real limit observed under `-p`), and a weekly or model-specific limit pauses every call, bounded only by the wall-clock cap; through the credential proxy no call emits a `rate_limit_event` (0 of 16), so a limit waits `sessionLimitFallback`, not `resetsAt`, and whether the CLI still reports an assistant `rate_limit` error there is unverified. A bare 429 is `session-limit` (requester decision, 2026-10-10), so an API per-minute limit also waits `sessionLimitFallback` and gates the whole runtime, and a guard-killed call whose stream holds a 429 classes as `timeout`. The first real limit's transcript under `calls/` is the upgrade path.
 - R19 cross-cutting — the frozen JavaScript, still the supported Phase 3 path until `script-retirement`, carries the defects the port fixed (D14, D16, D17): a branchless completion report is dropped from the merge silently and the unit re-runs every wave; `maxUnitsPerWave` 0 reports `complete` having run nothing; a null `directEdits`, `amendments` or `appendedUnits` throws.
@@ -1123,11 +1113,28 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 - R35 cross-cutting — `TestGuardTimeoutKillsGroup` and `TestSessionLimitWaitsForReset` fail intermittently under heavy load at base and HEAD alike (fixed timing bounds); `TestRunGatesRegistersAndCleansUp` failed once at HEAD, cause unconfirmed. A unit's "the tests pass" needs a quiet-machine run. `s2-egress-gates`' final suite ran under load about 9.7 on 8 cores, so its "the tests pass" is evidenced, not met; the next quiet-machine run of the suite discharges it.
 - R40 cross-cutting — egress proxy hardening left open: no check of the resolved address (R27), no tunnel idle timeout (a tunnel ends with its container or the launch), and a dry run binds the listener; the next unit writing `egress.go` or `programme-close` takes them.
 - R41 cross-cutting — `setup` no longer inherits the runtime's environment (image environment plus the `env` passthrough), so a plan whose `setup` relied on host credentials, such as a private registry's token, fails until its config names them; a launch SIGKILLed under the pre-`s2-egress-gates` runtime leaves its host-side gate shells running once, since `children.json` is dropped unsignalled.
+- R43 empirical-criteria-impl — between it and `empirical-unit-impl`, Phase 2 lists open-until-measured decisions that breakdown does not yet draft as `measurement` units, and until `empirical-script-support` the gate has no U3 clause, so a reported outcome reaches the re-plan as a note and stops as `cannot`, as it would today.
 - R42 empirical-criteria-impl — C4's axes (time, starting conditions, instrument; `lsf-empirical-work.md` §Criteria) are untested on a real case: they were derived from the archipeligo probe runs they would be tested on, and the planted-case probe hit its ceiling (12/12, `docs/investigations/c4-probe-results.md`). They enter the skill unvalidated; the first programme vision review after `empirical-criteria-impl` that finds a criterion–vision gap is the test case.
 
 ## Plan Maintenance
 
 On each unit completion, run the re-plan step before starting its dependants.
+
+### 2026-10-10 — empirical-unit-design complete
+Report: docs/design/lsf-empirical-work.md (Units) @ 984e248.
+done-condition empirical-criteria-impl — carries U3's Phase 2 clause (open-until-measured entries) in `skills/large-scale-feature/SKILL.md::phase-2` (requester, 2026-10-10)
+new-edge empirical-unit-design → empirical-criteria-impl — U3's Phase 2 clause
+done-condition empirical-unit-impl — U1, U2, U3 (drafting and re-plan removal), U4, U5, U6, U8 and U9's breakdown text; `measurement`, `retains`, `store`, `gates: []` in `docs/plan-graph.md`; fixture plans; no longer provisional; flagged at about eight items
+done-condition empirical-script-support — the `measurement` type and lenses, the Outcomes row in the implement return, U3's gate clause and widened `document-text`, U9's `gates: []`; no longer provisional
+scope-reassignment empirical-script-support — adds `lsf-workflow.md::lifecycle-mapping` (review lenses, `gate-not-run`) and `::shared-stage-schema` (implement return); serial after `script-retirement` and before `long-running-impl` on both
+done-condition retained-artefacts-impl — `retains` per unit in the `lsf-plan` block, `store:` in the `lsf-gates` block, U8's path rules
+done-condition script-retirement — its declaration decision takes U9's `gates: []` for a project with no gates
+done-condition long-running-design — places a `measurement` unit's runs and an Outcomes row reported after a long run
+done-condition shakedown-fixture — its long-running empirical unit is typed `measurement`
+done-condition programme-close — corrects P-A6 ("declined because a harness existed") and P-A10's cells
+check register — P-A10 `declined` (requester); P-A4, P-A5, P-A6, P-A9 `deferred` to empirical-unit-impl
+check R2, R13 restated; R43 (Phase 2 clause ahead of breakdown and the gate) added
+check critical path — 8 units, one chain from runtime-cli-drive; ready: runtime-cli-drive, retained-artefacts-impl, empirical-criteria-impl, long-running-design, drive-decision-design, significant-precision-sample
 
 ### 2026-10-10 — empirical-criteria-design complete
 Report: docs/design/lsf-empirical-work.md (Criteria) @ 53404c5.
