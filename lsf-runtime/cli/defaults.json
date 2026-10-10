@@ -1,0 +1,45 @@
+{
+  "defaultRole": "writer",
+  "roles": {
+    "writer": {
+      "tools": "Read,Edit,Write,Glob,Grep,Bash,Skill",
+      "clone": "kept"
+    },
+    "reviewer": {
+      "tools": "Read,Glob,Grep,Bash,Skill",
+      "clone": "discarded"
+    }
+  },
+  "roleRules": [
+    {
+      "agentType": "phronithm:critic",
+      "role": "reviewer"
+    },
+    {
+      "label": "^(critique-(plan|design|code)|lens-review):r[0-9]+:",
+      "role": "reviewer"
+    },
+    {
+      "label": "^review-gate:w[0-9]+(#|$)",
+      "role": "reviewer"
+    },
+    {
+      "label": "^obligations(#|$)",
+      "role": "reviewer"
+    }
+  ],
+  "skills": [
+    {
+      "label": "^(critique-plan|critique-code|critique-design)",
+      "skill": "phronithm:critique"
+    },
+    {
+      "label": "^lens-review",
+      "skill": "phronithm:review"
+    },
+    {
+      "label": "^(replan|decision-replan)",
+      "skill": "phronithm:breakdown"
+    }
+  ]
+}

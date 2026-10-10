@@ -626,3 +626,27 @@ Every call in a kept clone that spawned and returns a value or a null reports th
 - **Descendants of a normal exit.** A call that exits normally while a descendant holds its stdout returns `killGrace` later. The descendant is not killed; what happens to processes a stage detaches is `long-running-design`'s question.
 - **Unprobed error results.** `is_error` results with subtypes such as `error_max_turns` and no listed status class as transient and are retried. No real stream of one is recorded.
 - **macOS.** `ps -A -ww`, `flock` and process groups have not been run on macOS.
+
+## CLI
+
+Unit `runtime-cli-drive`, plan `docs/plans/runtime-cli-drive-plan.md`. The `lsf-runtime` command (`lsf-runtime/cli`, package `main`) launches a run as a detached driver over a state dir, and reports on it. Until `runtime-distribution` ships a launcher, it is built with `go -C <plugin root>/lsf-runtime build -o <bin> ./cli`.
+
+### Addressing
+
+A run is addressed by `-state DIR`, or by `-repo DIR` (default: the toplevel of the current directory's repository) and `-name NAME`. The default state dir is `${XDG_STATE_HOME:-~/.local/state}/lsf-runtime/<first 12 hex digits of the SHA-256 of the repo toplevel, symlinks resolved>/<name>`. A name matches `^[A-Za-z0-9][A-Za-z0-9._-]*$` and makes a valid `refs/lsf/<name>/pause` (`git check-ref-format`); `args.name` is checked the same way and must equal `-name` when both are given.
+
+### Configuration
+
+A launch's config is composed, then loaded strictly (Runtime → Configuration):
+
+1. **Plugin defaults**, embedded in the binary (`cli/defaults.json`): `defaultRole`, `roles`, `roleRules`, `skills`, the settings the orchestrator's stage labels need. They equal `testdata/config.example.json`'s (a test keeps them equal).
+2. **The host file**: `-config FILE`, else `${XDG_CONFIG_HOME:-~/.config}/lsf-runtime/config.json`; a missing file is refused, naming the path. It is a JSON object, and each top-level key replaces the default's whole. It carries the host's settings: `image` (by digest), `claudeBin`, `claudeVersion`, `podmanBin`, `pluginDir`, `proxy`, `env`, caps and timings. `stateDir`, `repo`, `args` and `dryRun` are refused: the CLI sets them per launch. A relative `pluginDir`, and a relative `claudeBin` holding a `/`, are resolved against the host file's directory.
+3. **The CLI's fields**: `repo`, `stateDir`, `args` and `dryRun`; `pluginDir` from `-plugin-dir` when given, which beats the host file; `claudeBin` and `claudeVersion` (below).
+
+A load error reaches the requester as the runtime gives it. One naming `allow`, `deny` or `permissionMode` adds that the config predates the container boundary (Permissions) and the key is to be removed.
+
+`setup` and the gate commands see only the image's environment and the `env` passthrough. A private registry's credential is therefore passed by name through `env`, and their toolchain must be in the image.
+
+**claudeBin, once per launch.** The source is `LSF_CLAUDE_BIN`, else the host file's `claudeBin`, else `claude`. It is resolved by `PATH`, made absolute and its symlinks resolved to a regular file, the versioned path, which is run with `--version` under `DISABLE_AUTOUPDATER=1` (30 s bound); the output's first field is the version. A host file's `claudeVersion` that differs is refused, naming both; otherwise the version fills it. The composed config stores the resolved path, and the driver runs with `LSF_CLAUDE_BIN` removed and `DISABLE_AUTOUPDATER=1`, so the runtime resolves the same file: a `claude` repointed after the launch resolved it is not used. A file overwritten in place is caught by the launch check, whose smoke container compares its version with `claudeVersion`.
+
+**git.** A launch refuses a git older than 2.38 (`git merge-tree --write-tree`), or a `git version` it cannot parse, naming the version found.
