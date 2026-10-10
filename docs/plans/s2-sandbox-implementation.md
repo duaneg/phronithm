@@ -97,6 +97,13 @@ Rigour ladder: proven ▸ evidenced ▸ conjectured.
 | S3 | live tests pass under `LSF_LIVE_REQUIRE=1` | pass | evidenced | evidenced | 8 live tests, probe image and reference image |
 | S4 | no stream outside the state dir (`--log-driver=none`) | pass | proven (live) | evidenced | L1's `journalctl` check is empty and fails on a `journalctl` error, but has no positive control under the `journald` driver. Upgrade: a control container with the default driver whose stream the same query finds |
 
+## Phase 5 record (`13c1e4d`)
+
+- **Full-diff critique** (sonnet): no Critical; done condition met clause by clause, R17 with open risk. Fixed: an agent-committed gitlink in a kept clone no longer reaches the main repo and wedges the merge clone (fetch-back `RevGitlinks` stop); `makeClone` makes `hooks`/`info` (merge-step digest); existing state dir tightened to `0700`; merge clone names validated; `fixturerun` filters on its own label; stale names. Noted: S2 (session-limit classification without `rate_limit_event`) is a requester decision, in the completion report; smoke runs before the signal handlers (M6); guard cost (M7).
+- **`phronithm:review`** (all lenses; `go vet` clean, `staticcheck` not installed, `gofmt` clean): no Critical. S1 (existing state dir mode) fixed as above; S2 (nested repo ends the run) documented; m3 (symlinked `hooks`/`info` as bind source) fixed; m8 import grouping fixed; m9 commented. Noted: m1 launch check before reaping, m2 `container-removed` after `--rm`, m4 no retry of a sporadic 125 (by the done condition), m6 smoke script tested only live, m7 comment wording.
+- End-to-end: the paid fixture run (step 6) is the end-to-end test; edge cases from the plan are covered by the live cells L1–L8.
+- Full suite and live suite pass after the fixes.
+
 ## Remaining phases
-Complete Phase 5 (Review) as defined in the phronithm:feature skill.
+Complete Phase 5 (Review) as defined in the phronithm:feature skill. (Done: see the Phase 5 record and `docs/plans/s2-sandbox-completion.md`.)
 
