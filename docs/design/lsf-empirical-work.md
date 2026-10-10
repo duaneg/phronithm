@@ -228,6 +228,226 @@ Where a criterion is measured, C2 costs a model, two requester-stated levels and
 - **`empirical-unit-design`:** a measurement unit's registration cites C2's form.
 - **`programme-close`:** the register's P-A3 cartomancer cell understates the row; the `map-toolkit-mvp` evidence above belongs in it.
 
+## Units
+
+Unit `empirical-unit-design`, plan @ `9b92ee4`.
+
+**Status:** decided, 2026-10-10. Requester verdict: **U1–U9 accepted as proposed**: the `measurement` type, open-until-measured decisions, nothing for P-A10, and the defaults listed under Accepted defaults.
+
+### Problem
+
+From the [register](lsf-problem-register.md):
+- **P-A4.** Outcomes that needed runs to find (R1, R2, R6, R8) arrived as stops and Phase 2 re-entries.
+- **P-A5.** `stage1-gate` was rated high risk ("nobody has run it") and `specified`, with no seed count or confidence level.
+- **P-A6.** A companion tuning-infrastructure unit was declined because a harness existed, and the companion units were added later anyway.
+- **P-A9.** Units with uncertain outcomes or several independent deliverables passed the size check.
+- **P-A10.** Measured values superseded cited figures with no decision moving, and each cost a requester round trip.
+
+Two further questions from the plan:
+- **Gate.** A non-design unit whose stage reports no gate stops with `gate-omitted`, and the Workflow script's equivalent is `gate-not-run` ([gate-results-integrity](../plans/gate-results-integrity-completion.md)). A project with no gate commands therefore cannot run a docs or measurement unit. A declared `lsf-gates` block may not have an empty `gates` list.
+- **Store.** Retained artefacts left open where a unit's `Retains:` line and a project's store are declared.
+
+`phronithm:breakdown` has no measurement type. Its tuning companion "may collapse to a verification note" when the project already has tuning infrastructure that covers the need (`skills/breakdown/SKILL.md:91`). Its size budget counts surfaces, open decisions and steps, not outcomes.
+
+### Evidence
+
+Archipeligo is cited at `b706e80`. Re-entries are numbered by their reconciliation commits: R1 `465110f`, R2 `d35698b`, R3 `4a75e94`, R4 `0569c92`, R5 `a01fe05`, R6 `a904738`, R7 `2b5beee`, R8 `c49f13c`. Cartomancer-v2 is cited at `26184a6`.
+
+**How measurement units were typed.** Archipeligo had 19 units whose outcome was a measurement, a campaign, a tuning search or a gate read:
+- **Types:** 7 `feature`, 6 `integration`, 3 `polish`, 2 `meta`, 1 `design`.
+- **What the entries carried:** 8 entries stated a sample or decision rule. 7 named a fail branch, 4 of them in prose only.
+- **No fields of their own:** the plan invented 11 ad hoc field names across 38 occurrences, and none is specific to measurement. Retention appears only inside done-condition prose.
+
+**Fail branches did not prevent the stops.** R1, R2, R6 and R8 each stopped on a review-gate `architecture-invalidated` row with all five fields:
+
+| Re-entry | Unit | Plan's branch for the outcome | Architecture premise falsified |
+|---|---|---|---|
+| R1 | `stage1-seed-check` | "filed as a backlog issue … reported … as a requester decision" | §10's stage-1 gate on the committed seed; §13 "seed sensitivity is marginal" |
+| R2 | `stage1-retune` | (iii) "A failure on a held-out seed is **not** tuned against … files it for a requester decision" (`969830e`) | §13 "the rungs find a cell that passes"; §12 "the grid is a sufficient resolution mechanism" |
+| R6 | `stabilisation-screen` | none for the outcome that occurred (baseline passes); only `screen-registration.md:56` covered it | §10 stage-2 cause 3, "No stabiliser" |
+| R8 | `bid-era-rung` | "If the thresholds do not hold, it reports that to the requester rather than re-committing them" (D13) | §12 "Demurrage trigger condition"; §6.5's activation clause |
+
+Three of the four outcomes were planned for in the unit, but the architecture stated the premise unconditionally. A planned outcome therefore reached the gate as a false premise, and Phase 2 re-entry followed. Each branch routed to "the requester" and named no successor unit. The units the requester then chose were drafted after the stop: `stage1-retune` (`b880553`), and `derived-min-investment`, `stage1-widened-retune` and `tuning-search-model` (`ec1ec02`).
+
+**Outcome-dependent work outside archipeligo's plan.** No project has a breakdown-format measurement unit, but four keep pre-registered measurements whose outcome selects later work:
+- critic-fidelity-bench P2b fixes a three-way rule before any scored run: ≥ 2/14 gives R4, exactly 1 is a requester call, and 0 proceeds to P3 unchanged (`p2b-plan.md:211-246`).
+- archipeligo's kin-provisioning and reserve-gate investigations give each claim a registered prediction, a kill line and a partial band ("21–29 partial, read R1 first"; `kin-provisioning-problem-statement.md:62-80`). Both say "no breakdown is needed" (`:159`; `reserve-gate-problem-statement.md:250`).
+- coronal-memory's power rule selects the sample composition (`docs/design.md:960-971`).
+- The maths campaign's shakedown has an abort rule and set the next campaign's caps (`notes/campaign-depthlaw-prep.md:94-104`).
+
+**`stage1-gate` at `arch@dc88280`.** The entry (`foundation-breakdown.md:353-381`):
+- **What it fused:** the stage's one format-version bump, CI extension, the committed defaults and "the first measured verdict on the new regime", typed `integration`.
+- **Its pass bar:** "shows a persistent-with-diversity regime at the committed default cell", with no seed count, confidence level or fail branch.
+- **Its tuning infrastructure:** "harness exists".
+- **Later versions:** seven commits appended to the entry before it was archived, and none added a pass bar. The seed design came from the brief and the reconciliation records (R3, R4).
+
+**The companion unit.** No commit collapsed a drafted companion unit. Retune entries said "The tuning infrastructure is `stage1-gate`'s `xtask cell`/`rung`/`gate` … so no companion design unit is needed" (`b880553`), and `stage1-widened-retune` said the same, with `tuning-search-model` "its eventual replacement, not a prerequisite" (`ec1ec02`). `tuning-search-instrument` was added at `6921509`. The harness searched one parameter at a time and stated no confidence (postmortem §A).
+
+**`stage2-horizon-confirm`** (added at `28becd0`):
+- **Entry:** typed `feature`, "Risk: low — descriptive runs on the shipped world; it decides nothing". It registered its binary, commands, seeds and reported quantities first ("`horizon.md` is committed before any run"), and its record was "labelled descriptive", with CP95 intervals.
+- **Fail branch:** only "If `xtask cell` cannot build that world … the unit stops".
+- **The question it carried:** criterion 3's undefined "persists" (P-A3), to be put to the requester.
+- **Data:** its 48 GB of series sat in a git-ignored worktree path, and a tag (`stage2-horizon-registration`) had to be added to keep the registration commit reachable.
+- **Its stop:** the runs outlived the implement stage, and that stop is `long-running-design`'s.
+
+**Sizing.**
+- **`weighted-contest-rung`:** it carried four Publishes items, the trigger condition among them, and passed the size check twice (wave 1 and wave 2, 2026-09-29). The requester split it into four units (D13).
+- **`bid-gate-open`:** one of the four successors, it passed at D13 ("six steps … budget holds"), and R7 split it again. Its threshold commit, a measurement, sat beside the gate flip that consumed it, and `bid-era-rung` later tested those thresholds (R8).
+- **Cartomancer's analogue:** `tactical-interior-tier` was flagged at three surfaces, kept by the requester (D7, D10), and split at rp-7 (`afb311c`). It is a surface-count case, which the existing budget already caught; no outcome selected later units.
+
+**Superseded figures.** The register reads R1 and R2 as §13 evidence paragraphs. In fact each of R1, R2, R6 and R8 also moved a decision: §10's gate, a §12 row, or §10's cause 3. Only R2's first row was an evidence paragraph alone. Of cartomancer's cases:
+- **D5, D6 and D9** (2026-09-12) were re-plan `cannot` verdicts raised before the `document-text` verdict existed. It landed at `phr@087ee9b` (2026-09-13), and cartomancer's ledger then holds 20 `document-text` verdicts absorbing the same kind of item (e.g. `quality-bar-interiors-signals.md:1211, 1344`).
+- **D16** (2026-09-15) is the remaining case. It was a review-gate `architecture-invalidated` stop for §4.9 wording that misdescribed which family binds, where the shipped guard was already right. The requester's answer was "Wording only, no runtime change".
+
+The gate prompt already says "A discrepancy that changes no decision … is a note at most" (`phr@999c9ff`, 2026-09-12).
+
+**Gates on docs and measurement units.** Archipeligo's measurement units that wrote code ran `xtask ci`. The docs-only ones reported `xtask ci` as "not-run: docs-only diff" (`stage2-horizon-confirm-completion.md:15`, `lp5-disclosure-note-completion.md:15`): under today's rule that is a `gate-not-run` stop. Cartomancer's docs units ran the full suite. No project in the record had no gate commands at all, so the gateless case is reasoned, not observed.
+
+### Options
+
+**Representing measurement work.**
+
+| Option | What changes | Against the evidence |
+|---|---|---|
+| Nothing | as now | 19 measurement units across five types, 7 with a fail branch, and four Phase 2 re-entries on planned or plannable outcomes |
+| Entry fields on any type | a Registration and an Outcomes field, wherever a unit's verdict is measured | carries the design and the branches. Review and the size rules cannot tell a measurement unit from the type, so the runtime would key on a block field instead |
+| New type `measurement` | a type whose deliverable is a verdict read from a registered sample, with the two fields | review, rating and sizing rules key on the type, as `design` already is. A unit that builds and measures splits (sizing, below), as `stage1-gate` would |
+| Route to `phronithm:investigate` | the unit's executor is an investigation | investigations can carry registered predictions and kill lines (kin-provisioning, reserve-gate). But `investigate` settles each claim at its achieved rigour and lets results reshape the question, and it has its own critique gate and document layout, so the runtime would gain a second unit lifecycle. Both cited investigations ran outside any plan, before the work they selected was planned |
+
+**Where a branch is decided.** The architecture is written before the plan (Phase 2 steps 2–5, then breakdown), so the choice is what the architecture says about a decision that rests on a measurement:
+- **As now:** it states the premise. The unit alone holds the branch, and a planned outcome reaches the gate as a false premise.
+- **A conditional decision:** "if X, then A; otherwise B". This needs both branches designed in Phase 2.
+- **An open design decision:** the architecture's existing Open design decisions list ("questions explicitly deferred, with the information needed to resolve them and when resolution is required", `skills/large-scale-feature/SKILL.md:106`) holds the decision as open until the measurement reports, with the outcomes it expects and, where Phase 2 can design one, the decision for each.
+- **A calibration register:** the unit plus a register of measured values beside the plan.
+
+**Superseded evidence (P-A10).**
+- **Nothing:** the `document-text` verdict already absorbs re-plan items, so only D16 remains.
+- **A gate clause:** misdescription and superseded figures become notes. A clause covering superseded figures would also cover 118/132, which did invalidate decisions; "where the decision stands" is the judgement the gate is already asked to make.
+- **A calibration register** beside the plan. It adds a document every programme keeps, against one residual case.
+
+**A project with no gates.**
+- **A declared trivial command** (`true`): it tells reviewers a gate passed when none ran.
+- **An exemption by unit type:** a measurement unit that writes a harness should not get one.
+- **An explicit `gates: []` declaration.**
+- **Nothing:** such a project cannot run any non-design unit. A block holding `hosts` alone does not help, since stages then report gates themselves.
+
+**The store.** In the `lsf-plan` block, where a re-plan can rewrite it mid-run; in the `lsf-gates` block, which the runtime pins at launch and a re-plan cannot change without a `declared-gates-changed` stop; or in the runtime config. The pre-flight command reads only the plan, and `retained-artefacts-impl` must fail it on a `Retains:` line with no store, so the runtime config cannot carry it.
+
+### Proposed decision
+
+**U1, the `measurement` type.**
+- **What it is:** a unit whose deliverable is a verdict or record read from a sample of runs, observations or judgements (*measured* in the Criteria Terms), where every outcome the reading admits is a valid result routed onward.
+- **The type test:** a `feature` unit with a measured acceptance check (a benchmark target, a soak test) fixes a failing result inside the unit. A `measurement` unit reports whatever it finds. Breakdown's quality check asks the test of every unit whose done condition reads a sample.
+- **Lenses:** its review runs `critique-code` with the done condition, as other code units do, and the `general` and `numerical` lenses.
+- **Gates:** it runs the project's gates like any non-design unit.
+- **Cost:** one enum value in `docs/plan-graph.md`, in the Go `plan` package and in `lensesByType`. The frozen Workflow script does not learn it, so a plan with a measurement unit runs on the Go runtime only.
+- **Exploratory probes:** a probe whose reading cannot be fixed beforehand is not a measurement unit. It is an open unknown, resolved before planning by `phronithm:investigate` in the requester's session, as kin-provisioning and reserve-gate were. C2's "no model" feasibility probe is one: naming it discharges C2, and it runs before the unit that reads the criterion is planned.
+
+**U2, the entry fields.** A measurement unit's entry carries:
+- **Registration:** the C2 elements of the reading it makes: statistic, sample, horizon, decision rule, model, the needed and unacceptable levels, the two probabilities and the plausible level with its probability, and binding. Each element is given or cited from the brief's criterion.
+  - A descriptive measurement (binding: reported only) states that it has no decision rule and gives its sample and horizon.
+  - The unit commits its registration document, pinning the commit, binary, commands and seeds, before any run, as `stage2-horizon-confirm` did. Its done condition says so, and the code critique checks the commit order.
+- **Outcomes:** every outcome the decision rule admits, plus "not completed", each with a route. A descriptive unit's rows are "completed" and "not completed", and a question its record puts to the requester routes from "completed". Each route is one of:
+  - a unit in the plan that depends on this one;
+  - a `requester-verdict` organisational gate on a named dependant;
+  - or Phase 2 re-entry, for an outcome no plan can absorb.
+- **Retains:** the paths kept under the retained-artefact policy (U8).
+
+**U3, branches in the architecture.**
+- **Open until measured:** Phase 2 lists each decision that rests on a measurement still to run under the architecture's Open design decisions, naming the measurement, its expected outcomes and, for each outcome Phase 2 can design, the decision taken. Breakdown drafts one measurement unit per entry, and its Outcomes rows follow the entry. Every unit that builds on the open decision depends on the measurement unit.
+- **The gate:** the outcome of the unit an open decision waits on does not invalidate that decision. The gate returns it as a note naming the section, the Outcomes row and the decision the entry gave for that row. The clause covers only the listed decision: the same outcome falsifying any other decision is an invalidation as today.
+- **Write-back:** the re-plan writes the entry's decision for that row into the architecture as `document-text`. Today's definition excludes "a correction that would change what a section decides", so it gains one case: an open decision resolved to the option the architecture itself gave for the reported outcome. An outcome whose decision the entry did not give is `cannot`, which stops the run as today.
+- **Reporting the outcome:** the implement stage reports which Outcomes row held, and the code critique checks it against the registration. The completion report carries it, and the re-plan removes the dependants of rows that did not hold.
+- **Requester routes:** a requester route is a `requester-verdict` gate on its dependant. It blocks that dependant and everything after it, which may be most of the plan (R2). The run ends with `no-ready-unit` when nothing else is ready, and the digest shows the uncleared gate. What it saves is the Phase 2 re-entry, not the wait for the requester.
+- **What it does not prevent:** an outcome whose alternative needs a design Phase 2 could not write in advance still re-enters Phase 2 (R8, and R1 if its retune could not have been drafted).
+
+**U4, rating.**
+- **Clarity:** a measurement unit is `specified` only when its Registration and Outcomes are complete. Otherwise it is `exploratory`, with the registration as its one open decision; a second open decision extracts a preceding `design` unit, as the size budget already requires.
+- **Risk:** risk is rated by consequence. A unit with an outcome routed to Phase 2 is `high`. A unit with a decision rule gives, on its Risk line, the pass probability at the plausible level (C2). A descriptive unit's risk is that of its "not completed" row.
+
+**U5, sizing.**
+- **The outcome seam:** a unit whose measured outcome selects among later units, or sets a value another unit tests, ends at the measurement. Work that consumes the outcome is a dependant.
+- **Wall clock:** the wall-clock flag does not exempt a measurement unit from this seam.
+- **Publishes:** the note's rule of more than one independently consumed Publishes item is not adopted. `phronithm:breakdown` is used outside lsf, the rule would split any unit publishing a type and its accessor to different consumers, and no case outside archipeligo supports it: cartomancer's was a surface count.
+
+**U6, tuning companions.** Existing tuning infrastructure discharges the companion design unit only when the verification note shows three things:
+- it searches the unit's parameters jointly, or states why they are separable;
+- it reports a confidence or interval for the value it selects;
+- it has run on the system the unit tunes.
+
+Otherwise the companion stays. Infrastructure the measurement unit itself builds is not existing infrastructure, so it never discharges the companion.
+
+**U7, superseded evidence.** Nothing. The re-plan's `document-text` verdict already absorbs the re-plan items behind D5, D6 and D9, and a clause naming superseded figures as notes would invite mislabelling a 118/132-style invalidation. The narrower alternative, declined: a gate clause making *a sentence that misdescribes what the merged code correctly implements* a note, and excluding any figure a decision's premise cites. It covers D16 alone. No calibration register.
+
+**U8, `Retains:` and the store.**
+- **`Retains:`:** a unit's `Retains:` paths go in its entry and in the `lsf-plan` block as `retains: [paths]`. Each is relative to the clone root, with no `..` and no leading `/`; the runtime refuses at the move a path that resolves outside the clone.
+- **`store:`:** the project's store is a `store:` key in the `lsf-gates` block, an absolute host path outside the repository. It is pinned at launch with the rest of the block, so no re-plan agent can redirect a move. The path is machine-specific, as archipeligo's records citing `~/src/archipeligo-runs/` already are. `docs/plan-graph.md`'s content rule ("`gates`, `hosts` or both") gains `store`.
+- **Load failure:** a `retains` entry in a plan whose `lsf-gates` block has no `store` fails the load, and so fails the pre-flight command.
+- **Who writes `store:`:** breakdown, on the requester's answer, as for gate commands and hosts. A block holding `store` alone declares no gates and no hosts.
+- **Runner:** Go runtime only. The Workflow script's parser rejects an unknown unit key (`workflows/lsf/graph.js`), so a plan carrying `retains`, or a `measurement` unit, fails its load as `invalid-plan`. The frozen script is not changed to accept them.
+
+**U9, a project with no gates.** A plan may declare `gates: []` in its `lsf-gates` block, meaning the project has no gate commands.
+- **Stages:** stages are told none are declared and return `gates` empty.
+- **Reviewers:** reviewers are told the project declares no gates and nothing ran.
+- **No stop:** neither `gate-omitted` nor `gate-not-run` fires.
+- **Merges:** merges are not gated either.
+- **`setup` and `hosts`:** `setup` is refused with an empty list, and `hosts` is unaffected. A block holding `hosts` alone still means "stages report their own gates".
+- **Who writes it:** breakdown writes `gates: []` only on the requester's answer that the project has none, the Phase 1 step 4 question. The launch pin keeps a re-plan from writing it mid-run.
+- **Runner:** Go runtime only. Under the Workflow script such a project still stops (R13).
+
+### Accepted defaults
+
+The requester accepted each of these defaults:
+1. **The type.** A `measurement` type (U1), rather than fields on any type. Its basis is one programme: no other project has a measurement unit in breakdown format.
+2. **Open until measured** (U3), and a requester route as an organisational gate rather than a stop. This changes the gate contract (a note, not an invalidation, for the listed decision) and the re-plan's `document-text` definition (one added case).
+3. **Risk by consequence** (U4): only a Phase 2 route makes a unit `high`. A requester route that blocks most of the plan (U3, R2) is left unrated.
+4. **The outcome seam** (U5), and not adopting the Publishes-count rule.
+5. **The three-part test for tuning companions** (U6), drawn from one harness.
+6. **P-A10:** nothing; the narrow misdescription clause (U7) is declined.
+7. **`store:` in the `lsf-gates` block** (U8).
+8. **`gates: []`** (U9) as the declaration for a project with no gates.
+
+### Walk
+
+| Case | Under U1–U9 |
+|---|---|
+| `stage1-gate` (`dc88280`) | U5 splits it. An `integration` unit takes the format bump, CI and defaults mechanism. A `measurement` unit takes the verdict, depending on it. U2 asks for a Registration. The entry had none, so U4 makes it `exploratory` until one exists, and C2's arithmetic then shows the 3-seed and 41-seed defects before planning (Criteria walk). U2 asks for an Outcomes row for "fails on held-out seeds", with a route that was drafted only after R1. U3 lists §10's stage-1 gate as open until the measurement reports. Whether R1 is then a planned branch depends on whether Phase 2 could have written the retune decision in advance; if not, it re-enters Phase 2 as before. U6: a one-at-a-time harness with no stated confidence does not discharge the companion, so `tuning-search-model` is drafted at planning, not at `ec1ec02` |
+| `stage2-horizon-confirm` | U1: `measurement`, descriptive. U2: its registration-first clause stands as written. C1 defers "persists" to it, and its Outcomes row routes the horizon question to a `requester-verdict` gate on the criterion-3 unit, instead of a question in prose. U4: no outcome routes to Phase 2, so the risk is that of "not completed", which is `long-running-design`'s to bound. U8: `retains: [runs/stage1-gate/cell/stage2-horizon-confirm/]` moves the 48 GB to `<store>/stage2-horizon-confirm/` at cleanup, so no record cites a worktree path. The registration commit is reachable once the unit's branch merges; the tag was needed because the first attempt's branch never merged. U9 does not apply: archipeligo has gates. Its docs-only diff runs them under a declared block, and stops as `gate-not-run` without one, which is `script-retirement`'s declaration question |
+| R2 (`stage1-retune`) | U2's Outcomes row "no candidate passes" exists in prose already (iii). U3 lists §12's "the grid is a sufficient resolution mechanism" as open until the retune reports. The outcome routes to a drafted dependant (the widened re-tune) or a requester gate. That gate blocks nearly every remaining unit, so the saving is the Phase 2 re-entry, not the wait |
+| R6 (`stabilisation-screen`) | "Baseline passes" was in the registration but not the plan. U2 requires every outcome the rule admits, so the row exists, and U3 lists §10's cause 3 as open until the screen reports, with "nothing is adopted" as the decision for that outcome |
+| R8 (`bid-era-rung`) | U5: `bid-trigger-commit`'s thresholds are a value `bid-era-rung` tests, so they are already separate units, as R7 left them. U2 and U3 route "thresholds do not hold", but §6.5 and §12 would change a rule, so the route is Phase 2: U3 does not remove that re-entry |
+| D16 (cartomancer) | Under U7, unchanged: a stop and a requester round trip. Under the narrow clause it is a note, absorbed as `document-text` |
+| `weighted-contest-rung` | U5 separates the trigger-threshold measurement from the gate flip and the bidding rung that consume it, which is R7's split, at planning |
+
+### Generality
+
+- **P-A4, P-A5, P-A6** (archipeligo only so far).
+  - **Outside archipeligo's plans:** critic-fidelity-bench, kin-provisioning, reserve-gate and coronal-memory write registered outcomes that select later work, but none ran inside a plan.
+  - **Scope of the burden:** U1, U2 and U4 bind only units typed `measurement`, so a programme with none bears nothing, apart from the type test in the quality check. U3 adds Phase 2 text only where a decision rests on a measurement.
+  - **U6:** it tightens an escape clause that binds every plan using breakdown, including plans outside lsf. A plan with no tuning units is unaffected.
+- **P-A9** (archipeligo only so far). Cartomancer's analogue is a surface count the existing budget caught. U5's outcome seam rests on archipeligo alone. It binds every plan by description, not by type, but only where an outcome selects later work or sets a value another unit tests.
+- **P-A10** (recurs on cartomancer-v2).
+  - **The register overstates it:** three of the four cartomancer decisions predate `document-text`, and archipeligo's four re-entries each moved a decision.
+  - **U7:** nothing is changed; the declined narrow clause would have covered one case (D16).
+- **Gates.** No observed project lacks gates. U9 is reasoned from the runtime's rule and costs nothing where a project declares gates.
+- **The store.** It follows the retained-artefact policy's scoping. A project with no `Retains:` line declares no store.
+
+### Plan consequences
+
+- **`empirical-unit-impl`** carries U1, U2, U4, U5, U6 and U8's entry fields into `skills/breakdown/SKILL.md`, and the type, `retains`, `store` and `gates: []` into `docs/plan-graph.md`.
+- **U3's Phase 2 clause** (open-until-measured entries) needs a carrier in `skills/large-scale-feature/SKILL.md::phase-2`. `empirical-criteria-impl` owns that section and is ready, so the re-plan either adds the clause to it or gives the section to `empirical-unit-impl` with a serialising edge.
+- **`empirical-script-support`**:
+  - takes the `measurement` type, its lenses and the Outcomes report in the implement return;
+  - removes the dependants of rows that did not hold, at re-plan, and writes back the resolved decision as `document-text`, under the widened definition;
+  - takes U3's gate clause and U9's `gates: []`.
+- **`retained-artefacts-impl`** parses `retains` and `store` where U8 places them, with U8's path rules.
+- **`script-retirement`**: its declaration decision now has U9 as the answer for a project with no gates.
+- **`long-running-design`**: a measurement unit's run stage, and the route of an Outcomes row reported after a long run, are its to place.
+- **`programme-close`** corrects the register:
+  - P-A6: "declined because a harness existed", not "collapsed".
+  - P-A10: the cartomancer cells predate `document-text`, and R1/R2 also moved decisions.
+- **Register dispositions:** P-A4, P-A5, P-A6 and P-A9 are `deferred` to `empirical-unit-impl`; P-A10 is `declined` (requester verdict: the `document-text` verdict already absorbs re-plan items; the D16 residual is accepted).
+
 ## Retained artefacts
 
 Unit `retained-artefacts-design`, plan @ `b7f5332`.
