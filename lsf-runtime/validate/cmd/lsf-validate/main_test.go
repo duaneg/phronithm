@@ -69,6 +69,32 @@ func TestHostsBlocks(t *testing.T) {
 	}
 }
 
+// A unit's retains need the gate block's store: without one the pre-flight
+// fails, as the load does.
+func TestRetainsNeedStore(t *testing.T) {
+	ok := readTestdata(t, "ok.plan.md")
+	retaining := strings.Replace(ok, "  - id: parser\n    type: feature\n", "  - id: parser\n    type: feature\n    retains: [out/data]\n", 1)
+	if retaining == ok {
+		t.Fatal("fixture changed")
+	}
+	const want = "invalid-plan [parser]: parser: retains needs a `store` in the ```yaml lsf-gates block\n"
+	for name, c := range map[string]struct {
+		plan, want string
+	}{
+		"no store":    {retaining, want},
+		"no block":    {strings.Replace(retaining, "```yaml lsf-gates", "```yaml not-gates", 1), want},
+		"store":       {strings.Replace(retaining, "gates:\n  - name: tests", "store: /srv/lsf-store\ngates:\n  - name: tests", 1), ""},
+		"store alone": {strings.Replace(retaining, "gates:\n  - name: tests\n    command: go test ./...\n", "store: /srv/lsf-store\n", 1), ""},
+		"bad store":   {strings.Replace(retaining, "gates:\n  - name: tests", "store: srv\ngates:\n  - name: tests", 1), "invalid-plan [store]: gates block: store must be a clean absolute directory path other than /; got \"srv\"\n"},
+		"bad retains": {strings.Replace(ok, "    type: feature\n", "    type: feature\n    retains: [/abs]\n", 1), "invalid-plan [parser]: parser: retains \"/abs\": must be a path relative to the clone, not absolute\n" + want},
+	} {
+		code, out, errOut := runCmd("-decisions", testdata+"ok.decisions.md", writeTemp(t, "x.plan.md", c.plan))
+		if out != c.want || (code == 0) != (c.want == "") {
+			t.Errorf("%s: exit %d stdout %q stderr %q", name, code, out, errOut)
+		}
+	}
+}
+
 // The live plan passes both halves of the check.
 func TestLivePlan(t *testing.T) {
 	path := "../../../../docs/plans/lsf-improvements-breakdown.md"

@@ -3,6 +3,7 @@ package plan
 import (
 	"fmt"
 	"net"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
@@ -24,15 +25,18 @@ type DeclaredGate struct {
 
 // Declaration is the gate block. Its identity is its MarshalJS JSON. Hosts
 // are the network allowance: the hosts the project's builds and tests fetch
-// from. A block holding hosts alone declares no gates.
+// from. Store is the absolute host directory that cleanup moves units'
+// retains into (orchestrator D32, D33). A block holding hosts or store
+// alone declares no gates.
 type Declaration struct {
 	Setup string         `json:"setup,omitempty"`
 	Gates []DeclaredGate `json:"gates,omitempty"`
 	Hosts []string       `json:"hosts,omitempty"`
+	Store string         `json:"store,omitempty"`
 }
 
 // Gated reports whether the runtime runs gate commands for the plan: a
-// block holding hosts alone is handled as no block.
+// block holding hosts or store alone is handled as no block.
 func (d *Declaration) Gated() bool {
 	return d != nil && len(d.Gates) > 0
 }
@@ -66,7 +70,7 @@ func ParseDeclaration(markdown string) (*Declaration, []Problem) {
 	if !ok {
 		return nil, []Problem{gatesProblem("top level must be a mapping", GatesTag)}
 	}
-	problems := unknownKeys(top, []string{"setup", "gates", "hosts"}, func(k string) Problem {
+	problems := unknownKeys(top, []string{"setup", "gates", "hosts", "store"}, func(k string) Problem {
 		return gatesProblem("unknown top-level key "+k, k)
 	})
 	d := &Declaration{}
@@ -84,13 +88,21 @@ func ParseDeclaration(markdown string) (*Declaration, []Problem) {
 		d.Hosts, ps = parseHosts(rawHosts)
 		problems = append(problems, ps...)
 	}
+	rawStore, hasStore := top.Get("store")
+	if hasStore {
+		s, ok := rawStore.(string)
+		if !ok || !filepath.IsAbs(s) || filepath.Clean(s) != s || s == "/" {
+			problems = append(problems, gatesProblem("store must be a clean absolute directory path other than /; got "+jsJSON(rawStore), "store"))
+		}
+		d.Store = s
+	}
 	rawGates, hasGates := top.Get("gates")
 	if !hasGates {
 		switch {
 		case hasSetup:
 			problems = append(problems, gatesProblem("setup needs a non-empty `gates` sequence", "setup"))
-		case !hasHosts:
-			problems = append(problems, gatesProblem("the block must hold `gates`, `hosts` or both", GatesTag))
+		case !hasHosts && !hasStore:
+			problems = append(problems, gatesProblem("the block must hold `gates`, `hosts`, `store` or a combination", GatesTag))
 		}
 		if len(problems) > 0 {
 			return nil, problems

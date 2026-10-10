@@ -12,10 +12,13 @@ import "github.com/duaneg/phronithm/lsf-runtime/plan"
 func Check(planMarkdown string, decisions *string) []plan.Problem {
 	g := plan.LoadGraph(planMarkdown, decisions)
 	problems := append([]plan.Problem{}, g.Problems...)
-	_, ps := plan.ParseDeclaration(planMarkdown)
+	decl, ps := plan.ParseDeclaration(planMarkdown)
 	problems = append(problems, ps...)
 	if g.Plan != nil {
 		problems = append(problems, plan.ValidatePlan(g.Plan)...)
+		if len(ps) == 0 {
+			problems = append(problems, plan.CheckRetains(g.Plan, decl)...)
+		}
 		problems = append(problems, Agreement(planMarkdown, g.Plan)...)
 	}
 	return problems

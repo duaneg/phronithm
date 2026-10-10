@@ -50,7 +50,7 @@ func TestParseDeclarationProblems(t *testing.T) {
 		{"unknown top key", "gates:\n  - name: a\n    command: x\nextra: 1\n", "unknown top-level key extra"},
 		{"setup only", "setup: x\n", "setup needs a non-empty `gates` sequence"},
 		{"setup and hosts", "setup: x\nhosts: [example.com]\n", "setup needs a non-empty `gates` sequence"},
-		{"neither", "extra: 1\n", "the block must hold `gates`, `hosts` or both"},
+		{"neither", "extra: 1\n", "the block must hold `gates`, `hosts`, `store` or a combination"},
 		{"null hosts", "hosts:\ngates:\n  - name: a\n    command: x\n", "`hosts` must be a non-empty sequence of host names"},
 		{"empty hosts", "hosts: []\n", "`hosts` must be a non-empty sequence of host names"},
 		{"hosts not a sequence", "hosts: example.com\n", "`hosts` must be a non-empty sequence of host names"},

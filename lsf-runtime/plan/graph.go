@@ -71,6 +71,7 @@ type Unit struct {
 	Scope        []string     `json:"scope"`
 	Publishes    []string     `json:"publishes"`
 	Gates        []Gate       `json:"gates"`
+	Retains      []string     `json:"retains,omitempty"` // Go-only (orchestrator D32)
 }
 
 type Dependency struct {
@@ -206,7 +207,7 @@ func ParsePlanGraph(body string) (*Plan, []Problem) {
 		if _, ok := nonEmptyString(id); !ok {
 			problems = append(problems, problem(ref+": missing id", ref))
 		}
-		problems = append(problems, unknownKeys(um, []string{"id", "type", "complete", "dependencies", "scope", "publishes", "gates"}, func(k string) Problem {
+		problems = append(problems, unknownKeys(um, []string{"id", "type", "complete", "dependencies", "scope", "publishes", "gates", "retains"}, func(k string) Problem {
 			return problem(ref+": unknown key "+k, ref)
 		})...)
 		typ, _ := um.Get("type")
@@ -230,6 +231,8 @@ func ParsePlanGraph(body string) (*Plan, []Problem) {
 		deps := listField("dependencies", "dependencies must be a sequence of unit ids")
 		scope := listField("scope", "scope must be a sequence of paths")
 		publishes := listField("publishes", "publishes must be a sequence of strings")
+		retains := listField("retains", "retains must be a sequence of paths")
+		problems = append(problems, retainsProblems(ref, retains)...)
 		rawGates, _ := um.Get("gates")
 		gates, ok := orDefault(rawGates, []any{}).([]any)
 		if !ok {
@@ -281,6 +284,9 @@ func ParsePlanGraph(body string) (*Plan, []Problem) {
 			problems = append(problems, problem(ref+": duplicate gate name "+n, ref+"/"+n))
 		}
 		unit := &Unit{ID: ref, Type: typeStr, Complete: complete == true, Dependencies: []Dependency{}, Scope: scope, Publishes: publishes, Gates: outGates}
+		if len(retains) > 0 {
+			unit.Retains = retains
+		}
 		if id != nil {
 			unit.ID = jsString(id)
 		}
