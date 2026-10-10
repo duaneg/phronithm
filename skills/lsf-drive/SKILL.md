@@ -17,6 +17,7 @@ Design: [lsf-workflow](${CLAUDE_PLUGIN_ROOT}/docs/design/lsf-workflow.md), secti
 - **architecture-document**: path, committed on the integration branch.
 - **integration-branch**: the branch units merge into. The main checkout must be on it.
 - **request-record**: the architecture brief (`docs/architecture/<name>-brief.md`), whose requirements and success criteria are what the relaunch table's request-record clause refers to; passed as `requestRecord`, defaulting to that path.
+- **CLI route**: a runtime host config (default `${XDG_CONFIG_HOME:-~/.config}/lsf-runtime/config.json`, or a path the requester gives); a relaunch or recovery also needs the run's state dir, which `launch` prints.
 - **unscribed** (optional): ledger rows a previous return or a Phase 2 re-entry prompt carried; passed as `args.unscribed` unchanged.
 - One of:
   - a committed **decomposition-plan** (first launch);
@@ -51,13 +52,15 @@ go -C ${CLAUDE_PLUGIN_ROOT}/lsf-runtime build -o "${XDG_CACHE_HOME:-$HOME/.cache
 
 Not `go run`: it reports every non-zero exit as 1, and the detached driver re-executes the binary.
 
+A run keeps the route it started on: name it in the run report, and relaunch and recover on the same route. A host config created mid-run does not move a Workflow-route run, whose journal and `worktree-wf_*` branches the Go runtime cannot read. To move a run, the requester decides; it is then a fresh launch from the last committed plan SHA (Recovery, fresh launch).
+
 Then confirm the workflow's preconditions from the shell, not from memory:
 
 1. `git rev-parse --abbrev-ref HEAD` is the integration branch. The workflow stops at load otherwise.
 2. The plan passes the pre-flight check: `go -C ${CLAUDE_PLUGIN_ROOT}/lsf-runtime run ./validate/cmd/lsf-validate -decisions "$(git rev-parse --show-toplevel)/<log path>" "$(git rev-parse --show-toplevel)/<plan path>"`, leaving out `-decisions` when the decision log (`docs/plans/<name>-decisions.md` by default) does not exist. It reads the working tree, so first `git status --porcelain -- <plan path> <log path>` must print nothing: an uncommitted edit is committed or discarded before launch. Each line on stdout is a problem, and any blocks the launch: give them to the requester for `phronithm:breakdown` re-plan mode, committed before launch. A failure with nothing on stdout is the command's own: give the requester its stderr and ask how to proceed. Only where Go is not installed, check by hand: `grep -n 'lsf-plan' <plan path>` finds the block with a closing fence after it, and the decision log, if any, ends its `yaml lsf-decisions` block with a closing fence (`tail -n 3`). The command also rejects a malformed `lsf-gates` block, which the Workflow script ignores.
 3. The plan's SHA to launch from is `git rev-list -1 <branch> -- <plan path>` on a first launch, and the decision log's, if it exists, `git rev-list -1 <branch> -- <log path>`.
 4. Workflow route: `git worktree list` shows no stale `.claude/worktrees/wf_*` entries with unmerged work from a run the requester has abandoned. Leave entries from a run being resumed. A relaunch after a Phase 2 re-entry resumes nothing; its worktrees are stale unless the reconciliation record names them.
-   CLI route: `lsf-runtime status -name <name>`, run in the target repo (or `-state <dir>` of the run), shows `driver` neither `starting` nor `running`. Report any `leftovers`, `xferRefs` or `containers` it lists to the requester, with the remedies in *Relaunch*. The first launch on a host config is preceded by `lsf-runtime launch -dry-run` with the same flags and args: it runs the launch checks and stops before the first call, spending nothing.
+   CLI route: `lsf-runtime status -name <name>`, run in the target repo (or `-state <dir>` of the run), prints the report whatever its exit: 0 for a driver `starting`, `running` or `ended`, 3 for `crashed` or `failed-to-start`, 4 for `none` (the expected result before a first launch), 2 for a bad command line. A driver `starting` or `running` blocks the launch: the run is live (see *Launch*). `crashed` or `failed-to-start` goes to Recovery first. Report any `leftovers`, `xferRefs` or `containers` it lists to the requester, with the remedies in *Relaunch*. The first launch on a host config is preceded by a dry run: the *Launch* command with `-dry-run` added. It runs the launch checks in a scratch state dir and stops before the first call, spending nothing; it passes when it exits 0, printing a summary whose `stop_reason` is `dry-run`. Any other result is a refusal to give the requester verbatim.
 5. `git show-ref --verify refs/lsf/<name>/pause` (or the `pauseRef` to be passed) finds nothing. If the ref exists, the launch would pause at load: tell the requester and ask whether to delete it (see *Pause*) before launching.
 6. `wc -c CLAUDE.md` in the target project. This step never blocks a launch; it is a report. The harness injects the file into every agent the workflow spawns, so its size is part of every agent's floor before the first read: roughly 2.5k tokens per 10 KB. Report the size and the tokens it implies per agent; above 40 KB — about 10k tokens on every agent — say so. Do not trim it — that is the project's call, outside this skill.
 
@@ -90,7 +93,7 @@ lsf-runtime launch [-config <host config>] -plugin-dir ${CLAUDE_PLUGIN_ROOT} -ar
 EOF
 ```
 
-It returns once the launch checks have passed or failed, within 5 minutes. Exit 0 prints `{"stateDir","pid","launch"}`: record `stateDir` and pass `-state <stateDir>` to every later command. Exit 1 is a refusal, its message on stderr: give it to the requester verbatim (an old config, a failed launch check, a `claudeVersion` mismatch, a git older than 2.38, a running driver). Then run `lsf-runtime watch -state <stateDir>` as a background Bash; the session is re-invoked when it exits, at the run's end. Do not poll. The driver runs in a session of its own and outlives this one: a later session runs `lsf-runtime status -state <stateDir>`, and runs `watch` again while `driver` is `starting` or `running`.
+It returns once the launch checks have passed or failed, within 5 minutes. Exit 0 prints `{"stateDir","pid","launch"}`: record `stateDir` and pass `-state <stateDir>` to every later command. Exit 1 is a refusal, its message on stderr (an old config, a failed launch check, a `claudeVersion` mismatch, a git older than 2.38, a running driver), except when stderr says the driver was left running (5 minutes passed, or an interrupt): after any exit 1, run `lsf-runtime status` with the same address. A `driver` `starting` or `running` is a live run, to `watch` as below; otherwise give the refusal to the requester verbatim. Then run `lsf-runtime watch -state <stateDir>` as a background Bash; the session is re-invoked when it exits, at the run's end. Do not poll. The driver runs in a session of its own and outlives this one: a later session runs `lsf-runtime status -state <stateDir>`, and runs `watch` again while `driver` is `starting` or `running`.
 
 ### Pause
 
@@ -101,7 +104,7 @@ git update-ref refs/lsf/<name>/pause HEAD
 git show-ref --verify refs/lsf/<name>/pause
 ```
 
-Confirm the second command prints the ref, then tell the requester that units already started will finish, merge, and be re-planned first: the pause can take up to a wave. The requester may also set the ref from any shell or worktree; a ref dirties no working tree. On the CLI route, `lsf-runtime pause -state <stateDir>` sets the ref and verifies it, and `pause -lift` deletes it. Use TaskStop (CLI route: `lsf-runtime stop -state <stateDir>`; a second `stop` cancels the calls in flight) only when the requester asks for an immediate halt and accepts losing the work in flight; that is a kill, and Recovery applies.
+Confirm the second command prints the ref, then tell the requester that units already started will finish, merge, and be re-planned first: the pause can take up to a wave. The requester may also set the ref from any shell or worktree; a ref dirties no working tree. On the CLI route, `lsf-runtime pause -state <stateDir>` sets the ref and verifies it, and `pause -lift` deletes it. Use TaskStop (CLI route: `lsf-runtime stop -state <stateDir>`. The first `stop` lets the calls in flight finish, which can take as long as the longest call, and a second cancels them. `stop` is refused while `driver` is `starting`; retry once `status` says `running`) only when the requester asks for an immediate halt and accepts losing the work in flight; that is a kill, and Recovery applies.
 
 The merge, ledger, and plan-copy stages read the ref; one set after the last of them in a wave is seen the wave after. A stop outranks a pause and leaves the ref set. A launch with the ref present commits any `decisions` and `unscribed` rows it was given, runs the decision re-plan, then returns `paused` before any unit starts; its `planSha` is the decision re-plan's.
 
@@ -204,24 +207,26 @@ A `stage-fault` from a code stage reads `<stage> failed: <reason>`. Most reasons
 | `runtime-error` | `summary.detail` names the fault; the requester clears it by hand (below); then `resume` |
 | `signal-SIGTERM`, `signal-SIGINT`, `cancelled` | `resume`, when the requester wants the run continued |
 | `max-calls`, `max-cost`, `max-wall-clock` | The requester raises the cap in the host config's `caps`, or not; then `resume` |
-| `crashed`; `driver` `crashed` or `failed-to-start` | Give the requester `summary.error` or `driverLog`, and the state dir's `log.txt`; `resume` only on their instruction |
+| `crashed` (the orchestrator errored or panicked); `driver` `crashed` or `failed-to-start` (no summary) | Give the requester `summary.error` or `driverLog`, and the state dir's `log.txt`; `resume` only on their instruction |
 
 **Faults cleared by hand.** Each is raised as a `stage-fault` (`merge failed: …`, or the fast-forward's stage) or a `runtime-error` stop, and the requester clears it by the remedy its text gives, then relaunches (a stage-fault) or resumes (a runtime stop). Merge faults, the merge running in a merge clone `<stateDir>/merge/w<n>`:
 
-- `returned merge SHA of <unit> does not resolve to a commit`: a history rewrite removed a recorded merge. Remove its journal record, `<stateDir>/journal/merge_w<n>-*.json`.
+- `returned <field> <sha> does not resolve to a commit` (`<field>` is a merge's `sha`, `planSha` or `architectureSha`): a history rewrite removed a recorded merge, and the journaled merge result replays it at every relaunch. Remove its journal record, `<stateDir>/journal/merge_w<n>-*.json`. Its siblings (`… is not a commit SHA`, `… is not on <branch>`, `returned a <status> merge of <unit> without its SHA`) replay the same way; the code gives them no remedy, so present them to the requester with the record's path.
 - A stale `index.lock`: git's own error, after `merge failed:` or `git refused to fast-forward`. Remove the lock file once no git process holds it.
 - `a merge is in progress in the main checkout` (or a cherry-pick or revert): finish or abort it. `a merge is in progress in the merge clone … that this stage did not start`: remove the clone.
 - `after the merge of <unit> at <sha>, <path> is staged (a hook?)`: commit or unstage it. `<path> is staged in the merge clone`: remove the clone.
-- `the merge of <unit> stopped with no conflict`: a `pre-merge-commit` hook, which the merge clone includes, refused the merge. Fix or exempt the hook, then relaunch.
-- A red gate result the environment caused (a merge `regressed` or `unresolvable` on a gate that should pass): the result replays from the journal. After fixing the environment, remove `<stateDir>/journal/gates_<tree prefix>-*.json` (requester decision, 2026-10-08).
+- `the merge of <unit> stopped with no conflict`: the project's `pre-merge-commit` hook, which the merge clone takes from the main repo, refused the merge. The requester fixes the hook or exempts the merge from it; removing the clone alone does not help. Then relaunch.
+- A red gate result the environment caused (a merge `regressed` or `unresolvable` on a gate that should pass): the result replays from the journal. After fixing the environment, remove `<stateDir>/journal/gates_<tree prefix>-*.json`.
 
 Clone faults:
 
 - A writer clone or merge clone a fault left: `<dir> exists but …; remove it and relaunch`, `<dir> is stale (… moved since) but holds commits not fetched … or uncommitted changes; recover them, remove it and relaunch`, `merge clone <dir> …: remove it and relaunch`.
 - A merge clone whose integration branch diverged from main's: `the merge clone's <branch> (…) and the main repo's (…) have diverged …; remove <dir> and relaunch, and the step adopts its merges … by their trailers`.
 - A kept clone left on another branch: `<dir> exists but is not on <branch>; remove it and relaunch`, or at a fast-forward `the clone's HEAD … is not <branch>'s tip …: in the call's clone …, commit the work on <integration> or drop it, then relaunch`.
+- A kept clone's branch that cannot fast-forward the integration branch (it moved since): `<integration> moved to <sha> while <tip> was made on an earlier tip; rebase those commits onto <integration> in the call's clone …, or drop them, then relaunch`.
+- `the conflict call changed the merge clone's git config, hooks or info files; remove <dir> and relaunch`.
 - A fetch-back failed by a branch the agent renamed: `<label>: fetching <branch> from its clone <dir>: …; the clone is kept`. Restore the branch name in the clone, or recover the work and remove the clone.
-- A fetch-back refused because the branch's tree holds a gitlink: `fetching <branch> from its clone: <dir> holds a nested repository (gitlink <path> at <rev>) …; remove the nested repository from the branch and relaunch`. It stays a `runtime-error` (requester decision, 2026-10-10).
+- A fetch-back refused because the branch's tree holds a gitlink: `fetching <branch> from its clone: <dir> holds a nested repository (gitlink <path> at <rev>) …; remove the nested repository from the branch and relaunch`. It is a `runtime-error`.
 
 `lsf-runtime status` lists what faults leave: `leftovers` (`clone/`, `scratch/`, `merge/` and `*.partial` entries), `xferRefs` (`refs/lsf/<plan8>/xfer/w<n>` in the main repo) and `containers` (the state dir's label). Present them with the fault.
 
