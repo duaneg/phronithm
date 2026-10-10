@@ -13,3 +13,5 @@ __pycache__/
 
 # lsf-runtime test temp fallback
 lsf-runtime/.testtmp/
+lsf-runtime/cli/cli
+lsf-runtime/.build/
