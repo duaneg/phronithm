@@ -16,8 +16,8 @@ func init() {
 }
 
 // required marks a starter host config's value the requester must supply;
-// compose refuses a host file still holding one.
-const required = "REQUIRED: "
+// compose refuses a host file holding a string starting with it.
+const required = "REQUIRED:"
 
 func cmdConfig(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] != "init" {
@@ -53,14 +53,14 @@ func writeStarter(path, pluginDir string) error {
 		}
 		containerfile = filepath.Join(p, "lsf-runtime", "container", "Containerfile")
 	}
-	creds := required + "the claude credentials file (~/.claude/.credentials.json)"
+	creds := required + " the claude credentials file (~/.claude/.credentials.json)"
 	if home, err := os.UserHomeDir(); err == nil {
 		if p := filepath.Join(home, ".claude", ".credentials.json"); fileExists(p) {
 			creds = p
 		}
 	}
 	starter := map[string]any{
-		"image": required + "build an image from " + containerfile + " with the project's toolchain and put name@sha256:<digest> here (" + configDoc + ")",
+		"image": required + " build an image from " + containerfile + " with the project's toolchain and put name@sha256:<digest> here (" + configDoc + ")",
 		"proxy": map[string]any{"listen": "127.0.0.1:0", "credentialsFile": creds},
 		"env":   []string{},
 	}

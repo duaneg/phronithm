@@ -95,6 +95,8 @@ func TestStatusRetainLeftovers(t *testing.T) {
 	rec("u", store)
 	rec("v", store)
 	rec("w", other)
+	rec("x", store+"/")
+	rec("y", filepath.Join(t.TempDir(), "absent"))
 	// launch.json spells the state dir differently from the CLI's
 	// address: through a symlink, which the prefix's hash does not resolve.
 	spelled := filepath.Join(t.TempDir(), "link")

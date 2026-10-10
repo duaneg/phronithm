@@ -77,6 +77,18 @@ Facts from the Claude Code plugin docs (code.claude.com/docs/en/plugins, fetched
 - **D3: commit the binaries.** History grows by the full binary set every release; rejected.
 - **D4: ship a CI-built archive.** The marketplace entry switches to an `archive` source built by CI with every target inside. This changes how the whole plugin ships.
 
+**Decision: D1** (requester verdict, 2026-10-11; unit `runtime-distribution`). D4 is rejected: it puts the whole plugin behind a release archive, so a broken release breaks every skill, not only LSF, and whether a zip keeps the exec bit is undocumented.
+
+- **Launcher.** `${CLAUDE_PLUGIN_ROOT}/lsf-runtime/lsf-runtime <command> [args]` (POSIX `sh`) execs a binary with the arguments unchanged. First match wins:
+  1. `LSF_RUNTIME_BIN`, which must be an executable file.
+  2. A working tree: a `.git` (file or directory) at the plugin root and `go` on `PATH`. It runs `go -C <root>/lsf-runtime build -buildvcs=false ./cli` on every invocation into `lsf-runtime/.build/` (gitignored). The result replaces `.build/lsf-runtime` only when it differs (`cmp`), by an atomic `mv`, so a live driver's binary is left alone when the tree has not changed. A failed build exits 125 with the compiler's output and never falls through to a release. A working tree without `go` runs the release and says so on stderr. Copied plugin caches have no `.git`; a directory marketplace loaded in place does.
+  3. The release pinned in `lsf-runtime/dist/release`, for `uname -m` mapped to `amd64` or `arm64` (anything else is refused). It is downloaded once with `curl --proto =https --tlsv1.2` from `https://github.com/duaneg/phronithm/releases/download/<tag>/lsf-runtime-linux-<arch>` (`LSF_RUNTIME_RELEASE_URL` overrides the base, and then `file:` is allowed too, for tests) into `${LSF_RUNTIME_CACHE:-${XDG_CACHE_HOME:-~/.cache}/lsf-runtime}/release/<tag>/`. Its sha256 is checked against the pin on every run. A download that mismatches is removed and refused. A cached file that mismatches is refused with "remove <path> and rerun", never re-downloaded silently.
+  - The cache is not `${CLAUDE_PLUGIN_DATA}`: that variable is substituted in skill bodies but is not in the Bash tool's environment (plugins-reference, fetched 2026-10-11), so the launcher cannot read it.
+  - The launcher's own failures exit **125** with `lsf-runtime launcher:` on stderr, distinct from every CLI code (0–4) and from `validate`'s 0/1/2.
+- **Pin file.** `lsf-runtime/dist/release` holds `tag <tag>`, `commit <sha>` (the tag's commit) and `sha256 <arch> <hex>` per arch; `#` lines are comments. With no tag, the release step refuses with "no release pinned". `dist/pin.sh <tag>` rewrites it from the release's `SHA256SUMS` (`gh release download`).
+- **Release order.** Push tag `lsf-runtime-v<semver>` at commit X; CI builds and publishes the release. Then run `dist/pin.sh <tag>`, commit at X+1, and bump the plugin version there. Between releases, skills and the pinned binary can drift: `dist/check-pin.sh` fails unless `lsf-runtime/` (but for `dist/` and the launcher) is unchanged between the pin's `commit` and `HEAD`.
+- **Binary identity.** Release builds use `CGO_ENABLED=0 -trimpath -ldflags "-s -w -X main.version=<tag> -X main.commit=<sha>"`; `lsf-runtime version` prints `<version> <commit>`, `dev unknown` for a working-tree build.
+
 **Python needs no route.** It needs a `python3` on the user's machine at a version floor. Status of the floor (not probed):
 
 - On macOS, `python3` comes with the Command Line Tools. Those tools also supply `git`, which the programme already requires, so a `python3` is likely present, though reportedly at 3.9.

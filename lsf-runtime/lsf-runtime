@@ -1,0 +1,115 @@
+#!/bin/sh
+# Launcher for the lsf-runtime CLI (docs/design/lsf-runtime.md, Language →
+# Distribution). It runs, first match wins:
+#   1. $LSF_RUNTIME_BIN;
+#   2. in a working tree (a .git at the plugin root) with go on PATH, a
+#      build of the tree, into lsf-runtime/.build/;
+#   3. the release pinned in lsf-runtime/dist/release, downloaded once into
+#      ${LSF_RUNTIME_CACHE:-${XDG_CACHE_HOME:-~/.cache}/lsf-runtime}/release/
+#      and checked against its sha256 pin on every run.
+# Its own failures exit 125 with "lsf-runtime launcher:" on stderr.
+set -eu
+
+die() {
+	printf 'lsf-runtime launcher: %s\n' "$*" >&2
+	exit 125
+}
+
+tmp=
+trap 'rm -f -- "$tmp"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+root=$(dirname -- "$here")
+
+if [ -n "${LSF_RUNTIME_BIN:-}" ]; then
+	[ -f "$LSF_RUNTIME_BIN" ] && [ -x "$LSF_RUNTIME_BIN" ] ||
+		die "LSF_RUNTIME_BIN=$LSF_RUNTIME_BIN is not an executable file"
+	exec "$LSF_RUNTIME_BIN" "$@"
+fi
+
+untree=
+if [ -e "$root/.git" ]; then
+	if command -v go >/dev/null 2>&1; then
+		mkdir -p "$here/.build" || die "cannot create $here/.build"
+		tmp=$here/.build/lsf-runtime.$$
+		if ! out=$(go -C "$here" build -buildvcs=false -o "$tmp" ./cli 2>&1); then
+			printf '%s\n' "$out" >&2
+			die "building the working tree $root failed (above)"
+		fi
+		# An unchanged build leaves the binary a live driver re-executes.
+		if cmp -s "$tmp" "$here/.build/lsf-runtime"; then
+			rm -f -- "$tmp"
+		else
+			mv -f -- "$tmp" "$here/.build/lsf-runtime" || die "cannot install the build in $here/.build"
+		fi
+		tmp=
+		exec "$here/.build/lsf-runtime" "$@"
+	fi
+	untree=1
+fi
+
+case $(uname -m) in
+x86_64 | amd64) arch=amd64 ;;
+aarch64 | arm64) arch=arm64 ;;
+*) die "unsupported machine $(uname -m): linux amd64 and arm64 only" ;;
+esac
+
+pin=$here/dist/release
+[ -r "$pin" ] || die "cannot read $pin"
+tag=$(awk '$1 == "tag" { print $2 }' "$pin")
+want=$(awk -v a="$arch" '$1 == "sha256" && $2 == a { print $3 }' "$pin")
+if [ -z "$tag" ] || [ -z "$want" ]; then
+	die "no release pinned for linux-$arch in $pin; set LSF_RUNTIME_BIN or run from a working tree with Go"
+fi
+case $tag in
+*[!A-Za-z0-9._-]* | .*) die "bad tag $tag in $pin" ;;
+esac
+if [ -n "$untree" ]; then
+	printf 'lsf-runtime launcher: %s is a working tree but go is not on PATH; running release %s, not the tree\n' "$root" "$tag" >&2
+fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+	sha() { sha256sum -- "$1" | awk '{ print $1 }'; }
+elif command -v shasum >/dev/null 2>&1; then
+	sha() { shasum -a 256 -- "$1" | awk '{ print $1 }'; }
+else
+	die "neither sha256sum nor shasum is on PATH"
+fi
+
+case ${XDG_CACHE_HOME:-} in
+/*) cache=$XDG_CACHE_HOME/lsf-runtime ;;
+*) cache=$HOME/.cache/lsf-runtime ;;
+esac
+cache=${LSF_RUNTIME_CACHE:-$cache}
+dir=$cache/release/$tag
+bin=$dir/lsf-runtime-linux-$arch
+
+if [ ! -e "$bin" ]; then
+	command -v curl >/dev/null 2>&1 || die "curl is not on PATH; it downloads release $tag"
+	base=https://github.com/duaneg/phronithm/releases/download
+	proto='=https'
+	if [ -n "${LSF_RUNTIME_RELEASE_URL:-}" ]; then
+		base=$LSF_RUNTIME_RELEASE_URL
+		proto='=https,file'
+	fi
+	url=$base/$tag/lsf-runtime-linux-$arch
+	mkdir -p "$dir" || die "cannot create $dir"
+	tmp=$(mktemp "$dir/.download.XXXXXX") || die "cannot create a file in $dir"
+	curl -fsSL --proto "$proto" --proto-redir '=https' --tlsv1.2 -o "$tmp" "$url" ||
+		die "downloading $url failed"
+	got=$(sha "$tmp")
+	if [ "$got" != "$want" ]; then
+		rm -f -- "$tmp"
+		tmp=
+		die "$url has sha256 $got, but $pin pins $want; refused"
+	fi
+	chmod 755 "$tmp"
+	mv -f -- "$tmp" "$bin" || die "cannot install $bin"
+	tmp=
+fi
+
+got=$(sha "$bin")
+[ "$got" = "$want" ] || die "$bin has sha256 $got, but $pin pins $want; remove $bin and rerun"
+exec "$bin" "$@"

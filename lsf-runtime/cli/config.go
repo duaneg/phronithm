@@ -168,7 +168,7 @@ func readHost(path string) (map[string]json.RawMessage, string, error) {
 		return nil, "", fmt.Errorf("host config %s: set by the CLI per launch, remove: %s", path, strings.Join(set, ", "))
 	}
 	if u := unfilled(host); len(u) > 0 {
-		return nil, "", fmt.Errorf("host config %s: fill in the starter's %s fields: %s", path, strings.TrimSpace(required), strings.Join(u, ", "))
+		return nil, "", fmt.Errorf("host config %s: fill in the starter's %s fields: %s", path, required, strings.Join(u, ", "))
 	}
 	return host, path, nil
 }

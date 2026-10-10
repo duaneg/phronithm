@@ -339,10 +339,18 @@ func statusOf(state string, fb fallback) report {
 // state dir as the runtime spelled it (launch.json's), which the prefix
 // hashes.
 func retainLeftovers(state, runState string) (dirs, errs []string) {
-	recs, _ := filepath.Glob(filepath.Join(state, "retained", "*.json"))
+	recDir := filepath.Join(state, "retained")
+	es, err := os.ReadDir(recDir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		errs = append(errs, fmt.Sprintf("retain records: %v", err))
+	}
 	prefix := lsfrt.RetainPrefix(runState)
 	seen := map[string]bool{}
-	for _, rec := range recs {
+	for _, e := range es {
+		if !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		rec := filepath.Join(recDir, e.Name())
 		var r struct {
 			Store string `json:"store"`
 		}
@@ -357,17 +365,18 @@ func retainLeftovers(state, runState string) (dirs, errs []string) {
 			errs = append(errs, fmt.Sprintf("retain record %s: %v", rec, err))
 			continue
 		}
-		if seen[r.Store] {
+		store := filepath.Clean(r.Store)
+		if seen[store] {
 			continue
 		}
-		seen[r.Store] = true
-		es, err := os.ReadDir(r.Store)
+		seen[store] = true
+		ss, err := os.ReadDir(store)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			errs = append(errs, fmt.Sprintf("retain store %s: %v", r.Store, err))
+			errs = append(errs, fmt.Sprintf("retain store %s: %v", store, err))
 		}
-		for _, e := range es {
+		for _, e := range ss {
 			if strings.HasPrefix(e.Name(), prefix) {
-				dirs = append(dirs, filepath.Join(r.Store, e.Name()))
+				dirs = append(dirs, filepath.Join(store, e.Name()))
 			}
 		}
 	}
