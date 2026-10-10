@@ -562,7 +562,7 @@ The policy splits across units. The re-plan names or adds carriers:
   - the store declaration;
   - the runtime's journaled move to `<store>/<unit>/`.
 
-  These need a carrier. `empirical-unit-design` decides where the declaration lives. The move is runtime work that falls after `code-merge-cleanup`; until it lands, a `Retains:` line keeps the worktree.
+  `retained-artefacts-impl` carries them, with the declaration where `empirical-unit-design` placed it (§Units, U8). The move runs in cleanup, before a merged unit's clones are removed.
 - **`empirical-unit-impl`:** the recipe as a record's citation form, and the regenerable/non-regenerable classes in the breakdown skill.
 - **`long-running-design`:** a job's outputs follow the same classes.
 - **`lsf-runtime.md`:** Not in this unit still assigns the ignored-file policy to `code-stage-interface`, so the pointer moves to `code-merge-cleanup`.
