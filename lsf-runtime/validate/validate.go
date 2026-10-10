@@ -1,7 +1,8 @@
 // Package validate checks a plan document before launch: the load stage's
 // checks, run by the orchestrator's own loader, and the agreement of the
 // `## Graph` block with the prose entries it mirrors, which nothing at load
-// compares. Command lsf-validate runs it.
+// compares. Command runs it as a command: lsf-validate, and the CLI's
+// `lsf-runtime validate`.
 package validate
 
 import "github.com/duaneg/phronithm/lsf-runtime/plan"
