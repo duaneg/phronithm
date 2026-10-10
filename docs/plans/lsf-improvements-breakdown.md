@@ -2,7 +2,7 @@
 
 ## Summary
 
-A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 44 units, 23 complete; critical path 9 units from the empirical design verdicts through the retained-artefact move and the serialised orchestrator stream. Base commit `b3dac6a`.
+A programme to investigate and act on the friction recorded in the [archipeligo postmortem](../design/lsf-postmortem-archipeligo-foundation.md). 44 units, 24 complete; critical path 8 units, two chains joining at `script-retirement`: the empirical unit verdict through the retained-artefact move, and the runtime CLI through distribution, then the serialised orchestrator stream. Base commit `b3dac6a`.
 
 The postmortem's problems are taken as accurate for archipeligo. The proposals in [lsf-improvements](../design/lsf-improvements.md) are candidate options, not designs: every decision unit states its problem without a solution, checks whether the problem holds outside archipeligo, and weighs the proposal against alternatives that include doing nothing.
 
@@ -10,7 +10,7 @@ The programme is complete when every row of the problem register has a dispositi
 
 The substrate is S2, a host runtime running the orchestrator through headless `claude -p` calls, confirmed by `substrate-spike`. The runtime and the orchestrator are written in Go (`runtime-language-design`, requester verdict 2026-10-06; JavaScript and TypeScript excluded), for Linux only (requester, 2026-10-09); the orchestrator is ported, under `lsf-runtime/`. The Workflow script stays the supported Phase 3 path, under `lsf-substrate.md`'s interim policy, until `script-retirement`.
 
-Key risks: gate commands run code the stages wrote, in rootless podman containers behind an egress allow-list proxy whose hardening is incomplete, and Bash can spend on the API through the credential proxy (accepted residual); the S2 build is a conjectured estimate; six units wait on a requester verdict, so requester attention, not agent time, bounds the schedule; and the evidence for generality is one other project (cartomancer-v2), all code units.
+Key risks: gate commands run code the stages wrote, in rootless podman containers behind an egress allow-list proxy whose hardening is incomplete, and Bash can spend on the API through the credential proxy (accepted residual); the S2 build is a conjectured estimate; five units wait on a requester verdict, so requester attention, not agent time, bounds the schedule; and the evidence for generality is one other project (cartomancer-v2), all code units.
 
 Units marked **provisional** have entries the re-plan rewrites when the design unit they depend on completes. A design that declines to act retires its provisional units, with the reason in the register.
 
@@ -62,6 +62,8 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 
 ### s2-egress-gates — complete at `820c31b`; entry at `f6f0aef`; report `docs/plans/s2-egress-gates-completion.md`
 
+### empirical-criteria-design — complete at `53404c5`; entry at `14f2a07`; report `docs/design/lsf-empirical-work.md` (Criteria)
+
 ### significant-precision-sample
 - **Type**: design
 - **Risk**: medium — a hand classification; the rubric decides the answer
@@ -75,19 +77,6 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Done condition**: The record is committed with the sampling frame, sample size and classification rubric fixed before any row is classified and stated as such; ledger rows deduplicated into findings; and a precision estimate with an interval per source stage (plan critique, code critique, lens review) for each project. `phronithm:critique` passes at the gate bar.
 - **Description**: Postmortem §B and its data gap: Significant-finding precision is unmeasured. Run with `phronithm:investigate`. Without it, any consumer for these findings is chosen blind.
 
-### empirical-criteria-design
-- **Type**: design
-- **Risk**: high — changes what Phases 1–2 demand of every programme
-- **Clarity**: exploratory
-- **Iteration**: write-once
-- **Effort**: medium
-- **Scope**: `docs/design/lsf-empirical-work.md::criteria`
-- **Publishes**: the decided requirements on measured success criteria, cited evidence, and the criterion-against-vision check
-- **Depends on**: problem-register (knowledge, problem ids and generality classes)
-- **External gates**: `archipeligo-records` (data, `~/src/archipeligo-evolved` @ `c220c62`); `cartomancer-records` (data, `~/src/cartomancer-v2` quality-bar-interiors brief and plans); `requester-verdict` (organisational)
-- **Done condition**: The Criteria section is committed. It decides what Phases 1–2 require of a success criterion judged by measurement and of evidence cited for an architecture claim, and how a criterion is checked against the vision it stands for. It is walked against archipeligo's three cases (the 3-seed gate, the 41-seed gate, the undefined "persists") and against cartomancer-v2's `quality-bar-interiors`, stating the burden it adds to a programme with no measured criterion. The requester's verdict is recorded.
-- **Description**: Postmortem §A (gate designs, evidence from another system, an undefined criterion, a criterion that did not test the vision) and §G.
-
 ### empirical-unit-design
 - **Type**: design
 - **Risk**: high — `phronithm:breakdown` is used outside lsf, so a change here reaches every plan
@@ -98,7 +87,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: the decided plan-level shape of empirical work; where `Retains:` and the store are declared
 - **Depends on**: problem-register (knowledge, problem ids and generality classes); empirical-criteria-design (design, the criteria form a unit's registration cites); gate-results-integrity (knowledge, an empty gates list stops with `gate-not-run`)
 - **External gates**: `archipeligo-records` (data, `~/src/archipeligo-evolved` @ `c220c62`); `requester-verdict` (organisational)
-- **Done condition**: The Units section is committed. It decides how a plan represents work whose outcome is a measurement, comparing at least a new unit type, added entry fields, and routing the work to `phronithm:investigate`. It covers fail branches (P-A4), the risk and clarity rating of sampled work (P-A5), companion tuning units (P-A6), sizing under outcome uncertainty (P-A9), and a measurement that supersedes cited evidence without moving a decision (P-A10). It decides what a non-design unit declares as its gate in a project with no gate of its own, for measurement and docs units, since an empty gates list stops with `gate-not-run`; the options include a declared `lsf-gates` block, whose `gates` list may not be empty. It decides where a unit's `Retains:` declaration and a project's store are declared (`lsf-empirical-work.md`, Retained artefacts). It is walked against `stage1-gate` at `arch@dc88280` and `stage2-horizon-confirm`. The requester's verdict is recorded.
+- **Done condition**: The Units section is committed. It decides how a plan represents work whose outcome is a measurement, comparing at least a new unit type, added entry fields, and routing the work to `phronithm:investigate`. It covers fail branches (P-A4), the risk and clarity rating of sampled work (P-A5), companion tuning units (P-A6), sizing under outcome uncertainty (P-A9), and a measurement that supersedes cited evidence without moving a decision (P-A10). It decides what a non-design unit declares as its gate in a project with no gate of its own, for measurement and docs units, since an empty gates list stops with `gate-not-run`; the options include a declared `lsf-gates` block, whose `gates` list may not be empty. It decides where a unit's `Retains:` declaration and a project's store are declared (`lsf-empirical-work.md`, Retained artefacts). A measurement unit's registration cites C2's form (`lsf-empirical-work.md`, Criteria). It is walked against `stage1-gate` at `arch@dc88280` and `stage2-horizon-confirm`. The requester's verdict is recorded.
 - **Description**: Postmortem §A's unit-level bullets: campaigns typed `feature` or `integration`, units sized by context and not by outcome uncertainty, measured values accumulating in the architecture document.
 
 ### findings-consumer-design
@@ -233,16 +222,16 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 
 ### empirical-criteria-impl
 - **Type**: feature
-- **Risk**: low
+- **Risk**: medium — adds C1–C5's burden to every programme's Phases 1–2; C2 must be compressed without losing an element, and C4's axes enter untested (R42)
 - **Clarity**: specified
 - **Iteration**: write-once
-- **Effort**: small
-- **Scope**: `skills/large-scale-feature/SKILL.md::phase-1`, `skills/large-scale-feature/SKILL.md::phase-2`
-- **Publishes**: none
-- **Depends on**: empirical-criteria-design (design, decided requirements)
+- **Effort**: medium
+- **Scope**: `docs/success-criteria.md`, `skills/large-scale-feature/SKILL.md::phase-1`, `skills/large-scale-feature/SKILL.md::phase-2`
+- **Publishes**: `docs/success-criteria.md` (C1–C5 and the critic's checks)
+- **Depends on**: empirical-criteria-design (design, `lsf-empirical-work.md` §Criteria)
 - **External gates**: none
-- **Done condition**: `skills/large-scale-feature/SKILL.md` Phases 1–2 carry the decided requirements. `phronithm:critique` (critique-skill) passes at the gate bar and a `phronithm:edit` pass has been applied.
-- **Description**: **Provisional.**
+- **Done condition**: `docs/success-criteria.md` states the Terms, C1–C5 and the Checking list of `lsf-empirical-work.md` §Criteria (Proposed decision), with C4's axes marked untested. `skills/large-scale-feature/SKILL.md` points to it by anchor from Phase 1 steps 6–7, Phase 2 steps 2–3 and exit criteria, and re-entry step a; Phase 1 step 7 and Phase 2 step 3 give the critic the document and its checks, and re-entry recommends a vision review after a criterion's second relaxation. The completion report maps each bullet of the Proposed decision to the line carrying it, or states why it is left out. `phronithm:critique` (critique-skill) passes at the gate bar over the document and the skill diff, and a `phronithm:edit` pass has been applied to both.
+- **Description**: Carries the decided criteria into Phases 1–2. The requirements live in their own document, which the skill points to as it does `critique-gate.md` (requester, 2026-10-10), so the skill's reading cost grows by pointers, not rules (R7). The record's Not covered cases (design-figure arithmetic, uncited reliance) are declined and get no text.
 
 ### phase2-gate-discipline
 - **Type**: feature
@@ -265,7 +254,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Effort**: medium
 - **Scope**: `skills/breakdown/SKILL.md`, `docs/plan-graph.md`
 - **Publishes**: none
-- **Depends on**: empirical-unit-design (design, plan-level shape); retained-artefacts-design (design, retained-artefact policy); empirical-script-support, retained-artefacts-impl (testing, the parser must accept what the skill emits, `Retains:` included); plan-preflight-check, declared-gates (logical, each serialises a section of `skills/breakdown/SKILL.md`; declared-gates also `docs/plan-graph.md`)
+- **Depends on**: empirical-unit-design (design, plan-level shape); retained-artefacts-design (design, retained-artefact policy); empirical-criteria-impl (logical, `docs/success-criteria.md`'s C2, which a measurement unit's registration cites); empirical-script-support, retained-artefacts-impl (testing, the parser must accept what the skill emits, `Retains:` included); plan-preflight-check, declared-gates (logical, each serialises a section of `skills/breakdown/SKILL.md`; declared-gates also `docs/plan-graph.md`)
 - **External gates**: none
 - **Done condition**: `skills/breakdown/SKILL.md` and `docs/plan-graph.md` carry the decided shape and the retained-artefact policy: a record cites regenerable data by recipe, the regenerable and non-regenerable classes with the burden of proof on regenerability, the recipe's contents, and the `Retains:` and store declarations. The citation rule is stated as scoped to programmes whose records cite measured data. A fixture plan written to it passes the pre-flight command. `phronithm:critique` (critique-skill) passes at the gate bar and a `phronithm:edit` pass has been applied.
 - **Description**: **Provisional.**
@@ -332,7 +321,7 @@ Units marked **provisional** have entries the re-plan rewrites when the design u
 - **Publishes**: none
 - **Depends on**: shakedown-fixture (testing, the run); phase2-gate-discipline, programme-close-out, empirical-criteria-impl (logical, their dispositions)
 - **External gates**: none
-- **Done condition**: Every register row has a disposition: `fixed` with a commit, `declined` with a reason, or `deferred` to a named successor. `docs/design/lsf-improvements.md` is deleted. `CLAUDE.md`'s Structure section lists the documents and commands the programme added. The `lsf-runtime` tests pass.
+- **Done condition**: Every register row has a disposition: `fixed` with a commit, `declined` with a reason, or `deferred` to a named successor. The Generality cells of P-A1 and P-A3 carry the evidence `lsf-empirical-work.md` §Criteria found outside the register's probe (dungeon-assistant S4; cartomancer-v2 `map-toolkit-mvp` SC1 and SC2, `quality-bar-interiors` SC4). `docs/design/lsf-improvements.md` is deleted. `CLAUDE.md`'s Structure section lists the documents and commands the programme added. The `lsf-runtime` tests pass.
 - **Description**: The closure unit: it owns the completeness criterion the other units contribute to (Standing Obligations).
 
 ## Graph
@@ -432,7 +421,7 @@ units:
         pin: "quality-bar-interiors-signals.md"
   - id: empirical-criteria-design
     type: design
-    complete: false
+    complete: true
     dependencies: [problem-register]
     scope: [docs/design/lsf-empirical-work.md::criteria]
     publishes: [criteria requirements]
@@ -761,8 +750,8 @@ units:
     type: feature
     complete: false
     dependencies: [empirical-criteria-design]
-    scope: [skills/large-scale-feature/SKILL.md::phase-1, skills/large-scale-feature/SKILL.md::phase-2]
-    publishes: []
+    scope: [docs/success-criteria.md, skills/large-scale-feature/SKILL.md::phase-1, skills/large-scale-feature/SKILL.md::phase-2]
+    publishes: [docs/success-criteria.md]
     gates: []
   - id: phase2-gate-discipline
     type: feature
@@ -776,7 +765,7 @@ units:
   - id: empirical-unit-impl
     type: feature
     complete: false
-    dependencies: [empirical-unit-design, retained-artefacts-design, empirical-script-support, retained-artefacts-impl, plan-preflight-check, declared-gates]
+    dependencies: [empirical-unit-design, retained-artefacts-design, empirical-criteria-impl, empirical-script-support, retained-artefacts-impl, plan-preflight-check, declared-gates]
     scope: [skills/breakdown/SKILL.md, docs/plan-graph.md]
     publishes: []
     gates: []
@@ -846,7 +835,7 @@ graph TD
   GRI[gate-results-integrity: complete]
   PPC[plan-preflight-check: complete]
   SPS[significant-precision-sample]
-  ECD[empirical-criteria-design]
+  ECD[empirical-criteria-design: complete]
   EUD[empirical-unit-design]
   RAD[retained-artefacts-design: complete]
   FCD[findings-consumer-design]
@@ -974,6 +963,7 @@ graph TD
   P2G --> PC
   PCO --> PC
   ECI --> PC
+  ECI --> EUI
 
   RV --> SO
   RV --> ECD
@@ -1051,9 +1041,9 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 
 ## Critical Path
 
-`empirical-criteria-design` → `empirical-unit-design` → `retained-artefacts-impl` → `script-retirement` → `empirical-script-support` → `findings-consumer-impl` → `long-running-impl` → `shakedown-fixture` → `programme-close`.
+`empirical-unit-design` → `retained-artefacts-impl` → `script-retirement` → `empirical-script-support` → `findings-consumer-impl` → `long-running-impl` → `shakedown-fixture` → `programme-close`, and, as long, `runtime-cli-drive` → `runtime-distribution` → `script-retirement` → the same tail.
 
-9 units: one large, seven medium, one small. It heads on two requester verdicts (`empirical-criteria-design`, `empirical-unit-design`); `empirical-criteria-design` is ready. The S2 chain `runtime-cli-drive` → `runtime-distribution` → `script-retirement` is one unit shorter; `runtime-cli-drive` is ready, with Go 1.27.1, `claude` 2.1.294 and rootless podman 6.1.3 confirmed at `s2-egress-gates`' close (2026-10-10). The S2 build's size is a conjectured estimate, and the runtime and the port each exceeded it (R1).
+8 units on each. The first heads on a requester verdict (`empirical-unit-design`), the second carries one at `runtime-distribution`; both heads are ready, `runtime-cli-drive` with Go 1.27.1, `claude` 2.1.294 and rootless podman 6.1.3 confirmed at `s2-egress-gates`' close (2026-10-10). The S2 build's size is a conjectured estimate, and the runtime and the port each exceeded it (R1).
 
 ## Meta-Tasks
 
@@ -1071,7 +1061,8 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
   | `arch-pin-refresh` | P-D1 |
   | `gate-results-integrity` | P-D2, P-D3 |
   | `plan-preflight-check` | P-D4 |
-  | `empirical-criteria-design` | P-A1, P-A2, P-A3, P-A11 |
+  | `empirical-criteria-design` | P-A1 (geometric part, declined), P-A2 (uncited reliance, declined) |
+  | `empirical-criteria-impl` | P-A1 (statistical part), P-A2 (cited evidence), P-A3, P-A11 |
   | `empirical-unit-design` | P-A4, P-A5, P-A6, P-A9, P-A10 |
   | `findings-consumer-design` | P-B1, P-B3 |
   | `programme-close-out` | P-B2, P-B4 |
@@ -1098,8 +1089,8 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 
 - R1 cross-cutting — the spike estimated 1,500–2,500 lines, tests included, for all of S2; the runtime alone is about 2,190 lines and 1,730 of tests, and the orchestrator port about 2,600 lines, 2,800 of tests and 1,800 of harness and tools. The remaining S2 units are likely larger than estimated in wall-clock; runtime-core and the port finished with context comfortable, so the size budget holds.
 - R15 shakedown-fixture — the port's oracle is the ported tests, byte-identical prompts over 55 scenarios and one single-unit fixture run; the wave gate's and re-plan's behaviour on a real multi-unit plan is shown only here.
-- R2 cross-cutting — six units wait on one requester verdict; the schedule is bounded by verdicts, not by work.
-- R3 cross-cutting — generality rests on cartomancer-v2 alone, a stream of code units; 11 rows are `not testable` there (P-A3, P-A4, P-A5, P-A7, P-A8, P-A12, P-A13, P-C3, P-G1, P-G3, P-G4), and a problem classed `archipeligo only so far` may be common to any measurement-heavy programme.
+- R2 cross-cutting — five units wait on one requester verdict; the schedule is bounded by verdicts, not by work.
+- R3 cross-cutting — generality rests on cartomancer-v2, a stream of code units, plus dungeon-assistant's unrun Phase 1 brief for P-A1; 11 rows are `not testable` on `quality-bar-interiors` (P-A3, which `map-toolkit-mvp` does show, P-A4, P-A5, P-A7, P-A8, P-A12, P-A13, P-C3, P-G1, P-G3, P-G4), and a problem classed `archipeligo only so far` may be common to any measurement-heavy programme.
 - R4 significant-precision-sample — a hand classification by the model whose reviews produced the findings; the rubric is fixed first, and the requester may want a second rater.
 - R5 phase2-gate-discipline — the opus-tier adversary re-run that `critique-gate.md` waits on belongs to the critique-upgrade backlog and is left out of this programme by requester decision (2026-10-04); the unit sets an interim policy without it.
 - R6 shakedown-fixture — a fixture run shows the workflow completes, not that judgement stages catch defects; the signal-layer measurement in the design's Testing section stays uncommitted.
@@ -1137,6 +1128,19 @@ Phases 1–3 each need requester verdicts on two or three design units at once. 
 ## Plan Maintenance
 
 On each unit completion, run the re-plan step before starting its dependants.
+
+### 2026-10-10 — empirical-criteria-design complete
+Report: docs/design/lsf-empirical-work.md (Criteria) @ 53404c5.
+done-condition empirical-criteria-impl — carries the Terms, C1–C5 and the Checking list in a new `docs/success-criteria.md` the skill points to (requester decision, 2026-10-10), with a decision-to-line map in the report; risk medium, effort medium; no longer provisional
+scope-reassignment empirical-criteria-impl — adds `docs/success-criteria.md`, which it publishes
+new-edge empirical-criteria-impl → empirical-unit-impl — `docs/success-criteria.md`'s C2, which a measurement unit's registration cites
+done-condition empirical-unit-design — a measurement unit's registration cites C2's form
+done-condition programme-close — the P-A1 and P-A3 Generality cells carry the evidence §Criteria found outside the register's probe
+check register — P-A1's geometric part and P-A2's uncited reliance (D17) `declined`; P-A1's statistical part, P-A2, P-A3 and P-A11 pass to empirical-criteria-impl
+check empirical-unit-design — resembles the completed unit (design, archipeligo walk, requester verdict); that unit reached its verdict and two follow-up probes in one session; within budget
+check programme-close-out — C4 decided as its dependency named; no change
+check R2, R3 restated; R42 added at 53404c5
+check critical path — 8 units on two chains joining at script-retirement; ready: empirical-unit-design, empirical-criteria-impl, runtime-cli-drive, drive-decision-design, significant-precision-sample
 
 ### 2026-10-10 — s2-egress-gates complete
 Report: docs/plans/s2-egress-gates-completion.md @ 820c31b.
