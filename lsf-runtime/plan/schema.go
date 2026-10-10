@@ -28,7 +28,7 @@ var StopKinds = []string{
 	"precondition",
 	"invalid-plan",
 	"unserialised-overlap",
-	// Go only (orchestrator D19, D21, D22, D23, D27): driver-detected and code-stage stops.
+	// Go only (orchestrator D19, D21, D22, D23, D27, D32): driver-detected and code-stage stops.
 	"uncommitted-at-return",  // driver: a stage that commits returned with changes no commit holds, or the check failed
 	"skill-not-loaded",       // driver: the call's skill did not load after the runtime's retry
 	"schema-violation",       // driver: a stage result outside its schema (an enum value, a missing field)
@@ -36,6 +36,7 @@ var StopKinds = []string{
 	"gate-omitted",           // implement or code-fix stage: no gate reported, or a gate the implement stage ran left out
 	"branch-mismatch",        // driver: a worktree stage reported a branch other than the one the runtime gave it, or one that does not resolve
 	"declared-gates-changed", // load: the plan's lsf-gates block differs from the one the launch pinned
+	"retains-changed",        // load: a path left an incomplete unit's retains during the run
 }
 
 // RecordKinds reach the ledger and, where the re-plan can act on them, the
@@ -58,20 +59,21 @@ var RecordKinds = []string{
 	"standing-obligation-carried", // obligations: discharge lies outside this plan by the obligation's own terms, and the referent names where it is now recorded
 	"direct-edit",                 // re-plan or termination: an edit outside the plan, made by a scribe stage without a gate; the referent is the path
 	"document-oversize",           // plan or completion-report stage: the committed document is past twice its size target; the stage never trims to length
-	// Go only (orchestrator D21, D27): driver-detected records.
+	// Go only (orchestrator D21, D27, D33): driver-detected and code-stage records.
 	"residue-at-return",         // driver: a read-only stage returned with changes in its checkout
 	"permission-denied",         // driver: the call had permission denials
 	"sha-corrected",             // driver: a returned SHA was not its branch's tip and was replaced by it; also a SHA git could not check (the statement says "not checked")
 	"guard-killed-after-result", // driver: the guard timeout killed the call after its result; the result stands
 	"gate-misreported",          // implement or code-fix stage: a declared gate reported with a status other than the runtime's
+	"retained-move-failed",      // cleanup: a merged unit's retains could not be moved to the store; its clones are kept
 }
 
 // GoOnlyKinds are the kinds the JavaScript does not have (orchestrator D19,
-// D21 to D23, D27). tools/graphparity leaves them out of the constants comparison.
+// D21 to D23, D27, D32, D33). tools/graphparity leaves them out of the constants comparison.
 var GoOnlyKinds = []string{
 	"uncommitted-at-return", "skill-not-loaded", "schema-violation", "stage-fault", "gate-omitted", "branch-mismatch",
 	"residue-at-return", "permission-denied", "sha-corrected", "guard-killed-after-result",
-	"declared-gates-changed", "gate-misreported",
+	"declared-gates-changed", "gate-misreported", "retains-changed", "retained-move-failed",
 }
 
 var Sources = []string{"structural", "reported", "gate"}

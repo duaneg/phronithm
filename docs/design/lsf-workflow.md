@@ -346,10 +346,15 @@ and their branches go with them: the unit is complete. A resume that
 replays the unit reads the branch tips its checks journaled, not the
 branches. The removed paths are listed in the run log
 as each worktree goes, and in the step's value. A file a unit needs past its merge must be committed
-or declared under `Retains:` (`retained-artefacts-impl`); until then nothing
-is kept. A worktree whose branch is not merged, or that is not the
-runtime's, is kept with the reason. A failure is logged, not signalled. In
-the Workflow script cleanup is a mechanical-tier agent.
+or declared in the unit's `retains`: before its clones go, each declared
+path moves to `<store>/<unit>/` (the `lsf-gates` block's `store`) from the
+latest writer clone holding it, and a path in no clone is listed as missing
+([runtime](lsf-runtime.md), Retained artefacts). A worktree whose branch is
+not merged, or that is not the runtime's, is kept with the reason. A failure
+is logged, not signalled, except a failed retained move: it keeps all the
+unit's clones and is a `retained-move-failed` record with the remedy. In
+the Workflow script cleanup is a mechanical-tier agent and nothing is
+retained.
 
 **The merge archives what it completes.** In the commit that marks a unit
 `complete: true`, the merge stage moves the unit's `### <id>` entry to

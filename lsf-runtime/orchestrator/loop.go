@@ -142,6 +142,7 @@ type launch struct {
 	ledgerFault    *plan.Signal
 	completed      plan.Completed
 	terminationRan bool
+	retains        map[string][]string // per unit, the retains no load may drop from (D32)
 }
 
 func (l *launch) ref() planRef { return planRef{l.plan.Path, l.plan.Sha} }
@@ -335,11 +336,25 @@ func (l *launch) pinGates(ctx context.Context) (json.RawMessage, bool, error) {
 		return nil, true, err
 	}
 	decl, stops := pinned(r, fault)
+	if len(stops) == 0 && decl != nil && decl.Store != "" {
+		// The store is checked at every launch, a resume's included (D32).
+		if err := l.rt.CheckStore(decl.Store); err != nil {
+			stops = append(stops, plan.NewSignal(plan.Signal{Kind: "invalid-plan", Source: "structural", Stage: "load", Statement: "gates block: " + err.Error(), Referent: "store"}))
+		}
+	}
 	if len(stops) > 0 {
 		out, err := l.stopped(ctx, "load", stops, nil)
 		return out, true, err
 	}
 	l.decl = decl
+	// The retains baseline is the plan at args.planSha, as the pin read it:
+	// no load may drop a path from an incomplete unit's retains (D32).
+	l.retains = map[string][]string{}
+	if g := plan.LoadGraph(r.Result.PlanBlock, nil); g.Plan != nil {
+		for _, u := range g.Plan.Units {
+			l.retains[u.ID] = u.Retains
+		}
+	}
 	var hosts []string
 	if decl != nil {
 		hosts = decl.Hosts
@@ -412,8 +427,44 @@ func (l *launch) loadPlan(ctx context.Context, sha, label string, wave *int) (lo
 		for _, pr := range plan.ValidatePlan(out.plan) {
 			out.stops = append(out.stops, problem(pr))
 		}
+		for _, pr := range plan.CheckRetains(out.plan, l.decl) {
+			out.stops = append(out.stops, problem(pr))
+		}
+		out.stops = append(out.stops, l.retainsChanged(out.plan, wave)...)
 	}
 	return out, nil
+}
+
+// retainsChanged compares each incomplete unit's retains with the
+// baseline: a path the baseline has and the plan lacks is a
+// retains-changed stop. Added paths and new units join the baseline; a
+// unit gone from the plan is not compared (D32).
+func (l *launch) retainsChanged(p *plan.Plan, wave *int) []*plan.Signal {
+	if l.retains == nil {
+		l.retains = map[string][]string{}
+	}
+	var stops []*plan.Signal
+	for _, u := range p.Units {
+		was := l.retains[u.ID]
+		if u.Complete || l.completed[u.ID] {
+			continue
+		}
+		var dropped []string
+		for _, r := range was {
+			if !slices.Contains(u.Retains, r) {
+				dropped = append(dropped, r)
+			}
+		}
+		if len(dropped) > 0 {
+			stops = append(stops, plan.NewSignal(plan.Signal{Kind: "retains-changed", Source: "structural", Stage: "load", Unit: u.ID, Wave: wave,
+				Statement: fmt.Sprintf("%s's retains changed during the run: was [%s], now [%s]; a load may not drop %s from an incomplete unit, and a relaunch takes the new list",
+					u.ID, strings.Join(was, ", "), strings.Join(u.Retains, ", "), strings.Join(dropped, ", ")),
+				Referent: u.ID}))
+			continue
+		}
+		l.retains[u.ID] = slices.Clone(u.Retains)
+	}
+	return stops
 }
 
 // refreshPin: the pin follows the integration branch; a reload's load step

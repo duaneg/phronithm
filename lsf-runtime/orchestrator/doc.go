@@ -221,7 +221,8 @@
 //     the unit is complete, and its replay reads the tips the checks journaled
 //     (D23), not the branches. The step logs each removal's paths and each
 //     kept worktree as it runs, a failed removal's included, and its value
-//     lists them for a replay. A failure is logged, not signalled. JS's
+//     lists them for a replay. A failure is logged, not signalled, except a
+//     failed retained move (D33). JS's
 //     cleanup agent matches worktree-wf_* branches the runtime never makes,
 //     and its denials and residue were ledger rows; the removed-path list
 //     takes their place. A replay after cleanup re-checks no uncommitted
@@ -229,7 +230,7 @@
 //     retried.
 //
 // D26 and D27 are unit declared-gates'; D28 to D30 are unit s2-clones'; D31
-// is unit s2-boundary-common's.
+// is unit s2-boundary-common's; D32 and D33 are unit retained-artefacts-impl's.
 //
 //   - D26. With declared gates a merge is gated before it is committed, so a
 //     regressed merge committed nothing: the wave rewrites the
@@ -335,4 +336,30 @@
 //     prompts are JS's), so a re-plan that adds one stops the run at the
 //     next load. The pin reports gate-block problems only; the plan block's
 //     are the first load's. JS has no pin; promptparity leaves the step out.
+//   - D32. A unit may declare `retains: [paths]` in its lsf-plan entry, and
+//     the gate block a `store:` (plan.Unit.Retains, plan.Declaration.Store);
+//     the frozen JS rejects both as unknown keys. A block holding store
+//     alone declares no gates and no hosts. The store is pinned with the
+//     block (a change is declared-gates-changed) and checked at every
+//     launch's pin (lsfrt.Runtime.CheckStore: an existing directory clear
+//     of the repository and the state dir; otherwise an invalid-plan load
+//     stop). Every load checks the plan's retains against the pinned block
+//     (plan.CheckRetains: retains need the store, and a retaining unit's id
+//     must name one directory), so a re-plan cannot add retains the pin
+//     has no store for. The retains of the plan at args.planSha, as the pin
+//     read it, are a baseline: a load that drops a path from an incomplete
+//     unit's retains is a retains-changed stop (a Go-only stop kind); an
+//     added path joins the baseline. A unit no longer in the plan is not
+//     compared. An undeclared plan's steps and prompts are unchanged.
+//   - D33. Cleanup moves each merged unit's retains to <store>/<unit>/
+//     before removing its clones (lsfrt.Runtime.MoveRetained), from its
+//     writer clones (writerSources: plan, fix-plan:rN, implement,
+//     fix-code:rN, oldest first). The cleanup input carries each unit's
+//     retains and the store, both omitted when empty, so an undeclared
+//     plan's input, and its journal, are as before. The step's value lists
+//     each move. A failed move keeps every clone of that unit, fails the
+//     step, and is a retained-move-failed record (a Go-only record kind)
+//     naming the clones and the by-hand remedy; a stop during it stops. A
+//     path in no clone is logged as missing, not signalled. JS's cleanup
+//     agent retains nothing.
 package orchestrator

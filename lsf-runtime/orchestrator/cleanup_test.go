@@ -68,7 +68,7 @@ func TestCleanupStage(t *testing.T) {
 		{Unit: "A", Worktrees: []string{"completion-report:A", "critique-code:r1:A", "implement:A", "plan:A"}},
 		{Unit: "B", Worktrees: []string{"implement:B"}},
 	}}
-	raw, err := o.cleanupStage(in)(context.Background(), "cleanup:w1", false)
+	raw, err := o.cleanupStage(in, new([]retainFailure))(context.Background(), "cleanup:w1", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,12 +82,12 @@ func TestCleanupStage(t *testing.T) {
 
 	rt.calls = nil
 	rt.errs = map[string]error{"critique-code:r1:A": errors.New("worktree remove: busy")}
-	_, err = o.cleanupStage(in)(context.Background(), "cleanup:w1", false)
+	_, err = o.cleanupStage(in, new([]retainFailure))(context.Background(), "cleanup:w1", false)
 	errMatch(t, err, `busy`)
 	eq(t, len(rt.calls), 5, "the others still removed")
 
 	rt.errs = map[string]error{"plan:A": &lsfrt.StopError{Reason: lsfrt.StopSigint}}
-	_, err = o.cleanupStage(in)(context.Background(), "cleanup:w1", false)
+	_, err = o.cleanupStage(in, new([]retainFailure))(context.Background(), "cleanup:w1", false)
 	if _, ok := lsfrt.IsStop(err); !ok {
 		t.Errorf("a stop is not the step's failure: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestCleanupFailures(t *testing.T) {
 	in := cleanupInput{Wave: 1, IntegrationBranch: "integration", Units: []cleanupUnitIn{{Unit: "A", Worktrees: []string{"completion-report:A"}}}}
 	rt.errs = map[string]error{"completion-report:A": errors.New("update-ref: locked")}
 	rt.partial = lsfrt.WorktreeRemoval{Removed: true, Paths: []string{"run.log"}}
-	_, err := o.cleanupStage(in)(context.Background(), "cleanup:w1", false)
+	_, err := o.cleanupStage(in, new([]retainFailure))(context.Background(), "cleanup:w1", false)
 	errMatch(t, err, `locked`)
 	if !hasPrefix(rt.Stub.Logs, "cleanup:w1: completion-report:A: removed run.log") {
 		t.Errorf("the deleted path was not logged: %q", rt.Stub.Logs)
@@ -125,7 +125,7 @@ func TestCleanupFailures(t *testing.T) {
 	rt.errs, rt.partial = nil, lsfrt.WorktreeRemoval{}
 	broken := mergeGitRunner{inner: execGit{}, fail: func(a []string) bool { return len(a) > 1 && a[0] == "worktree" && a[1] == "prune" }}
 	o.git = broken
-	_, err = o.cleanupStage(in)(context.Background(), "cleanup:w1", false)
+	_, err = o.cleanupStage(in, new([]retainFailure))(context.Background(), "cleanup:w1", false)
 	errMatch(t, err, `prune`)
 
 	s := stub(t, twoWaves(), Hs{"cleanup": func(Call, *State) any { return errors.New("worktree remove: busy") }}, nil)

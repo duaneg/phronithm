@@ -589,12 +589,12 @@ func TestGoOnlyKindsAreKinds(t *testing.T) {
 			t.Errorf("%s is not a kind", k)
 		}
 	}
-	for _, k := range []string{"uncommitted-at-return", "skill-not-loaded", "schema-violation", "stage-fault", "gate-omitted"} {
+	for _, k := range []string{"uncommitted-at-return", "skill-not-loaded", "schema-violation", "stage-fault", "gate-omitted", "retains-changed"} {
 		if !IsStopKind(k) {
 			t.Errorf("%s should stop", k)
 		}
 	}
-	for _, k := range []string{"residue-at-return", "permission-denied", "sha-corrected", "guard-killed-after-result"} {
+	for _, k := range []string{"residue-at-return", "permission-denied", "sha-corrected", "guard-killed-after-result", "retained-move-failed"} {
 		if IsStopKind(k) || !slices.Contains(RecordKinds, k) {
 			t.Errorf("%s should be a record", k)
 		}

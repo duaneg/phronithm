@@ -177,18 +177,28 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 	// The wave gate: one question, does the wave invalidate the
 	// architecture. Merged units' clones are removed alongside it, by code
 	// (D25); the gate runs in a clone of its own. Cleanup's failure is
-	// logged, not signalled: it leaves clones, which hold nothing unmerged.
+	// logged, not signalled: it leaves clones, which hold nothing unmerged
+	// except, after a failed retained move, the unit's retains, which is a
+	// retained-move-failed record (D33).
+	var retainFailed []retainFailure
 	if len(merged) > 0 {
 		gt := c.tierFor("gate")
 		gl, cl := "review-gate:w"+itoa(wave), "cleanup:w"+itoa(wave)
 		cin := cleanupInput{Wave: wave, IntegrationBranch: c.integrationBranch, Units: []cleanupUnitIn{}}
+		retains := map[string][]string{}
+		for _, u := range l.plan.Units {
+			retains[u.ID] = u.Retains
+		}
 		for _, m := range merged {
 			if len(m.worktrees) == 0 {
 				continue
 			}
 			// Sorted: parallel stages record their labels in either order, and
 			// the step's input must be the same on a relaunch to replay.
-			cin.Units = append(cin.Units, cleanupUnitIn{Unit: m.unit, Worktrees: slices.Sorted(slices.Values(m.worktrees))})
+			cin.Units = append(cin.Units, cleanupUnitIn{Unit: m.unit, Worktrees: slices.Sorted(slices.Values(m.worktrees)), Retains: retains[m.unit]})
+			if len(retains[m.unit]) > 0 && l.decl != nil {
+				cin.Store = l.decl.Store
+			}
 		}
 		var gr agentRes
 		var cu *cleanupRet
@@ -202,7 +212,7 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 				return cr.Value, err
 			},
 			func(ctx context.Context) (json.RawMessage, error) {
-				r, fault, err := step[cleanupResult](ctx, l.orch, cl, cin, l.cleanupStage(cin))
+				r, fault, err := step[cleanupResult](ctx, l.orch, cl, cin, l.cleanupStage(cin, &retainFailed))
 				if err != nil {
 					return nil, err
 				}
@@ -232,9 +242,20 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 		case cu != nil:
 			// The step logged each removal's paths and each kept worktree as
 			// it ran; its value keeps them for a replay.
-			l.rt.Log(fmt.Sprintf("wave %d: removed %d merged worktree(s), kept %d", wave, cu.Result.Removed, len(cu.Result.Kept)))
+			msg := fmt.Sprintf("wave %d: removed %d merged worktree(s), kept %d", wave, cu.Result.Removed, len(cu.Result.Kept))
+			if len(cu.Result.Retained) > 0 {
+				moved, missing := 0, 0
+				for _, m := range cu.Result.Retained {
+					moved, missing = moved+len(m.Moved), missing+len(m.Missing)
+				}
+				msg += fmt.Sprintf("; retained %d path(s), %d missing", moved, missing)
+			}
+			l.rt.Log(msg)
 		default:
 			l.rt.Log(fmt.Sprintf("wave %d: worktree cleanup returned null", wave))
+		}
+		for _, f := range retainFailed {
+			waveSignals = append(waveSignals, l.retainFailedSignal(f, cin.Store, retains[f.unit], wave))
 		}
 	}
 
@@ -488,4 +509,21 @@ func (l *launch) finish(ctx context.Context) (json.RawMessage, error) {
 	}
 	l.rt.Log(fmt.Sprintf("complete: %d unit(s) over %d wave(s); silence is not evidence", len(l.completed), l.wave))
 	return l.outcome("complete", nil, "")
+}
+
+// retainFailedSignal is the record of a failed retained move (D33): its
+// clones and branches are kept, and the remedy is by hand.
+func (l *launch) retainFailedSignal(f retainFailure, store string, paths []string, wave int) *plan.Signal {
+	clones := []string{}
+	for _, wl := range f.labels {
+		clones = append(clones, l.rt.ClonePath(wl))
+	}
+	dest := store + "/" + f.unit
+	return plan.NewSignal(plan.Signal{Kind: "retained-move-failed", Source: "structural", Stage: "cleanup", Unit: f.unit, Wave: plan.W(wave),
+		Statement: fmt.Sprintf("the move of %s's retains (%s) to %s failed, so its clones and their lsf/ branches are kept: %s. Clones: %s. "+
+			"By hand: put each declared path at %s/, from the staging directory the error names if it is there, else from the latest writer clone; "+
+			"then remove the clones, the staging, scratch and record files the error names, and the unit's lsf/ branches named for the clones. "+
+			"A resume retries the move only if this launch ends without an outcome; a relaunch does not",
+			f.unit, strings.Join(paths, ", "), dest, f.err, strings.Join(clones, ", "), dest),
+		Referent: dest})
 }

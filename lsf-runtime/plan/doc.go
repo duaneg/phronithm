@@ -58,7 +58,7 @@
 //     an int. ConfigFrom keeps the default for a null field (JS compares
 //     against null, i.e. 0) and rejects a non-integer (JS coerces).
 //
-// D9 onward are the orchestrator's: see orchestrator/doc.go. Two of them
+// D9 onward are the orchestrator's: see orchestrator/doc.go. Three of them
 // live in this package:
 //
 //   - D20. SignalsFromMerge and SignalsFromFindings fail closed: a merge
@@ -68,6 +68,9 @@
 //   - The driver-event kinds (GoOnlyKinds, SignalsFromCall,
 //     ShaCorrectedSignal, BranchMismatchSignal) are the orchestrator's D21
 //     to D23; D19's stage-fault kind is here too. The JS has none of them.
+//   - D32's keys: a unit's `retains` and the gate block's `store`
+//     (retains.go, gates.go), which the JS rejects as unknown keys, and
+//     D32 and D33's kinds, retains-changed and retained-move-failed.
 //
 // Not replicated: a YAML document nested thousands of levels deep, on
 // which JS throws a RangeError. The parser reads Go strings as bytes; its

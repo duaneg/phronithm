@@ -84,6 +84,9 @@ func ToBlock(p *plan.Plan) string {
 		} else {
 			lines = append(lines, "    gates: []")
 		}
+		if len(u.Retains) > 0 {
+			lines = append(lines, "    retains: "+list(u.Retains))
+		}
 	}
 	lines = append(lines, "execution_order: "+list(p.ExecutionOrder), "```")
 	return strings.Join(lines, "\n")

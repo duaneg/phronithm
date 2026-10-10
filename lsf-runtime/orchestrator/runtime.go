@@ -26,7 +26,10 @@ import (
 // RemoveWorktree removes a label's merged clone or worktree; MergeClone is
 // a wave's merge clone, made or reused, and RemoveMergeClone removes it;
 // RunGates runs declared gates on a clean checkout (lsfrt.Runtime);
-// PinHosts hands the runtime the gate block's hosts as pinned (D31).
+// PinHosts hands the runtime the gate block's hosts as pinned (D31);
+// MoveRetained moves a merged unit's retains to the store before its clones
+// go, CheckStore checks the pinned store, and ClonePath is where a label's
+// kept clone is (D33).
 type Runtime interface {
 	Call(ctx context.Context, prompt string, o lsfrt.Opts) (lsfrt.CallResult, error)
 	Parallel(ctx context.Context, thunks []func(context.Context) (json.RawMessage, error)) ([]json.RawMessage, error)
@@ -38,6 +41,9 @@ type Runtime interface {
 	RemoveMergeClone(ctx context.Context, name string) error
 	RunGates(ctx context.Context, label, commit, setup string, gates []lsfrt.GateSpec) ([]lsfrt.GateRun, error)
 	PinHosts(hosts []string)
+	MoveRetained(ctx context.Context, unit, store, integration string, paths, sources []string) (lsfrt.RetainedMove, error)
+	CheckStore(store string) error
+	ClonePath(label string) string
 	Log(msg string)
 	Args() json.RawMessage
 }

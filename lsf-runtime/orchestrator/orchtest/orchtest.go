@@ -330,6 +330,17 @@ func (s *Stub) RemoveWorktree(ctx context.Context, label, integration string, de
 	return lsfrt.WorktreeRemoval{Label: label, Kept: "absent"}, nil
 }
 
+// MoveRetained finds every path missing: the stub has no clones.
+func (s *Stub) MoveRetained(ctx context.Context, unit, store, integration string, paths, sources []string) (lsfrt.RetainedMove, error) {
+	return lsfrt.RetainedMove{Unit: unit, Moved: []lsfrt.RetainedPath{}, Missing: slices.Clone(paths)}, nil
+}
+
+// CheckStore accepts any store: the stub has no filesystem to check.
+func (s *Stub) CheckStore(store string) error { return nil }
+
+// ClonePath is where a label's clone would be: the stub has none.
+func (s *Stub) ClonePath(label string) string { return "<state>/clone/" + label }
+
 // MergeClone fails: the stub has no repository.
 func (s *Stub) MergeClone(ctx context.Context, name string) (string, error) {
 	return "", fmt.Errorf("orchtest: no merge clone for %s", name)

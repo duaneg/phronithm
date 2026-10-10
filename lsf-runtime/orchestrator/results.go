@@ -6,6 +6,7 @@ import (
 	"math"
 
 	"github.com/duaneg/phronithm/lsf-runtime/plan"
+	lsfrt "github.com/duaneg/phronithm/lsf-runtime/runtime"
 )
 
 // Stage results, decoded from the stage returns (D9). JSON tags follow the
@@ -216,11 +217,13 @@ type scribeResult struct {
 }
 
 // cleanupResult is the cleanup step's value (D25): worktrees removed, the
-// ones kept with why, and the paths each removal deleted.
+// ones kept with why, the paths each removal deleted, and each unit's
+// retained move (D33).
 type cleanupResult struct {
-	Removed jsInt          `json:"removed"`
-	Kept    []string       `json:"kept"`
-	Paths   []removedPaths `json:"paths,omitempty"`
+	Removed  jsInt                `json:"removed"`
+	Kept     []string             `json:"kept"`
+	Paths    []removedPaths       `json:"paths,omitempty"`
+	Retained []lsfrt.RetainedMove `json:"retained,omitempty"`
 }
 
 // committed is an append stage that made its commit: an empty SHA is none.
