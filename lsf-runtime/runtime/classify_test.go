@@ -88,6 +88,10 @@ func TestClassifyFixtures2_1_294(t *testing.T) {
 		{"skill-absent", "phronithm:critique", false, classSkillMissing},
 		{"skill-unknown", "phronithm:nonexistent-skill", true, classSkillMissing},
 	} {
+		b, err := os.ReadFile(filepath.Join("..", "testdata", "streams", "2.1.294", tc.fixture+".jsonl"))
+		if err != nil || !strings.Contains(string(b), `"claude_code_version": "2.1.294"`) {
+			t.Fatalf("%s: not a 2.1.294 recording (%v)", tc.fixture, err)
+		}
 		acc := accFromFixture(t, "2.1.294/"+tc.fixture)
 		a := &attempt{acc: acc}
 		if got := classify(a, []byte(schema), tc.skill, tc.prefixed).class; got != tc.want {

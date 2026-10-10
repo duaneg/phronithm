@@ -95,8 +95,13 @@ func CloneGitlinks(ctx context.Context, dir string) error {
 	for _, args := range [][]string{{"ls-files", "--stage", "-z"}, {"ls-tree", "-r", "-z", "HEAD"}} {
 		out, err := git(args...).Output()
 		if err != nil {
-			if args[0] == "ls-tree" && git("rev-parse", "-q", "--verify", "HEAD").Run() != nil {
-				continue // an unborn HEAD has no tree
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			// An unborn HEAD (a symbolic ref to a branch with no commit) has
+			// no tree; any other failure fails closed.
+			if args[0] == "ls-tree" && git("symbolic-ref", "-q", "HEAD").Run() == nil && git("rev-parse", "-q", "--verify", "HEAD").Run() != nil {
+				continue
 			}
 			var ee *exec.ExitError
 			if errors.As(err, &ee) {

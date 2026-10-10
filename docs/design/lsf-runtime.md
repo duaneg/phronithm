@@ -407,13 +407,15 @@ podman run --rm -i --init --pull=never --log-driver=none --name <name> --label l
 - **A call cannot change its clone's `.git/config`, hooks or info.** `git config` fails with `EBUSY`. The identity is set before the call; a stage that needs another local key fails.
 - **Image reproducibility.** The digest pins the image, not how it was built. A toolchain from the distribution's current packages differs between builds.
 - **A development plugin root is wholly readable.** Under `--plugin-dir` against a working copy, `/opt/plugin` exposes that repo's `.git` and untracked files for reading. An installed plugin holds only the plugin.
+- **No resource limits.** A container has no `--memory` or `--pids-limit`, and its `/tmp` (with `HOME`) is a RAM-backed tmpfs: a call can exhaust the host's memory or pids. Out of scope, as in the decided design.
+- **The probe's streams are in the user journal.** The container-probe ran under podman's default `journald` log driver, so its calls' streams sit in the user journal until it rotates; the runtime's calls run with `--log-driver=none`.
 - **Rootless podman only.** Docker and rootful podman are untried. `keep-id` and `pasta` are Linux-specific.
-- **Evidence strength.** Each container cell is n = 1 (R33). The paid egress, canary and engine-socket cells held only because the agent declined to attack. Their enforcement evidence is the scripted cells (F5, Z3, Z7, Z8). No cell tests a readable but forbidden file inside `/work`. Every probed call had both proxies spliced; a call with `hosts` unset (credential proxy only) was not run.
+- **Evidence strength.** Each container cell is n = 1 (R33). The paid egress, canary and engine-socket cells held only because the agent declined to attack. Their enforcement evidence is the scripted cells (F5, Z3, Z7, Z8). No cell tests a readable but forbidden file inside the clone. Every probed call had both proxies spliced; a call with `hosts` unset (credential proxy only) was not run.
 - **Version.** Probed on Claude Code 2.1.294 and podman 6.1.3. At each pin move, check that `claude` runs in the image.
 
 ## Runtime
 
-Unit `runtime-core`, plan `docs/plans/runtime-core-plan.md`. Package `lsfrt` in `lsf-runtime/runtime/`; tests run the stub `lsf-runtime/testdata/claude` through the stub `lsf-runtime/testdata/podman`, which execs a container's command on the host, against streams recorded from Claude Code 2.1.289, and one (`auth-401.jsonl`) from 2.1.294 (`testdata/streams/`).
+Unit `runtime-core`, plan `docs/plans/runtime-core-plan.md`. Package `lsfrt` in `lsf-runtime/runtime/`; tests run the stub `lsf-runtime/testdata/claude` through the stub `lsf-runtime/testdata/podman`, which execs a container's command on the host, against streams recorded from Claude Code 2.1.289, one (`auth-401.jsonl`) from 2.1.294, and six re-recorded from 2.1.294 under `testdata/streams/2.1.294/` (R17; `testdata/streams/README.md`).
 
 ### Interface
 
