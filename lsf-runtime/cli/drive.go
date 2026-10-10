@@ -26,11 +26,12 @@ func cmdDrive(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	if *state == "" || *file == "" {
-		return fail(stderr, usageError{fmt.Errorf("drive: -state and -launch are required")})
+		return fail(stderr, usageError{error: fmt.Errorf("drive: -state and -launch are required")})
 	}
 	sum, err := drive(*state, *file)
 	if err != nil {
-		return fail(stderr, err)
+		fmt.Fprintln(stderr, err) // the runtime's errors carry their prefix
+		return exitError
 	}
 	b, _ := json.Marshal(sum)
 	fmt.Fprintf(stdout, "%s\n", b)

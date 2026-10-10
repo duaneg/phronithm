@@ -70,7 +70,17 @@ func compose(in launchIn) (lsfrt.Config, error) {
 	}
 	maps.Copy(merged, host)
 	hostDir := filepath.Dir(hostPath)
-	if s, ok := stringKey(host, "pluginDir"); ok && s != "" && !filepath.IsAbs(s) {
+	var hostStr = map[string]string{}
+	for _, k := range []string{"pluginDir", "claudeBin", "claudeVersion"} {
+		if v, ok := host[k]; ok {
+			var s string
+			if err := json.Unmarshal(v, &s); err != nil {
+				return lsfrt.Config{}, fmt.Errorf("host config %s: %s must be a string, not %s", hostPath, k, v)
+			}
+			hostStr[k] = s
+		}
+	}
+	if s := hostStr["pluginDir"]; s != "" && !filepath.IsAbs(s) {
 		merged["pluginDir"] = jsonString(filepath.Join(hostDir, s))
 	}
 	if in.pluginDir != "" {
@@ -80,23 +90,21 @@ func compose(in launchIn) (lsfrt.Config, error) {
 		}
 		merged["pluginDir"] = jsonString(p)
 	}
-	src := os.Getenv("LSF_CLAUDE_BIN")
-	if src == "" {
-		if s, ok := stringKey(host, "claudeBin"); ok && s != "" {
-			src = s
-			if strings.Contains(s, "/") && !filepath.IsAbs(s) {
-				src = filepath.Join(hostDir, s)
-			}
+	src, from := os.Getenv("LSF_CLAUDE_BIN"), "LSF_CLAUDE_BIN"
+	if s := hostStr["claudeBin"]; src == "" && s != "" {
+		src, from = s, "the host config's claudeBin"
+		if strings.Contains(s, "/") && !filepath.IsAbs(s) {
+			src = filepath.Join(hostDir, s)
 		}
 	}
 	if src == "" {
-		src = "claude"
+		src, from = "claude", "the default"
 	}
 	bin, version, err := resolveClaude(src)
 	if err != nil {
-		return lsfrt.Config{}, err
+		return lsfrt.Config{}, fmt.Errorf("%w (claudeBin %s, from %s)", err, src, from)
 	}
-	if want, ok := stringKey(host, "claudeVersion"); ok && want != "" && want != version {
+	if want := hostStr["claudeVersion"]; want != "" && want != version {
 		return lsfrt.Config{}, fmt.Errorf("claudeBin %s reports version %s; the host config's claudeVersion is %s", bin, version, want)
 	}
 	merged["claudeBin"], merged["claudeVersion"] = jsonString(bin), jsonString(version)
@@ -114,7 +122,9 @@ func compose(in launchIn) (lsfrt.Config, error) {
 	cfg, err := lsfrt.LoadConfig(in.out)
 	if err != nil {
 		os.Remove(in.out)
-		return lsfrt.Config{}, oldConfigHint(err)
+		// The composed file is gone; the fault is in the host file or a flag.
+		msg := strings.Replace(err.Error(), "config "+in.out+": ", "", 1)
+		return lsfrt.Config{}, oldConfigHint(fmt.Errorf("config composed from %s: %s", hostPath, msg))
 	}
 	// LoadConfig applied LSF_CLAUDE_BIN over the file; the launch uses the
 	// path resolved here.
@@ -140,8 +150,11 @@ func readHost(path string) (map[string]json.RawMessage, string, error) {
 	}
 	var host map[string]json.RawMessage
 	dec := json.NewDecoder(bytes.NewReader(b))
-	if err := dec.Decode(&host); err != nil || host == nil {
+	if err := dec.Decode(&host); err != nil {
 		return nil, "", fmt.Errorf("host config %s: not a JSON object: %v", path, err)
+	}
+	if host == nil {
+		return nil, "", fmt.Errorf("host config %s: not a JSON object", path)
 	}
 	if dec.More() {
 		return nil, "", fmt.Errorf("host config %s: trailing data after the config object", path)
@@ -153,7 +166,7 @@ func readHost(path string) (map[string]json.RawMessage, string, error) {
 		}
 	}
 	if len(set) > 0 {
-		return nil, "", fmt.Errorf("host config %s: %s set by the CLI per launch; remove it", path, strings.Join(set, ", "))
+		return nil, "", fmt.Errorf("host config %s: set by the CLI per launch, remove: %s", path, strings.Join(set, ", "))
 	}
 	return host, path, nil
 }
@@ -201,6 +214,9 @@ func resolveClaude(name string) (path, version string, err error) {
 	}
 	if fi, err := os.Stat(p); err != nil || !fi.Mode().IsRegular() {
 		return "", "", fmt.Errorf("claudeBin: %s is not a regular file", p)
+	}
+	if strings.Contains(p, ":") {
+		return "", "", fmt.Errorf("claudeBin: %s: a path with ':' cannot be a bind mount's source", p)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), claudeVersionTimeout)
 	defer cancel()

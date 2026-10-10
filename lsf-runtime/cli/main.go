@@ -62,16 +62,23 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "A run is addressed by -state DIR, or by -repo DIR (default: the current repo) and -name NAME.")
 }
 
-// usageError is a bad command line: exit 2.
-type usageError struct{ error }
+// usageError is a bad command line: exit 2. printed marks one the flag
+// package has already reported.
+type usageError struct {
+	error
+	printed bool
+}
 
 // fail prints err and returns its exit code.
 func fail(stderr io.Writer, err error) int {
-	fmt.Fprintln(stderr, "lsf-runtime:", err)
 	var ue usageError
 	if errors.As(err, &ue) {
+		if !ue.printed {
+			fmt.Fprintln(stderr, "lsf-runtime:", err)
+		}
 		return exitUsage
 	}
+	fmt.Fprintln(stderr, "lsf-runtime:", err)
 	return exitError
 }
 
@@ -85,10 +92,10 @@ func newFlags(name string, stderr io.Writer) *flag.FlagSet {
 // parse parses a subcommand's flags; positional arguments are refused.
 func parse(fs *flag.FlagSet, args []string) error {
 	if err := fs.Parse(args); err != nil {
-		return usageError{err}
+		return usageError{err, true}
 	}
 	if fs.NArg() > 0 {
-		return usageError{fmt.Errorf("%s: unexpected argument %q", fs.Name(), fs.Arg(0))}
+		return usageError{error: fmt.Errorf("%s: unexpected argument %q", fs.Name(), fs.Arg(0))}
 	}
 	return nil
 }
@@ -109,10 +116,10 @@ func (a *addr) stateDir() (string, error) {
 		return filepath.Abs(a.state)
 	}
 	if a.name == "" {
-		return "", usageError{errors.New("pass -state, or -name (with -repo outside the repository)")}
+		return "", usageError{error: errors.New("pass -state, or -name (with -repo outside the repository)")}
 	}
 	if err := checkName(a.name); err != nil {
-		return "", usageError{err}
+		return "", usageError{error: err}
 	}
 	top, err := repoTop(a.repo)
 	if err != nil {

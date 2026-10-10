@@ -12,7 +12,7 @@ import (
 	lsfrt "github.com/duaneg/phronithm/lsf-runtime/runtime"
 )
 
-// composeFor composes the fixture's launch config into a temp file.
+// compose composes the fixture's launch config into a temp file.
 func (f *fixture) compose(pluginDir string) (lsfrt.Config, string, error) {
 	f.t.Helper()
 	out := filepath.Join(f.t.TempDir(), "launch.1.json")
@@ -30,7 +30,9 @@ func TestComposeLayering(t *testing.T) {
 	eq(t, cfg.Concurrency, 2, "a host key")
 	eq(t, len(cfg.Roles), 1, "a host key replaces the default's whole")
 	eq(t, cfg.DefaultRole, "only")
-	eq(t, len(cfg.Skills), 3, "a default key the host leaves alone")
+	var def lsfrt.Config
+	json.Unmarshal(defaults, &def)
+	eq(t, len(cfg.Skills), len(def.Skills), "a default key the host leaves alone")
 	eq(t, cfg.Repo, f.repo)
 	eq(t, cfg.ClaudeVersion, testcfg.ClaudeVersion, "filled from the binary")
 	eq(t, cfg.ClaudeBin, testcfg.Claude())
@@ -48,7 +50,7 @@ func TestComposeRefusesCLIKeys(t *testing.T) {
 		f := newFixture(t)
 		f.writeHost(M{k: "x"})
 		_, _, err := f.compose("")
-		if err == nil || !strings.Contains(err.Error(), k+" set by the CLI") {
+		if err == nil || !strings.Contains(err.Error(), "set by the CLI per launch, remove: "+k) {
 			t.Errorf("%s: %v", k, err)
 		}
 	}
@@ -137,6 +139,13 @@ func TestComposeClaudeBinPrecedence(t *testing.T) {
 	}
 	eq(t, cfg.ClaudeBin, fromHost)
 	eq(t, cfg.ClaudeVersion, "2.0.0")
+	rel, _ := filepath.Rel(filepath.Dir(f.host), fromHost)
+	f.writeHost(M{"claudeBin": rel})
+	if cfg, _, err = f.compose(""); err != nil {
+		t.Fatal(err)
+	}
+	eq(t, cfg.ClaudeBin, fromHost, "a relative claudeBin with a / is the host file's")
+	f.writeHost(M{"claudeBin": fromHost})
 	t.Setenv("LSF_CLAUDE_BIN", fromEnv)
 	cfg, _, err = f.compose("")
 	if err != nil {
@@ -154,6 +163,46 @@ func TestComposeClaudeBinPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	eq(t, cfg.ClaudeBin, fromEnv, "claude on PATH, its symlink resolved")
+
+	t.Setenv("LSF_CLAUDE_BIN", filepath.Join(dir, "missing"))
+	_, _, err = f.compose("")
+	if err == nil || !strings.Contains(err.Error(), "from LSF_CLAUDE_BIN") {
+		t.Errorf("a resolve error names its source: %v", err)
+	}
+}
+
+// A host key the CLI reads as a string is refused when it is not one,
+// rather than ignored.
+func TestComposeWrongTypes(t *testing.T) {
+	for _, k := range []string{"claudeVersion", "claudeBin", "pluginDir"} {
+		f := newFixture(t)
+		f.writeHost(M{k: 5})
+		_, _, err := f.compose("")
+		if err == nil || !strings.Contains(err.Error(), k+" must be a string") {
+			t.Errorf("%s: %v", k, err)
+		}
+	}
+	f := newFixture(t)
+	os.WriteFile(f.host, []byte("null"), 0o600)
+	_, _, err := f.compose("")
+	if err == nil || strings.Contains(err.Error(), "<nil>") || !strings.Contains(err.Error(), "not a JSON object") {
+		t.Errorf("null host: %v", err)
+	}
+	f.writeHost(M{"image": "not-a-digest"})
+	_, _, err = f.compose("")
+	if err == nil || !strings.Contains(err.Error(), "config composed from "+f.host) || strings.Contains(err.Error(), "launch.1.json") {
+		t.Errorf("a load error names the host file, not the removed composed file: %v", err)
+	}
+}
+
+func TestComposeDryRun(t *testing.T) {
+	f := newFixture(t)
+	out := filepath.Join(t.TempDir(), "launch.json")
+	cfg, err := compose(launchIn{hostFile: f.host, repo: f.repo, stateDir: t.TempDir(), args: f.args(), dryRun: true, out: out})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, cfg.DryRun, true)
 }
 
 func TestCheckGit(t *testing.T) {
