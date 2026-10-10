@@ -590,7 +590,6 @@ Every call in a kept clone that spawned and returns a value or a null reports th
 - Cleanup's ignored-file policy: `code-merge-cleanup`.
 - The `Retains:` move: `retained-artefacts-impl`.
 - The roles' content: `s2-permissions-design`.
-- Presenting `auth-failed` to the requester ("renew the credential and relaunch"): `runtime-cli-drive` and `phronithm:lsf-drive`.
 
 ### Known limits
 

@@ -1,13 +1,13 @@
 ---
-description: "Drive Phase 3 of phronithm:large-scale-feature under the Workflow tool: check the plan and repo are ready, launch phronithm:lsf-implement, read its return, present the stop or the digest, collect requester decisions, and relaunch. Use after the decomposition plan is committed, after every stop, and to recover a crashed run."
+description: "Drive Phase 3 of phronithm:large-scale-feature, through the lsf-runtime CLI or the Workflow tool: check the plan and repo are ready, launch phronithm:lsf-implement, read its return, present the stop or the digest, collect requester decisions, and relaunch. Use after the decomposition plan is committed, after every stop, and to recover a crashed run."
 allowed-tools: Read, Grep, Glob, Bash, Workflow, TaskStop, AskUserQuestion, Skill, ToolSearch
 ---
 
 # LSF Drive
 
-The session side of the `phronithm:lsf-implement` workflow: a presenter and relauncher. It launches the workflow, reads what came back, shows the requester what needs a decision, records the decision as a workflow argument, and launches again. It holds no loop state and makes no orchestration decisions — every judgement the loop needs runs inside the workflow as an agent stage with a schema-typed return.
+The session side of the `phronithm:lsf-implement` workflow: a presenter and relauncher. It launches the workflow (on the Go runtime through the `lsf-runtime` CLI, or under the Workflow tool), reads what came back, shows the requester what needs a decision, records the decision as a workflow argument, and launches again. It holds no loop state and makes no orchestration decisions — every judgement the loop needs runs inside the workflow as an agent stage with a schema-typed return.
 
-Design: [lsf-workflow](${CLAUDE_PLUGIN_ROOT}/docs/design/lsf-workflow.md), sections *Architecture*, *Escalation*, and *Relaunch target*. Workflow arguments and return shape: the header comment of `${CLAUDE_PLUGIN_ROOT}/workflows/lsf/implement.js`.
+Design: [lsf-workflow](${CLAUDE_PLUGIN_ROOT}/docs/design/lsf-workflow.md), sections *Architecture*, *Escalation*, and *Relaunch target*; the CLI: [lsf-runtime](${CLAUDE_PLUGIN_ROOT}/docs/design/lsf-runtime.md), section *CLI*. Workflow arguments and return shape: the header comment of `${CLAUDE_PLUGIN_ROOT}/workflows/lsf/implement.js`.
 
 ## Interface
 
@@ -43,16 +43,25 @@ Design: [lsf-workflow](${CLAUDE_PLUGIN_ROOT}/docs/design/lsf-workflow.md), secti
 
 Follow the [pre-flight](${CLAUDE_PLUGIN_ROOT}/docs/pre-flight.md) check. Do not continue until it passes.
 
+**Route.** The CLI route runs the orchestrator on the Go runtime, each agent call in a container. Take it when a runtime host config exists: `${XDG_CONFIG_HOME:-~/.config}/lsf-runtime/config.json`, or a path the requester gives, passed as `-config` to every `launch` and `resume`. Otherwise take the Workflow route. On the CLI route, build the CLI once per session and run that binary, written `lsf-runtime` below:
+
+```
+go -C ${CLAUDE_PLUGIN_ROOT}/lsf-runtime build -o "${XDG_CACHE_HOME:-$HOME/.cache}/lsf-runtime/lsf-runtime" ./cli
+```
+
+Not `go run`: it reports every non-zero exit as 1, and the detached driver re-executes the binary.
+
 Then confirm the workflow's preconditions from the shell, not from memory:
 
 1. `git rev-parse --abbrev-ref HEAD` is the integration branch. The workflow stops at load otherwise.
 2. The plan passes the pre-flight check: `go -C ${CLAUDE_PLUGIN_ROOT}/lsf-runtime run ./validate/cmd/lsf-validate -decisions "$(git rev-parse --show-toplevel)/<log path>" "$(git rev-parse --show-toplevel)/<plan path>"`, leaving out `-decisions` when the decision log (`docs/plans/<name>-decisions.md` by default) does not exist. It reads the working tree, so first `git status --porcelain -- <plan path> <log path>` must print nothing: an uncommitted edit is committed or discarded before launch. Each line on stdout is a problem, and any blocks the launch: give them to the requester for `phronithm:breakdown` re-plan mode, committed before launch. A failure with nothing on stdout is the command's own: give the requester its stderr and ask how to proceed. Only where Go is not installed, check by hand: `grep -n 'lsf-plan' <plan path>` finds the block with a closing fence after it, and the decision log, if any, ends its `yaml lsf-decisions` block with a closing fence (`tail -n 3`). The command also rejects a malformed `lsf-gates` block, which the Workflow script ignores.
 3. The plan's SHA to launch from is `git rev-list -1 <branch> -- <plan path>` on a first launch, and the decision log's, if it exists, `git rev-list -1 <branch> -- <log path>`.
-4. `git worktree list` shows no stale `.claude/worktrees/wf_*` entries with unmerged work from a run the requester has abandoned. Leave entries from a run being resumed. A relaunch after a Phase 2 re-entry resumes nothing; its worktrees are stale unless the reconciliation record names them.
+4. Workflow route: `git worktree list` shows no stale `.claude/worktrees/wf_*` entries with unmerged work from a run the requester has abandoned. Leave entries from a run being resumed. A relaunch after a Phase 2 re-entry resumes nothing; its worktrees are stale unless the reconciliation record names them.
+   CLI route: `lsf-runtime status -name <name>`, run in the target repo (or `-state <dir>` of the run), shows `driver` neither `starting` nor `running`. Report any `leftovers`, `xferRefs` or `containers` it lists to the requester, with the remedies in *Relaunch*. The first launch on a host config is preceded by `lsf-runtime launch -dry-run` with the same flags and args: it runs the launch checks and stops before the first call, spending nothing.
 5. `git show-ref --verify refs/lsf/<name>/pause` (or the `pauseRef` to be passed) finds nothing. If the ref exists, the launch would pause at load: tell the requester and ask whether to delete it (see *Pause*) before launching.
 6. `wc -c CLAUDE.md` in the target project. This step never blocks a launch; it is a report. The harness injects the file into every agent the workflow spawns, so its size is part of every agent's floor before the first read: roughly 2.5k tokens per 10 KB. Report the size and the tokens it implies per agent; above 40 KB — about 10k tokens on every agent — say so. Do not trim it — that is the project's call, outside this skill.
 
-Launch by `name: 'phronithm:lsf-implement'` when the plugin is installed; otherwise by `scriptPath: ${CLAUDE_PLUGIN_ROOT}/workflows/lsf-implement.js`, absolute, since the session's cwd is the target project.
+Workflow route: launch by `name: 'phronithm:lsf-implement'` when the plugin is installed; otherwise by `scriptPath: ${CLAUDE_PLUGIN_ROOT}/workflows/lsf-implement.js`, absolute, since the session's cwd is the target project.
 
 ### Launch
 
@@ -73,6 +82,16 @@ unscribed: <rows>            # only after a Phase 2 re-entry whose prompt carrie
 
 Record the run id from the tool result. The workflow runs in the background and re-invokes this session when it returns; do not poll. `/workflows` shows it in flight.
 
+**CLI route.** The same arguments, as one JSON object on stdin, in the target repo, with a Bash timeout of 600000 ms:
+
+```
+lsf-runtime launch [-config <host config>] -plugin-dir ${CLAUDE_PLUGIN_ROOT} -args - <<'EOF'
+{"name": "<name>", "planSha": "<plan SHA>", "architectureDoc": "<path>", "integrationBranch": "<branch>", ...}
+EOF
+```
+
+It returns once the launch checks have passed or failed, within 5 minutes. Exit 0 prints `{"stateDir","pid","launch"}`: record `stateDir` and pass `-state <stateDir>` to every later command. Exit 1 is a refusal, its message on stderr: give it to the requester verbatim (an old config, a failed launch check, a `claudeVersion` mismatch, a git older than 2.38, a running driver). Then run `lsf-runtime watch -state <stateDir>` as a background Bash; the session is re-invoked when it exits, at the run's end. Do not poll. The driver runs in a session of its own and outlives this one: a later session runs `lsf-runtime status -state <stateDir>`, and runs `watch` again while `driver` is `starting` or `running`.
+
 ### Pause
 
 When the requester asks to stop, pause, or hold a live run, set the pause ref in the target repo — the launch's `pauseRef`, or the default:
@@ -82,7 +101,7 @@ git update-ref refs/lsf/<name>/pause HEAD
 git show-ref --verify refs/lsf/<name>/pause
 ```
 
-Confirm the second command prints the ref, then tell the requester that units already started will finish, merge, and be re-planned first: the pause can take up to a wave. The requester may also set the ref from any shell or worktree; a ref dirties no working tree. Use TaskStop only when the requester asks for an immediate halt and accepts losing the work in flight; that is a kill, and Recovery applies.
+Confirm the second command prints the ref, then tell the requester that units already started will finish, merge, and be re-planned first: the pause can take up to a wave. The requester may also set the ref from any shell or worktree; a ref dirties no working tree. On the CLI route, `lsf-runtime pause -state <stateDir>` sets the ref and verifies it, and `pause -lift` deletes it. Use TaskStop (CLI route: `lsf-runtime stop -state <stateDir>`; a second `stop` cancels the calls in flight) only when the requester asks for an immediate halt and accepts losing the work in flight; that is a kill, and Recovery applies.
 
 The merge, ledger, and plan-copy stages read the ref; one set after the last of them in a wave is seen the wave after. A stop outranks a pause and leaves the ref set. A launch with the ref present commits any `decisions` and `unscribed` rows it was given, runs the decision re-plan, then returns `paused` before any unit starts; its `planSha` is the decision re-plan's.
 
@@ -105,6 +124,16 @@ The return is a JSON object whose keys are in presentation order: `status`, `wor
 | `paused` | The pause ref was set (see Pause); `note` says how many units remain. Present, then wait for the requester to resume. |
 
 A tool result with no return value, or a task notification reporting the run died, is a crash: go to Recovery.
+
+**CLI route.** `watch` prints the status report (JSON), whose `driver` says how the launch ended:
+
+| `driver` (exit) | Read |
+|---|---|
+| `ended` (0), `summary.stop_reason` `returned` | `outcome` is the return above |
+| `ended` (0), any other `stop_reason` | a runtime stop, with no outcome to present: `summary.detail` and `summary.error` say why; see *Relaunch*, runtime stops |
+| `crashed` (3), `failed-to-start` (3) | `driverLog` holds the driver's last output: go to Recovery |
+
+The report also lists the pause ref's state and what a fault left (`leftovers`, `xferRefs`, `containers`); present a non-empty one.
 
 ### Present
 
@@ -138,12 +167,13 @@ Some decisions are not the plan's to carry out. Before relaunching, classify eac
 | `architecture-invalidated`; `plan-defect-unabsorbed` where the answer changes a decision in the architecture document or the request record | Return to `phronithm:large-scale-feature` Phase 2 (below) |
 | `wave-cap` return (no escalation) | `phronithm:lsf-implement` again, `planSha` from the return's top-level `planSha`, no decisions |
 | `paused` return (no escalation) | Nothing until the requester resumes; then delete the ref (see *Pause*) and relaunch as for `wave-cap` |
-| Everything else: `cycle`, `unit-over-budget`, `gate-non-convergence`, `merge-conflict-unresolvable`, `merge-regression`, `environment-gate-drift`, `gate-not-run`, `no-ready-unit`, `standing-obligation-undischarged`, `agent-null`, `precondition`, `invalid-plan`, `unserialised-overlap`, `done-condition-unevaluable` (the decision is the rewritten condition), and `plan-defect-unabsorbed` otherwise | `phronithm:lsf-implement` again, with the decisions |
+| Everything else: `cycle`, `unit-over-budget`, `gate-non-convergence`, `merge-conflict-unresolvable`, `merge-regression`, `environment-gate-drift`, `gate-not-run`, `no-ready-unit`, `standing-obligation-undischarged`, `agent-null`, `precondition`, `invalid-plan`, `unserialised-overlap`, `skill-not-loaded`, `schema-violation`, `gate-omitted`, `stage-fault`, `branch-mismatch`, `done-condition-unevaluable` (the decision is the rewritten condition), and `plan-defect-unabsorbed` otherwise | `phronithm:lsf-implement` again, with the decisions |
+| `uncommitted-at-return` | The requester commits or removes the paths the statement names; then again with no decision. The relaunch replays the call, which re-checks the paths and passes once they are clean |
 | `declared-gates-changed` (Go runtime) | Show the requester the old and new block (both are in the stop's statement); an agent made the change, and a new `hosts` entry widens the calls' network. Only on the requester's explicit approval, again at the escalation's plan SHA with no decisions. Otherwise the requester commits the block restored and the relaunch is at that commit's SHA (Startup step 3). A decision cannot change the block |
 
 A mixed agenda takes the first matching row: the run returns to Phase 2, and every other decision travels in the startup prompt — one `Decision:` line per item — for the Phase 2 session to carry into the plan through `phronithm:breakdown`.
 
-A relaunch is a fresh Workflow call, not a resume:
+A relaunch is a fresh Workflow call, not a resume (CLI route: `lsf-runtime launch -args` with the same keys, never `resume`):
 
 ```
 name, architectureDoc, integrationBranch, maxUnitsPerWave, maxWaves, requestRecord, pauseRef   # as before
@@ -159,13 +189,49 @@ The relaunch starts a new ledger file, named by its `planSha`; the previous laun
 
 An `environment-gate-drift` stop is not answered by a decision: either the environment is restored to the pin the plan records, and the relaunch carries no decision, or the requester re-pins the gate, and the decision says so for the re-plan to amend the plan's gate entry (amendment kind `gate-repin`).
 
-A `gate-not-run` stop is not answered by a decision either: a relaunch re-runs the unit and meets the same gate. The requester changes the environment or the project so the gate completes (within a stage; with declared gates, within the gate's timeout), and the relaunch carries no decision. The unit is not finished by hand (*What the session never does*).
+A `gate-not-run` stop, whether a stage or the runtime's own run of the declared gates raised it, is not answered by a decision either: a relaunch re-runs the unit and meets the same gate. The requester changes the environment or the project so the gate completes (within a stage; with declared gates, within the gate's timeout), and the relaunch carries no decision. The unit is not finished by hand (*What the session never does*).
+
+A `stage-fault` from a code stage reads `<stage> failed: <reason>`. Most reasons are cleared by hand as the reason says, then relaunched with no decision. Two need more:
+
+- **Integrity stop**: `stage commit <sha> left <path> with content its Lsf-Content trailer does not match`. It repeats at every launch until the requester lands a repair commit: a new commit restoring the content, without an `Lsf-Content` trailer (not `--amend` or `--fixup`, which keep it). A hook that rewrites or stages files (a formatter, an end-of-file fixer) causes it, so the project also exempts the paths the code stages commit (the decision log, `docs/plans/<name>-signals/`, `docs/plans/<unit>-completion.md`) from such hooks; otherwise the next launch stops again.
+- **A requester edit in the main checkout** stops the run at the next fast-forward (`the main checkout has uncommitted changes to …`, or a merge, cherry-pick or revert `in progress in the main checkout`). The requester stashes, discards, finishes or aborts it, and relaunches. Leave the main checkout alone while a run is live.
+
+**Runtime stops (CLI route).** A launch that ends with a `stop_reason` other than `returned` has no outcome and no escalation. It is answered by clearing the cause, then `lsf-runtime resume -state <stateDir>`, never by a decision:
+
+| `stop_reason` | Answer |
+|---|---|
+| `auth-failed` | The requester renews the credential (logs in again, so the host config's `proxy.credentialsFile` holds a live token); then `resume`. Claude Code 2.1.294 retries a 401 for about three minutes first |
+| `runtime-error` | `summary.detail` names the fault; the requester clears it by hand (below); then `resume` |
+| `signal-SIGTERM`, `signal-SIGINT`, `cancelled` | `resume`, when the requester wants the run continued |
+| `max-calls`, `max-cost`, `max-wall-clock` | The requester raises the cap in the host config's `caps`, or not; then `resume` |
+| `crashed`; `driver` `crashed` or `failed-to-start` | Give the requester `summary.error` or `driverLog`, and the state dir's `log.txt`; `resume` only on their instruction |
+
+**Faults cleared by hand.** Each is raised as a `stage-fault` (`merge failed: …`, or the fast-forward's stage) or a `runtime-error` stop, and the requester clears it by the remedy its text gives, then relaunches (a stage-fault) or resumes (a runtime stop). Merge faults, the merge running in a merge clone `<stateDir>/merge/w<n>`:
+
+- `returned merge SHA of <unit> does not resolve to a commit`: a history rewrite removed a recorded merge. Remove its journal record, `<stateDir>/journal/merge_w<n>-*.json`.
+- A stale `index.lock`: git's own error, after `merge failed:` or `git refused to fast-forward`. Remove the lock file once no git process holds it.
+- `a merge is in progress in the main checkout` (or a cherry-pick or revert): finish or abort it. `a merge is in progress in the merge clone … that this stage did not start`: remove the clone.
+- `after the merge of <unit> at <sha>, <path> is staged (a hook?)`: commit or unstage it. `<path> is staged in the merge clone`: remove the clone.
+- `the merge of <unit> stopped with no conflict`: a `pre-merge-commit` hook, which the merge clone includes, refused the merge. Fix or exempt the hook, then relaunch.
+- A red gate result the environment caused (a merge `regressed` or `unresolvable` on a gate that should pass): the result replays from the journal. After fixing the environment, remove `<stateDir>/journal/gates_<tree prefix>-*.json` (requester decision, 2026-10-08).
+
+Clone faults:
+
+- A writer clone or merge clone a fault left: `<dir> exists but …; remove it and relaunch`, `<dir> is stale (… moved since) but holds commits not fetched … or uncommitted changes; recover them, remove it and relaunch`, `merge clone <dir> …: remove it and relaunch`.
+- A merge clone whose integration branch diverged from main's: `the merge clone's <branch> (…) and the main repo's (…) have diverged …; remove <dir> and relaunch, and the step adopts its merges … by their trailers`.
+- A kept clone left on another branch: `<dir> exists but is not on <branch>; remove it and relaunch`, or at a fast-forward `the clone's HEAD … is not <branch>'s tip …: in the call's clone …, commit the work on <integration> or drop it, then relaunch`.
+- A fetch-back failed by a branch the agent renamed: `<label>: fetching <branch> from its clone <dir>: …; the clone is kept`. Restore the branch name in the clone, or recover the work and remove the clone.
+- A fetch-back refused because the branch's tree holds a gitlink: `fetching <branch> from its clone: <dir> holds a nested repository (gitlink <path> at <rev>) …; remove the nested repository from the branch and relaunch`. It stays a `runtime-error` (requester decision, 2026-10-10).
+
+`lsf-runtime status` lists what faults leave: `leftovers` (`clone/`, `scratch/`, `merge/` and `*.partial` entries), `xferRefs` (`refs/lsf/<plan8>/xfer/w<n>` in the main repo) and `containers` (the state dir's label). Present them with the fault.
 
 A `precondition` or `invalid-plan` stop names a defect the session can usually see from the shell (wrong branch, a block without its fence, a scope pair with no edge). Fix the repo state through the tool that owns it — `phronithm:breakdown` re-plan mode for the plan, a decision for the decision log, a checkout for the branch — commit, and relaunch with the new SHA and no decision.
 
 ### Recovery
 
-A run that died (usage limit, machine crash, TaskStop) has its journal under the session's transcript directory. In order of preference:
+CLI route: a run with no outcome (a runtime stop, a crash, a failed start) is resumed with `lsf-runtime resume -state <stateDir> [-config <host config>]`, after the cause is cleared (*Relaunch*, runtime stops). It replays the last launch's args against the current host config, and the journal under the state dir replays every completed call. For `crashed` or `failed-to-start`, first give the requester `driverLog` and the state dir's `log.txt`; resume only on their instruction. `resume` refuses after a returned outcome: that relaunches with `launch -args`. Seeding is `args.seed` in a fresh `launch -args`.
+
+Workflow route: a run that died (usage limit, machine crash, TaskStop) has its journal under the session's transcript directory. In order of preference:
 
 1. **Resume**: `Workflow({ scriptPath | name, resumeFromRunId: <run id> })` with the same args. Every unchanged agent call replays from the journal; the first call whose prompt differs runs live. Stop the prior run first with TaskStop if it is still listed.
 2. **Seed**: when the journal is gone but a stage's return survives in an agent transcript, pass `args.seed: { "<agent label>": { result, commits } }` on a fresh launch. The label is the stage's display label (`plan:<unit>`, `implement:<unit>`, `merge:w<n>`, …). Seed only a return produced against the plan SHA being launched; the caller vouches for that. A seed's `pauseRequested` is ignored; a resumed run's replayed stages, by contrast, report the pause ref as it stood when they first ran, so a resume can pause again after the ref is deleted — relaunch once more.
