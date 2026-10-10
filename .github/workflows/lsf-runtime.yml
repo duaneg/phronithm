@@ -1,0 +1,131 @@
+# lsf-runtime: tests on Linux amd64 and arm64, static release builds, the
+# release on an lsf-runtime-v* tag, and the pin-drift check on main
+# (docs/design/lsf-runtime.md, Language -> Distribution).
+name: lsf-runtime
+
+on:
+  push:
+    branches: ['**']
+    tags: ['lsf-runtime-v*', 'v*']
+    # Not applied to tag pushes.
+    paths:
+      - 'lsf-runtime/**'
+      - 'workflows/**'
+      - '.github/workflows/lsf-runtime.yml'
+  pull_request:
+    paths:
+      - 'lsf-runtime/**'
+      - 'workflows/**'
+      - '.github/workflows/lsf-runtime.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: lsf-runtime
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: lsf-runtime/go.mod
+          cache-dependency-path: lsf-runtime/go.mod
+      - name: git 2.38 or later
+        run: |
+          git version
+          v=$(git version | awk '{ print $3 }')
+          printf '2.38\n%s\n' "$v" | sort -V -C || { echo "git $v is older than 2.38" >&2; exit 1; }
+      - run: go vet ./...
+      - name: go test -race
+        env:
+          GRAPHPARITY_REQUIRE_NODE: '1'
+          PROMPTPARITY_REQUIRE_NODE: '1'
+        run: go test -race ./...
+      - name: orphan reaping ran
+        run: |
+          go test -race -count=1 -v -run 'TestOrphanGateContainerReaped|TestOrphansReapedByNextLaunch|TestReaperEscalatesToSigkill' ./runtime | tee orphans.log
+          for t in TestOrphanGateContainerReaped TestOrphansReapedByNextLaunch TestReaperEscalatesToSigkill; do
+            grep -q -- "--- PASS: $t " orphans.log || { echo "$t did not pass" >&2; exit 1; }
+          done
+      - name: the static build runs here
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          go build -trimpath -o lsf-runtime-native ./cli
+          file lsf-runtime-native | grep -q 'statically linked'
+          ./lsf-runtime-native version
+
+  build:
+    if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: lsf-runtime
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: lsf-runtime/go.mod
+          cache-dependency-path: lsf-runtime/go.mod
+      - name: build linux amd64 and arm64
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+        run: |
+          version=dev
+          case "$GITHUB_REF" in refs/tags/lsf-runtime-v*) version=$GITHUB_REF_NAME ;; esac
+          mkdir -p ../dist-out
+          for arch in amd64 arm64; do
+            out=../dist-out/lsf-runtime-linux-$arch
+            GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$version -X main.commit=$GITHUB_SHA" -o "$out" ./cli
+            file "$out"
+            file "$out" | grep -q 'statically linked' || { echo "$out is not statically linked" >&2; exit 1; }
+          done
+          cd ../dist-out && sha256sum lsf-runtime-linux-* > SHA256SUMS && cat SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lsf-runtime
+          path: dist-out/
+          if-no-files-found: error
+
+  release:
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/lsf-runtime-v') }}
+    needs: [test, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: lsf-runtime
+          path: dist-out
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          prerelease=
+          case "$TAG" in *-rc* | *-alpha* | *-beta*) prerelease=--prerelease ;; esac
+          gh release create "$TAG" --verify-tag $prerelease --title "$TAG" \
+            --notes "lsf-runtime $TAG, built at $GITHUB_SHA. Pin it with lsf-runtime/dist/pin.sh $TAG." \
+            dist-out/*
+
+  pin-drift:
+    if: >-
+      ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
+      || (github.event_name == 'pull_request' && github.base_ref == 'main') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - run: lsf-runtime/dist/check-pin.sh
