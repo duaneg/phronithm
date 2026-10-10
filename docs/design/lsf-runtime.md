@@ -94,6 +94,18 @@ Facts from the Claude Code plugin docs (code.claude.com/docs/en/plugins, fetched
   - `pin-drift`: `dist/check-pin.sh`, failing, on pushes to `main`, pull requests to `main` and `v*` tags. It does not run on other branches, where the pin lags by design.
 - **Binary identity.** Release builds use `CGO_ENABLED=0 -trimpath -ldflags "-s -w -X main.version=<tag> -X main.commit=<sha>"`; `lsf-runtime version` prints `<version> <commit>`, `dev unknown` for a working-tree build.
 
+- **Prerequisites** for the CLI route: Linux on amd64 or arm64 (Windows outside WSL and macOS are out of scope); `sh`, `curl` and `sha256sum` or `shasum` for the first download; rootless podman with `pasta` networking (6.1.3 tested); git 2.38 or later; `claude` at the version the host config pins, if it pins one. `phronithm:breakdown`'s quality check also runs through the launcher, so a user without a working tree needs network and `curl` at the first check.
+- **Host config and image.** `lsf-runtime config init [-config FILE] [-plugin-dir DIR]` writes a starter host config (CLI → Configuration) with the image and, when `~/.claude/.credentials.json` is absent, the proxy's credentials file marked `REQUIRED:`. The image is built from the reference `lsf-runtime/container/Containerfile`, extended with the project's toolchain (a `FROM` naming the reference image's digest, then the packages the builds and tests need), and recorded by digest:
+
+  ```
+  podman build -t localhost/lsf-ref ${CLAUDE_PLUGIN_ROOT}/lsf-runtime/container/
+  podman build -t localhost/lsf-project -f Containerfile.project .   # FROM localhost/lsf-ref@sha256:<digest>
+  podman image inspect --format '{{.Digest}}' localhost/lsf-project
+  ```
+
+  `"image": "localhost/lsf-project@sha256:<that digest>"` replaces the starter's marker. A launch refuses a host config still holding a `REQUIRED:` value, naming the fields.
+- **What CI does not run.** The live container tests need podman and an image (`LSF_TEST_IMAGE`) and skip in CI, whose `ubuntu-24.04` podman is 4.9, not the pinned 6.1.3: in `runtime/container_live_test.go`, `TestLiveCall`, `TestLiveProbe`, `TestLiveMergeClone`, `TestLiveGraceExpiry`, `TestLiveLaunchFailure`, `TestLiveReaping`, `TestLiveLaunchChecks`, `TestLiveTmpPlacement`, `TestLiveGate`, `TestLiveEgress`, `TestLiveGatesSetupHosts`, `TestLiveGateTimeout` and `TestLivePaidEgress` (also gated on `LSF_LIVE_PAID=1`). `TestMoveRetainedCrossFilesystem` (`runtime/retain_test.go`) skips unless a directory on another filesystem is found. CI runs the stub-podman suite, which covers orphan reaping. Run the live suite on a host with `LSF_TEST_IMAGE=<image@digest> LSF_LIVE_REQUIRE=1 go test ./runtime`.
+
 **Python needs no route.** It needs a `python3` on the user's machine at a version floor. Status of the floor (not probed):
 
 - On macOS, `python3` comes with the Command Line Tools. Those tools also supply `git`, which the programme already requires, so a `python3` is likely present, though reportedly at 3.9.
@@ -178,10 +190,7 @@ The decision carries the cost of the distribution unit (`runtime-distribution`):
 
 ### Plan consequences
 
-- **Distribution.** The route, the CI and the release are owned by `runtime-distribution`, which runs before `script-retirement` and chooses between D1 and D4:
-  - **D1** keeps the git marketplace source. It needs a first-use download and a pinned hash per target. Its release order is: build at commit X, release, then commit the hashes at X+1 and version the plugin there.
-  - **D4** needs no network at first use and no hash commit. The cost is that the whole plugin ships as a CI-built archive.
-  - **Development (either route).** `claude --plugin-dir` and the shakedown fixture must run the working tree's build, not a release. The launcher prefers a locally built binary, or one named by an environment variable, over a downloaded one.
+- **Distribution.** Decided by `runtime-distribution`: D1 (Distribution). `claude --plugin-dir` and the shakedown fixture run the working tree's build, which the launcher prefers to a release; `LSF_RUNTIME_BIN` names any other binary.
 - **Shared root files.**
   - The skeleton (`go.mod`, the four package stubs and `testdata/claude`) is committed at `c3330d2`, so `runtime-core` and `orchestrator-port-plan` run side by side.
   - `testdata/` is in `runtime-core`'s Scope, and `tools/` in the two port units', which are serial.
@@ -661,7 +670,7 @@ A unit's `retains` paths (its `lsf-plan` entry) move to `<store>/<unit>/`, the s
 
 ## CLI
 
-Unit `runtime-cli-drive`, plan `docs/plans/runtime-cli-drive-plan.md`. The `lsf-runtime` command (`lsf-runtime/cli`, package `main`) launches a run as a detached driver over a state dir, and reports on it. Until `runtime-distribution` ships a launcher, it is built with `go -C <plugin root>/lsf-runtime build -o <bin> ./cli`.
+Unit `runtime-cli-drive`, plan `docs/plans/runtime-cli-drive-plan.md`. The `lsf-runtime` command (`lsf-runtime/cli`, package `main`) launches a run as a detached driver over a state dir, and reports on it. It is run through the launcher, `<plugin root>/lsf-runtime/lsf-runtime` (Language → Distribution).
 
 ### Addressing
 
@@ -672,7 +681,7 @@ A run is addressed by `-state DIR`, or by `-repo DIR` (default: the toplevel of 
 A launch's config is composed, then loaded strictly (Runtime → Configuration):
 
 1. **Plugin defaults**, embedded in the binary (`cli/defaults.json`): `defaultRole`, `roles`, `roleRules`, `skills`, the settings the orchestrator's stage labels need. They equal `testdata/config.example.json`'s (a test keeps them equal).
-2. **The host file**: `-config FILE`, else `${XDG_CONFIG_HOME:-~/.config}/lsf-runtime/config.json`; a missing file is refused, naming the path. It is a JSON object, and each top-level key replaces the default's whole. It carries the host's settings: `image` (by digest), `claudeBin`, `claudeVersion`, `podmanBin`, `pluginDir`, `proxy`, `env`, caps and timings. `stateDir`, `repo`, `args` and `dryRun` are refused: the CLI sets them per launch. A relative `pluginDir`, and a relative `claudeBin` holding a `/`, are resolved against the host file's directory.
+2. **The host file**: `-config FILE`, else `${XDG_CONFIG_HOME:-~/.config}/lsf-runtime/config.json`; a missing file is refused, naming the path, and so is one holding a string value that starts `REQUIRED:` (a `config init` starter not yet filled in), naming the fields. It is a JSON object, and each top-level key replaces the default's whole. It carries the host's settings: `image` (by digest), `claudeBin`, `claudeVersion`, `podmanBin`, `pluginDir`, `proxy`, `env`, caps and timings. `stateDir`, `repo`, `args` and `dryRun` are refused: the CLI sets them per launch. A relative `pluginDir`, and a relative `claudeBin` holding a `/`, are resolved against the host file's directory.
 3. **The CLI's fields**: `repo`, `stateDir`, `args` and `dryRun`; `pluginDir` from `-plugin-dir` when given, which beats the host file; `claudeBin` and `claudeVersion` (below).
 
 A load error reaches the requester as the runtime gives it. One naming `allow`, `deny` or `permissionMode` adds that the config predates the container boundary (Permissions) and the key is to be removed.
@@ -693,9 +702,12 @@ A load error reaches the requester as the runtime gives it. One naming `allow`, 
 | `pause [-lift] [addr]` | Sets the pause ref to the repo's `HEAD` (`git update-ref`), or with `-lift` deletes it, and verifies it (`git show-ref --verify`). The orchestrator reads it at its next wave boundary, not at once. The ref and repo come from `launch.json`; without one, from the address, with the default ref and a warning that a launch passing another `args.pauseRef` reads that one. |
 | `stop [addr]` | SIGTERM to the running driver (Supervision → Signals). The first lets in-flight calls finish, which can take as long as the longest call; a second `stop` cancels them. |
 | `resume [addr] [-config FILE] [-plugin-dir DIR]` | Replays the last launch (below). |
+| `validate [-decisions PATH] PLAN` | The plan pre-flight check, as `validate/cmd/lsf-validate` (`validate.Command`): problems on stdout, exit 0 none, 1 problems, 2 a usage or I/O error. |
+| `config init [-config FILE] [-plugin-dir DIR]` | Writes the starter host config to `-config` or the default path, parent made 0700, file 0600 with `O_EXCL`: an existing file is never overwritten (exit 1). Prints the path. `image` is marked `REQUIRED:`, naming the Containerfile under `-plugin-dir`; `proxy.credentialsFile` is `~/.claude/.credentials.json` when it exists, else marked; `env` is empty; there are no `caps`. |
+| `version` | Prints `<version> <commit>`: the release build's `-X` values, `dev unknown` otherwise. |
 | `drive -state DIR -launch FILE` | Hidden: the driver. |
 
-Exit codes: 0 success; 1 a refusal or error, with its message on stderr; 2 usage. `status` and `watch` exit 3 for `crashed` or `failed-to-start` and 4 for `none`; the report is authoritative. Their 0 says the report was made, not that the run succeeded: an `ended` run's `summary.stop_reason` says how it ended. Run a built binary: `go run` reports every non-zero exit as 1, and its binary is removed when it exits, while the driver re-executes it.
+Exit codes: 0 success; 1 a refusal or error, with its message on stderr; 2 usage. `status` and `watch` exit 3 for `crashed` or `failed-to-start` and 4 for `none`; the report is authoritative. Their 0 says the report was made, not that the run succeeded: an `ended` run's `summary.stop_reason` says how it ended. Run it through the launcher or a built binary, not `go run`: that reports every non-zero exit as 1, and its binary is removed when it exits, while the driver re-executes it. The launcher's own failures exit 125.
 
 ### Launch
 
@@ -727,7 +739,7 @@ The report is JSON:
   "outcome",                         // summary.json's outcome, ended only
   "previous": {launch, summary, outcome},   // failed-to-start only: the last launch that ran
   "pause": {"ref", "set"},
-  "leftovers": {"clone", "scratch", "merge", "partial"},
+  "leftovers": {"clone", "scratch", "merge", "partial", "retain"},
   "xferRefs", "containers", "containersError", "errors" }
 ```
 
@@ -744,4 +756,4 @@ The report is JSON:
 | free | yes | = D's | `running` | `crashed` (the lock re-probed after `status.json` is read) |
 | free | yes | ≠ D's | — | `starting` while D's pid is a live `drive` on this state dir (spawned, the lock not yet taken), else `failed-to-start` |
 
-`summary` and `outcome` are shown only for `ended`, so an earlier launch's outcome is never reported as the current one. For `failed-to-start`, `previous` shows the last launch that ran, when `status.json`'s state is its summary's `stop_reason`: that outcome is still the one a relaunch starts from. `summary.json` is read only when its start time is the one `status.json`'s launch id is made from (`Run` only logs a failed write of it); another is named in `errors`. `leftovers` lists the entries of `clone/`, `scratch/` and `merge/`, and `partial` the `*.partial` entries of those and `gates/`. `xferRefs` are the main repo's `refs/lsf/<plan8>/xfer/w<n>` refs. `containers` are those carrying the state dir's `lsf.state` label (`podman ps -a`); a failure is reported in `containersError`. `repo`, `name`, `podmanBin` and the pause ref (`args.pauseRef`, else `refs/lsf/<name>/pause`) come from `launch.json`, or without one from the address. A piece that cannot be read is named in `errors` (a missing file is not); each git and podman command is bounded by 10 s, and `status` itself does not fail.
+`summary` and `outcome` are shown only for `ended`, so an earlier launch's outcome is never reported as the current one. For `failed-to-start`, `previous` shows the last launch that ran, when `status.json`'s state is its summary's `stop_reason`: that outcome is still the one a relaunch starts from. `summary.json` is read only when its start time is the one `status.json`'s launch id is made from (`Run` only logs a failed write of it); another is named in `errors`. `leftovers` lists the entries of `clone/`, `scratch/` and `merge/`, and `partial` the `*.partial` entries of those and `gates/`. `retain` lists, by path, the entries named with the state dir's `lsfrt.RetainPrefix` (`.lsf-retain-<h8>-`, h8 from `launch.json`'s `stateDir` spelling) in each store a `retained/*.json` record names, whatever the record's phase, so an abandoned staging or scratch directory is listed too. A live run's own in-flight move is listed as well. The runtime writes a move's record before it creates the move's directories, so a store goes unsearched only when its record was deleted by hand. `xferRefs` are the main repo's `refs/lsf/<plan8>/xfer/w<n>` refs. `containers` are those carrying the state dir's `lsf.state` label (`podman ps -a`); a failure is reported in `containersError`. `repo`, `name`, `podmanBin` and the pause ref (`args.pauseRef`, else `refs/lsf/<name>/pause`) come from `launch.json`, or without one from the address. A piece that cannot be read is named in `errors` (a missing file is not); each git and podman command is bounded by 10 s, and `status` itself does not fail.
