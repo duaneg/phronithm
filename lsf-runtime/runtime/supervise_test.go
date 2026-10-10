@@ -47,6 +47,8 @@ func helperMain(scenario string) int {
 		case "gate-hang":
 			_, err := rt.RunGates(ctx, "gates:hang", os.Getenv("LSFRT_GATE_COMMIT"), "", []GateSpec{{Name: "hang", Command: "sleep 30"}})
 			return nil, err
+		case "retain-hang":
+			return nil, helperRetainHang(ctx, rt)
 		case "three-hangs":
 			var thunks []func(context.Context) (json.RawMessage, error)
 			for i := range 3 {

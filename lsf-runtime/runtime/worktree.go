@@ -120,7 +120,6 @@ type WorktreeRemoval struct {
 // says what went, and the event is emitted.
 func (rt *Runtime) RemoveWorktree(ctx context.Context, label, integration string, deleteBranch bool) (out WorktreeRemoval, err error) {
 	o := Opts{Label: label, Isolation: "worktree"}
-	key := journalKey(label)
 	out = WorktreeRemoval{Label: label}
 	args, err := rt.isolationArgs(o)
 	if err != nil {
@@ -142,44 +141,12 @@ func (rt *Runtime) RemoveWorktree(ctx context.Context, label, integration string
 	}
 	gctx, cancel := rt.gitContext(ctx)
 	defer cancel()
-	isDir := func(p string) bool { fi, err := os.Stat(p); return err == nil && fi.IsDir() }
-	wtPath, clonePath := filepath.Join(rt.cfg.StateDir, "wt", key), filepath.Join(rt.cfg.StateDir, "clone", key)
-	isClone := isDir(clonePath)
-	out.Path = wtPath
-	if isClone {
-		out.Path = clonePath
+	t, err := rt.removal(gctx, args, label, integration, deleteBranch)
+	out.Path, out.Branch, out.Kept = t.path, t.branch, t.kept
+	if err != nil || t.kept != "" {
+		return out, err
 	}
-	out.Branch = branchName(args, key)
-	if isClone && isDir(wtPath) {
-		out.Kept = "both a clone and a worktree"
-		return out, nil
-	}
-	ref := "refs/heads/" + out.Branch
-	tipB, err := gitStdout(gctx, rt.cfg.Repo, "rev-parse", "--verify", "--quiet", ref)
-	tip := strings.TrimSpace(string(tipB))
-	if err != nil && exitStatus(err) != 1 {
-		return out, fmt.Errorf("%s: rev-parse %s: %w", label, ref, err)
-	}
-	dirExists := isDir(out.Path)
-	switch {
-	case !dirExists && tip == "":
-		out.Kept = "absent"
-		return out, nil
-	case dirExists && tip == "":
-		out.Kept = "branch missing"
-		return out, nil
-	case !dirExists && !deleteBranch:
-		out.Kept = "branch retained"
-		return out, nil
-	}
-	merged := gitRun(gctx, rt.cfg.Repo, "merge-base", "--is-ancestor", tip, "refs/heads/"+integration)
-	if merged != nil {
-		if exitStatus(merged) != 1 {
-			return out, fmt.Errorf("%s: merge-base: %w", label, merged)
-		}
-		out.Kept = "not merged into " + integration
-		return out, nil
-	}
+	isClone, tip, ref := t.isClone, t.tip, "refs/heads/"+t.branch
 	defer func() {
 		if out.Removed {
 			ev := map[string]any{"label": label, "path": out.Path, "branch": out.Branch, "paths": len(out.Paths), "clone": isClone}
@@ -189,21 +156,7 @@ func (rt *Runtime) RemoveWorktree(ctx context.Context, label, integration string
 			rt.event("worktree-removed", ev)
 		}
 	}()
-	if dirExists {
-		if isClone {
-			if isCloneOn(gctx, out.Path, out.Branch) != nil && isCloneOn(gctx, out.Path, integration) != nil {
-				out.Kept = "not a clone on " + out.Branch
-				return out, nil
-			}
-			head, err := cloneStdout(gctx, out.Path, "rev-parse", "-q", "--verify", "HEAD")
-			if err != nil || strings.TrimSpace(string(head)) != tip {
-				out.Kept = "clone has commits not fetched"
-				return out, nil
-			}
-		} else if !isWorktreeOn(gctx, out.Path, out.Branch) {
-			out.Kept = "not a worktree on " + out.Branch
-			return out, nil
-		}
+	if t.exists {
 		git := gitStdout
 		if isClone {
 			git = cloneStdout
@@ -237,6 +190,75 @@ func (rt *Runtime) RemoveWorktree(ctx context.Context, label, integration string
 		out.Removed = true
 	}
 	return out, nil
+}
+
+// removalTarget is what removal found for a label: its directory (a kept
+// clone or a code step's worktree), branch and branch tip, and Kept, the
+// reason RemoveWorktree would keep it, "" when it would remove it.
+type removalTarget struct {
+	path, branch, tip string
+	isClone, exists   bool
+	kept              string
+}
+
+// removal runs RemoveWorktree's checks on label without changing anything
+// (see RemoveWorktree for the reasons a label is kept).
+func (rt *Runtime) removal(gctx context.Context, args worktreeArgs, label, integration string, deleteBranch bool) (t removalTarget, err error) {
+	key := journalKey(label)
+	isDir := func(p string) bool { fi, err := os.Stat(p); return err == nil && fi.IsDir() }
+	wtPath, clonePath := filepath.Join(rt.cfg.StateDir, "wt", key), filepath.Join(rt.cfg.StateDir, "clone", key)
+	t.isClone = isDir(clonePath)
+	t.path = wtPath
+	if t.isClone {
+		t.path = clonePath
+	}
+	t.branch = branchName(args, key)
+	if t.isClone && isDir(wtPath) {
+		t.kept = "both a clone and a worktree"
+		return t, nil
+	}
+	ref := "refs/heads/" + t.branch
+	tipB, err := gitStdout(gctx, rt.cfg.Repo, "rev-parse", "--verify", "--quiet", ref)
+	t.tip = strings.TrimSpace(string(tipB))
+	if err != nil && exitStatus(err) != 1 {
+		return t, fmt.Errorf("%s: rev-parse %s: %w", label, ref, err)
+	}
+	t.exists = isDir(t.path)
+	switch {
+	case !t.exists && t.tip == "":
+		t.kept = "absent"
+		return t, nil
+	case t.exists && t.tip == "":
+		t.kept = "branch missing"
+		return t, nil
+	case !t.exists && !deleteBranch:
+		t.kept = "branch retained"
+		return t, nil
+	}
+	merged := gitRun(gctx, rt.cfg.Repo, "merge-base", "--is-ancestor", t.tip, "refs/heads/"+integration)
+	if merged != nil {
+		if exitStatus(merged) != 1 {
+			return t, fmt.Errorf("%s: merge-base: %w", label, merged)
+		}
+		t.kept = "not merged into " + integration
+		return t, nil
+	}
+	if !t.exists {
+		return t, nil
+	}
+	if t.isClone {
+		if isCloneOn(gctx, t.path, t.branch) != nil && isCloneOn(gctx, t.path, integration) != nil {
+			t.kept = "not a clone on " + t.branch
+			return t, nil
+		}
+		head, err := cloneStdout(gctx, t.path, "rev-parse", "-q", "--verify", "HEAD")
+		if err != nil || strings.TrimSpace(string(head)) != t.tip {
+			t.kept = "clone has commits not fetched"
+		}
+	} else if !isWorktreeOn(gctx, t.path, t.branch) {
+		t.kept = "not a worktree on " + t.branch
+	}
+	return t, nil
 }
 
 // exitStatus is a command's exit status, -1 when it did not exit.
