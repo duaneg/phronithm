@@ -27,6 +27,9 @@ type root struct {
 // cache. The environment is the test's, less the launcher's variables.
 func newRoot(t *testing.T) *root {
 	t.Helper()
+	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+		t.Skipf("the launcher runs on amd64 and arm64, not %s", runtime.GOARCH)
+	}
 	r := &root{t: t, dir: t.TempDir(), cache: t.TempDir()}
 	mkdir(t, filepath.Join(r.dir, "lsf-runtime", "dist"))
 	copyFile(t, "../lsf-runtime", filepath.Join(r.dir, "lsf-runtime", "lsf-runtime"), 0o755)
@@ -100,6 +103,83 @@ func TestBinOverride(t *testing.T) {
 	res = r.run([]string{"LSF_RUNTIME_BIN=" + bin}, "version")
 	eq(t, res.code, 125)
 	contains(t, res.stderr, "lsf-runtime launcher: LSF_RUNTIME_BIN="+bin+" is not an executable file")
+
+	res = r.run([]string{"LSF_RUNTIME_BIN=" + filepath.Join(t.TempDir(), "absent")}, "version")
+	eq(t, res.code, 125)
+	contains(t, res.stderr, "is not an executable file")
+	res = r.run([]string{"LSF_RUNTIME_BIN=sh"}, "version")
+	eq(t, res.code, 125)
+	contains(t, res.stderr, "LSF_RUNTIME_BIN=sh is not a path")
+}
+
+// A failed download exits 125 and leaves nothing in the cache.
+func TestDownloadFails(t *testing.T) {
+	r := newRoot(t)
+	r.release("v1", nil)
+	res := r.run([]string{"LSF_RUNTIME_RELEASE_URL=file:///nonexistent"}, "version")
+	eq(t, res.code, 125)
+	contains(t, res.stderr, "lsf-runtime launcher: downloading file:///nonexistent/v1/lsf-runtime-linux-"+runtime.GOARCH+" failed")
+	ents, _ := os.ReadDir(filepath.Join(r.cache, "release", "v1"))
+	eq(t, len(ents), 0, "nothing left in the cache")
+}
+
+// Without LSF_RUNTIME_RELEASE_URL, curl fetches the default https URL with
+// only https allowed, redirects included.
+func TestDefaultURL(t *testing.T) {
+	r := newRoot(t)
+	r.release("v1", nil)
+	shim := t.TempDir()
+	// A curl that reports its arguments and fails.
+	write(t, filepath.Join(shim, "curl"), []byte("#!/bin/sh\necho \"curl $*\" >&2\nexit 7\n"), 0o755)
+	res := r.run([]string{"PATH=" + shim + ":" + os.Getenv("PATH")}, "version")
+	eq(t, res.code, 125)
+	contains(t, res.stderr, "--proto =https --proto-redir =https --tlsv1.2")
+	contains(t, res.stderr, "https://github.com/duaneg/phronithm/releases/download/v1/lsf-runtime-linux-"+runtime.GOARCH)
+}
+
+// The cache defaults to $XDG_CACHE_HOME/lsf-runtime, else
+// $HOME/.cache/lsf-runtime; with neither usable it is refused.
+func TestCacheDefaults(t *testing.T) {
+	r := newRoot(t)
+	env := r.release("v1", nil)
+	var base []string
+	for _, e := range r.env {
+		if !strings.HasPrefix(e, "LSF_RUNTIME_CACHE=") && !strings.HasPrefix(e, "XDG_CACHE_HOME=") && !strings.HasPrefix(e, "HOME=") {
+			base = append(base, e)
+		}
+	}
+	r.env = base
+	xdg, home := t.TempDir(), t.TempDir()
+	rel := filepath.Join("lsf-runtime", "release", "v1", "lsf-runtime-linux-"+runtime.GOARCH)
+
+	eq(t, r.run(append(env, "XDG_CACHE_HOME="+xdg, "HOME="+home), "version").code, 0)
+	if _, err := os.Stat(filepath.Join(xdg, rel)); err != nil {
+		t.Error(err)
+	}
+	fi, err := os.Stat(filepath.Join(xdg, "lsf-runtime"))
+	if err == nil {
+		eq(t, fi.Mode().Perm(), os.FileMode(0o700))
+	}
+	eq(t, r.run(append(env, "XDG_CACHE_HOME=relative", "HOME="+home), "version").code, 0)
+	if _, err := os.Stat(filepath.Join(home, ".cache", rel)); err != nil {
+		t.Error(err)
+	}
+	res := r.run(env, "version")
+	eq(t, res.code, 125)
+	contains(t, res.stderr, "lsf-runtime launcher: HOME is unset or not absolute")
+}
+
+func TestBadPin(t *testing.T) {
+	for name, sum := range map[string]string{
+		"upper": strings.Repeat("A", 64),
+		"short": strings.Repeat("a", 63),
+	} {
+		r := newRoot(t)
+		r.pin("tag v1\nsha256 " + runtime.GOARCH + " " + sum + "\n")
+		res := r.run(nil, "version")
+		eq(t, res.code, 125, name)
+		contains(t, res.stderr, "bad sha256 "+sum, name)
+	}
 }
 
 func TestReleaseDownload(t *testing.T) {
@@ -186,7 +266,9 @@ func TestWorkingTreeWithoutGo(t *testing.T) {
 		if err != nil {
 			t.Skipf("%s not installed", tool)
 		}
-		os.Symlink(p, filepath.Join(path, tool))
+		if err := os.Symlink(p, filepath.Join(path, tool)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	res := r.run(append(env, "PATH="+path), "version")
 	eq(t, res.code, 0, res.stderr)
@@ -261,6 +343,32 @@ func TestWorkingTree(t *testing.T) {
 	contains(t, res.stderr, "lsf-runtime validate: ")
 	left, _ := filepath.Glob(bin + ".*")
 	eq(t, len(left), 0, "no temp builds left")
+}
+
+// A changed tree replaces the binary with a new file.
+func TestWorkingTreeRebuilds(t *testing.T) {
+	r := treeRoot(t, "cli")
+	r.pin("")
+	eq(t, r.run(nil, "version").stdout, "dev unknown\n")
+	bin := filepath.Join(r.dir, "lsf-runtime", ".build", "lsf-runtime")
+	fi, err := os.Stat(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(r.dir, "lsf-runtime", "cli", "version.go")
+	b, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, src, []byte(strings.Replace(string(b), `version = "dev"`, `version = "changed"`, 1)), 0o644)
+	eq(t, r.run(nil, "version").stdout, "changed unknown\n")
+	fi2, err := os.Stat(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(fi, fi2) {
+		t.Error("the changed build was written in place")
+	}
 }
 
 // A failed build exits 125 with the compiler's output and never runs a
