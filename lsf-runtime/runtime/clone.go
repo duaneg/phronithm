@@ -608,7 +608,11 @@ func (rt *Runtime) wipeScratch() {
 		}
 	}
 	// Gate checkouts, homes and half-built checkouts a killed launch left;
-	// their containers were reaped first.
+	// their containers were reaped first. A dry run reaps nothing, so it
+	// leaves them.
+	if rt.cfg.DryRun {
+		return
+	}
 	entries, _ := os.ReadDir(filepath.Join(rt.cfg.StateDir, "gates"))
 	for _, e := range entries {
 		if e.Name() == "logs" {

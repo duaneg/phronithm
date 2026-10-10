@@ -262,6 +262,13 @@ func (rt *Runtime) gateRemove(ctx context.Context, label, dir string) {
 // directory user-writable first (Go writes its module cache read-only).
 // Symlinks are not followed. No git runs in it.
 func removeGateTree(dir string) error {
+	makeTreeWritable(dir)
+	return os.RemoveAll(dir)
+}
+
+// makeTreeWritable gives the user rwx on every directory in a tree no
+// container is running in. Symlinks are not followed by the walk.
+func makeTreeWritable(dir string) {
 	filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err == nil && d.IsDir() {
 			if fi, err := d.Info(); err == nil && fi.Mode().Perm()&0o700 != 0o700 {
@@ -270,7 +277,6 @@ func removeGateTree(dir string) error {
 		}
 		return nil
 	})
-	return os.RemoveAll(dir)
 }
 
 // pruneGateWorktrees prunes the main repo's stale registrations when it
@@ -390,14 +396,22 @@ func (rt *Runtime) gateProcess(ctx context.Context, dir, logPath, command string
 	pid := cmd.Process.Pid
 	rt.event("gate-spawn", map[string]any{"pid": pid, "container": name, "setup": setup})
 	cmd.Wait()
+	if cmd.ProcessState == nil { // not expected after a successful Start
+		cmd.ProcessState = &os.ProcessState{}
+	}
 	var rmErr error
 	if cmd.ProcessState == nil || cmd.ProcessState.ExitCode() != 0 || cancelled.Load() {
 		rmErr = rt.removeContainer(name)
 	}
 	syscall.Kill(-pid, syscall.SIGKILL)
 	r.Secs = time.Since(t0).Seconds()
+	// The command may have made its home unreadable; only a marker that is
+	// not there means not started.
+	if fi, err := os.Lstat(home); err == nil && fi.IsDir() && fi.Mode().Perm()&0o700 != 0o700 {
+		os.Chmod(home, fi.Mode().Perm()|0o700)
+	}
 	_, merr := os.Lstat(marker)
-	started := merr == nil
+	started := !errors.Is(merr, fs.ErrNotExist)
 	os.Remove(marker)
 	if rmErr != nil {
 		msg := fmt.Sprintf("gate container %s not removed: %v", name, rmErr)

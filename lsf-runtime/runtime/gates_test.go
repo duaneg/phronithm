@@ -301,7 +301,8 @@ func TestRunGatesRemovesReadOnlyTrees(t *testing.T) {
 
 // A container that fails before its command starts (no started marker)
 // stops the run with runtime-error and returns no verdict; a command that
-// itself exits 125 is red.
+// itself exits 125 is red, and so is a command that made its home
+// unreadable (TestRunGatesUnreadableHomeIsRed).
 func TestRunGatesLaunchFailure(t *testing.T) {
 	cfg, _ := testConfig(t)
 	sha := gateRepo(t, &cfg)
@@ -312,15 +313,6 @@ func TestRunGatesLaunchFailure(t *testing.T) {
 	runs, err, s := runGates(t, cfg, "gates:y", sha, "", []GateSpec{{Name: "a", Command: "true"}})
 	if r, ok := IsStop(err); !ok || r != StopRuntimeError || runs != nil || s.StopReason != StopRuntimeError || !strings.Contains(s.Detail, "before its command started") {
 		t.Fatalf("podman exit 125: %v %+v %+v", err, runs, s)
-	}
-	os.Unsetenv("STUB_PODMAN_RUN_EXIT")
-	// An unwritable home: the marker cannot be written.
-	runs, err, s = runGates(t, cfg, "gates:z", sha, "chmod 0500 \"$HOME\"", []GateSpec{{Name: "a", Command: "true"}})
-	if r, ok := IsStop(err); !ok || r != StopRuntimeError || runs != nil || !strings.Contains(s.Detail, "before its command started") {
-		t.Fatalf("unwritable home: %v %+v %+v", err, runs, s)
-	}
-	if dir := filepath.Join(cfg.StateDir, "gates", journalKey("gates:z")); exists(dir + ".home") {
-		t.Error("unwritable home left")
 	}
 }
 
@@ -559,5 +551,40 @@ func TestRunGatesHostileGit(t *testing.T) {
 	}
 	if dir := filepath.Join(cfg.StateDir, "gates", journalKey("gates:x")); exists(dir) {
 		t.Error("checkout left")
+	}
+
+	// The timeout path, and a hostile tree a killed launch left, wiped by
+	// the next launch.
+	runs, err, _ = runGates(t, cfg, "gates:y", sha, hostileGate(canary), []GateSpec{{Name: "slow", Command: "sleep 30", Timeout: 300 * time.Millisecond}})
+	if err != nil || runs[0].Status != GateNotRun {
+		t.Fatalf("%v %+v", err, runs)
+	}
+	left := filepath.Join(cfg.StateDir, "gates", "gates_z-01234567")
+	git(t, tmp, "clone", "-q", cfg.Repo, left)
+	cmd = exec.Command("sh", "-c", hostileGate(canary))
+	cmd.Dir = left
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("leftover setup: %v %s", err, out)
+	}
+	launch(t, cfg, func(context.Context, *Runtime) (json.RawMessage, error) { return nil, nil })
+	if exists(left) {
+		t.Error("leftover hostile tree not wiped")
+	}
+	if exists(canary) {
+		t.Error("host git ran in a gate checkout on the timeout or wipe path")
+	}
+}
+
+// A gate that makes its home unreadable after the marker is written, then
+// fails, is red: the marker is read after the home is made readable.
+func TestRunGatesUnreadableHomeIsRed(t *testing.T) {
+	cfg, _ := testConfig(t)
+	sha := gateRepo(t, &cfg)
+	runs, err, _ := runGates(t, cfg, "gates:x", sha, "", []GateSpec{{Name: "a", Command: `chmod 0 "$HOME"; exit 3`}})
+	if err != nil || runs[0].Status != GateRed || runs[0].ExitCode != 3 {
+		t.Fatalf("%v %+v", err, runs)
+	}
+	if dir := filepath.Join(cfg.StateDir, "gates", journalKey("gates:x")); exists(dir + ".home") {
+		t.Error("home left")
 	}
 }

@@ -399,6 +399,9 @@ func TestLiveGate(t *testing.T) {
 	if b, _ := os.ReadFile(runs[0].Log); !strings.Contains(string(b), "gate-out") || !strings.Contains(string(b), "gate-err") {
 		t.Errorf("gate output not logged: %q", b)
 	}
+	if !strings.Contains(runs[1].Tail, "Could not resolve host") {
+		t.Errorf("offline gate not refused by the network: %q", runs[1].Tail)
+	}
 	dir := filepath.Join(cfg.StateDir, "gates", journalKey("gates:live"))
 	if exists(dir) || exists(dir+".home") {
 		t.Error("checkout or home left")
@@ -449,7 +452,8 @@ func liveNet(t *testing.T) {
 
 // L-egress: Bash in a call with hosts [registry.npmjs.org] reaches the
 // registry through the egress proxy, and is refused an undeclared host,
-// plain HTTP and the direct route (status/CONNECT status per URL).
+// plain HTTP and the direct route, by name and by literal IP
+// (status/CONNECT status per URL).
 func TestLiveEgress(t *testing.T) {
 	cfg := liveConfig(t)
 	liveNet(t)
@@ -459,7 +463,8 @@ func TestLiveEgress(t *testing.T) {
 for u in https://registry.npmjs.org/ https://example.com/ http://registry.npmjs.org/; do
   echo "$u $(curl -sS -o /dev/null -w '%{http_code}/%{http_connect}' --max-time 30 "$u" 2>/dev/null)"
 done
-echo "direct $(curl -sS --noproxy '*' -o /dev/null -w '%{http_code}' --max-time 10 https://registry.npmjs.org/ 2>&1 | tr '\n' ' ')"
+curl -sS --noproxy '*' -o /dev/null --max-time 10 https://registry.npmjs.org/ 2>/dev/null; echo "direct-name exit $?"
+curl -sS --noproxy '*' -o /dev/null --connect-timeout 5 --max-time 10 https://1.1.1.1/ 2>/dev/null; echo "direct-ip exit $?"
 } > egress.txt`)
 	var d egressDecisions
 	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
@@ -479,7 +484,8 @@ echo "direct $(curl -sS --noproxy '*' -o /dev/null -w '%{http_code}' --max-time 
 			t.Errorf("want %q", want)
 		}
 	}
-	if strings.Contains(out, "direct 200") || !strings.Contains(out, "direct ") {
+	// No DNS (6), and no route to a literal IP (7, or 28 on a timeout).
+	if !strings.Contains(out, "direct-name exit 6\n") || !(strings.Contains(out, "direct-ip exit 7\n") || strings.Contains(out, "direct-ip exit 28\n")) {
 		t.Errorf("the direct route: %q", out)
 	}
 	got := d.list()
@@ -514,7 +520,7 @@ func TestLiveGatesSetupHosts(t *testing.T) {
 			})
 		return nil, err
 	})
-	if err != nil || len(runs) != 2 || runs[0].Status != GateGreen || runs[1].Status != GateRed {
+	if err != nil || len(runs) != 2 || runs[0].Status != GateGreen || runs[1].Status != GateRed || !strings.Contains(runs[1].Tail, "Could not resolve host") {
 		t.Fatalf("%v %+v", err, runs)
 	}
 	if got := d.list(); !slices.Equal(got, []string{"allowed registry.npmjs.org:443"}) {
@@ -532,7 +538,7 @@ func TestLiveGateTimeout(t *testing.T) {
 	cfg.KillGrace = Duration(time.Second)
 	sha := gateRepo(t, &cfg)
 	runs, err, _ := runGates(t, cfg, "gates:slow", sha, "", []GateSpec{{Name: "slow", Command: "trap '' TERM; sleep 300", Timeout: 2 * time.Second}})
-	if err != nil || runs[0].Status != GateNotRun || runs[0].Secs > 30 {
+	if err != nil || len(runs) != 1 || runs[0].Status != GateNotRun || runs[0].Secs > 30 {
 		t.Fatalf("%v %+v", err, runs)
 	}
 	if left := liveContainers(t, cfg); len(left) > 0 {
@@ -550,10 +556,20 @@ func TestLivePaidEgress(t *testing.T) {
 	}
 	cfg := liveConfig(t)
 	liveNet(t)
-	home, _ := os.UserHomeDir()
-	cfg.ClaudeBin = filepath.Join(home, ".local", "share", "claude", "versions", "2.1.294")
+	// The live session's OAuth token, through the credential proxy, as the
+	// runtime uses it.
+	home, err := os.UserHomeDir()
+	bin := filepath.Join(home, ".local", "share", "claude", "versions", "2.1.294")
+	creds := filepath.Join(home, ".claude", ".credentials.json")
+	if err != nil || !exists(bin) || !exists(creds) {
+		if os.Getenv("LSF_LIVE_REQUIRE") == "1" {
+			t.Fatalf("paid test required: %v; %s and %s must exist", err, bin, creds)
+		}
+		t.Skip("paid: needs the pinned claude 2.1.294 and a credentials file")
+	}
+	cfg.ClaudeBin = bin
 	cfg.ClaudeVersion = "2.1.294"
-	cfg.Proxy = &ProxyConfig{Listen: "127.0.0.1:0", CredentialsFile: filepath.Join(home, ".claude", ".credentials.json")}
+	cfg.Proxy = &ProxyConfig{Listen: "127.0.0.1:0", CredentialsFile: creds}
 	cfg.Caps = Caps{MaxCalls: 2, MaxCostUSD: 0.5}
 	cfg.Backoff = nil
 	cfg.Env = nil
@@ -574,6 +590,9 @@ func TestLivePaidEgress(t *testing.T) {
 	got := d.list()
 	if !slices.Contains(got, "allowed registry.npmjs.org:443") || !slices.Contains(got, "refused example.com:443") {
 		t.Errorf("decisions %q", got)
+	}
+	if res.Class != string(classOK) || len(res.Value) == 0 {
+		t.Errorf("the call did not return a value: class %s", res.Class)
 	}
 	for _, g := range got {
 		if g != "allowed registry.npmjs.org:443" && strings.HasPrefix(g, "allowed ") {
