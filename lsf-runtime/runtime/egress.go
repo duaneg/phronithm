@@ -15,7 +15,7 @@ import (
 
 // The egress proxy (docs/design/lsf-runtime.md, Permissions → Network): with
 // hosts pinned, it listens on 127.0.0.1 at an ephemeral port for the rest of
-// the launch, spliced into every agent call's container and into setup's. It
+// the launch, spliced into every agent call's container and setup's. It
 // allows CONNECT to port 443 of a pinned host and refuses everything else,
 // plain HTTP included. Names are resolved on the host, after matching.
 
@@ -42,7 +42,7 @@ type egressProxy struct {
 	mu               sync.Mutex
 	closed           bool
 	conns            map[net.Conn]struct{} // both ends of every open tunnel
-	wg               sync.WaitGroup        // open tunnels
+	wg               sync.WaitGroup        // open handlers and tunnels
 	allows, refusals int
 }
 
@@ -87,7 +87,12 @@ func (e *egressProxy) allowed(target string) (string, bool) {
 		return "", false
 	}
 	host := normaliseHost(h)
-	if host == "" {
+	// No wildcard, zone, empty label or brackets left in a target, and
+	// brackets only around an IPv6 literal.
+	if strings.HasPrefix(target, "[") && !strings.Contains(host, ":") {
+		return "", false
+	}
+	if host == "" || strings.ContainsAny(host, "*%[]") || strings.HasPrefix(host, ".") || strings.Contains(host, "..") || strings.HasSuffix(host, ".") {
 		return "", false
 	}
 	if e.allow[host] {
@@ -101,7 +106,7 @@ func (e *egressProxy) allowed(target string) (string, bool) {
 		if !ok || !strings.HasPrefix(suffix, ".") {
 			continue
 		}
-		if prefix, ok := strings.CutSuffix(host, suffix); ok && prefix != "" && !strings.HasSuffix(prefix, ".") {
+		if prefix, ok := strings.CutSuffix(host, suffix); ok && prefix != "" {
 			return host, true
 		}
 	}
@@ -109,6 +114,15 @@ func (e *egressProxy) allowed(target string) (string, bool) {
 }
 
 func (e *egressProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// A handler counts as open until it has handed its connection to a
+	// tunnel, so close waits for it.
+	if !e.enter() {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+	defer e.wg.Done()
+	// For CONNECT, Go's server takes r.Host from the request-target's
+	// authority, never the Host header.
 	target := r.Host
 	host, ok := "", false
 	if r.Method == http.MethodConnect {
@@ -151,8 +165,20 @@ func (e *egressProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	go e.tunnel(client, up, early)
 }
 
+// enter counts a handler in, false once the proxy is closing.
+func (e *egressProxy) enter() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed {
+		return false
+	}
+	e.wg.Add(1)
+	return true
+}
+
 // tunnel answers the CONNECT and copies both ways, half-closing each
-// direction as it ends; both ends close when both directions have.
+// direction as it ends at EOF; both ends close when both directions have,
+// or at once when either fails.
 func (e *egressProxy) tunnel(client, up net.Conn, early []byte) {
 	defer e.wg.Done()
 	defer e.untrack(client, up)
@@ -161,21 +187,29 @@ func (e *egressProxy) tunnel(client, up net.Conn, early []byte) {
 	}
 	var inner sync.WaitGroup
 	inner.Go(func() {
-		if _, err := up.Write(early); err == nil {
-			io.Copy(up, client)
+		if _, err := up.Write(early); err != nil {
+			client.Close()
+			up.Close()
+			return
 		}
-		closeWrite(up)
+		e.pipe(up, client)
 	})
-	io.Copy(client, up)
-	closeWrite(client)
+	e.pipe(client, up)
 	inner.Wait()
 }
 
-func closeWrite(c net.Conn) {
-	if cw, ok := c.(interface{ CloseWrite() error }); ok {
+// pipe copies src to dst: at EOF it half-closes dst; on an error it closes
+// both, which ends the other direction too.
+func (e *egressProxy) pipe(dst, src net.Conn) {
+	if _, err := io.Copy(dst, src); err != nil {
+		dst.Close()
+		src.Close()
+		return
+	}
+	if cw, ok := dst.(interface{ CloseWrite() error }); ok {
 		cw.CloseWrite()
 	} else {
-		c.Close()
+		dst.Close()
 	}
 }
 
@@ -227,7 +261,7 @@ func (e *egressProxy) decide(method, target string, ok bool) {
 }
 
 // close stops the proxy at launch end: no new connections, every tunnel's
-// ends closed, and its copies ended.
+// ends closed, and every handler and copy ended.
 func (e *egressProxy) close() {
 	e.srv.Close()
 	e.mu.Lock()
@@ -239,7 +273,7 @@ func (e *egressProxy) close() {
 	e.mu.Unlock()
 	e.wg.Wait()
 	<-e.done
-	e.rt.Log(fmt.Sprintf("egress: %d tunnel(s) allowed, %d request(s) refused this launch", allows, refusals))
+	e.rt.Log(fmt.Sprintf("egress: %d request(s) allowed, %d refused this launch", allows, refusals))
 }
 
 // port is the port the egress proxy is bound to.

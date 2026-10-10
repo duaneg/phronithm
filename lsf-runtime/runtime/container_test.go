@@ -393,21 +393,75 @@ func TestLaunchChecks(t *testing.T) {
 }
 
 // The smoke container is a call's container without the API: --network
-// none, the smoke label, the .git binds, and no proxy variables.
+// none, the smoke label, the .git binds, and no proxy variables, even with
+// hosts pinned.
 func TestSmokeArgv(t *testing.T) {
 	cfg, _ := testConfig(t)
 	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
-		argv := rt.containerArgv(containerSpec{name: "s", dir: "/d", gitBinds: true, network: "none", labels: []string{labelSmoke}, cmd: []string{"/bin/sh"}})
+		rt.PinHosts([]string{"registry.npmjs.org"})
+		argv := rt.containerArgv(containerSpec{kind: kindSmoke, name: "s", dir: "/d", gitBinds: true, labels: []string{labelSmoke}, cmd: []string{"/bin/sh"}})
 		if flagValue(argv, "--network") != "none" || !slices.Contains(argv, "lsf.smoke=1") || !slices.Contains(argv, "/d/.git/config:/d/.git/config:ro") {
 			t.Errorf("argv %q", argv)
 		}
 		for _, a := range argv {
-			if strings.HasPrefix(a, "ANTHROPIC_") {
+			if strings.HasPrefix(a, "ANTHROPIC_") || strings.Contains(strings.ToUpper(a), "HTTP") {
 				t.Errorf("smoke argv carries %s", a)
 			}
 		}
 		return nil, nil
 	})
+}
+
+// wantGateArgv is the podman argv the design gives setup or a gate
+// command (lsf-runtime.md, Declared gates); egress is the spliced port, "".
+func wantGateArgv(rt *Runtime, name, dir, home, egress string, env []string) []string {
+	network := "none"
+	if egress != "" {
+		network = "pasta:--splice-only,-T," + egress
+	}
+	a := []string{"run", "--rm", "--init", "--pull=never", "--log-driver=none", "--name", name, "--label", "lsf.state=" + rt.stateHash,
+		"--userns=keep-id", "--cap-drop=all", "--security-opt", "no-new-privileges", "--read-only", "--tmpfs", "/tmp:rw,exec",
+		"--network", network, "-v", dir + ":" + dir + ":rw", "-v", home + ":" + home + ":rw", "-w", dir, "-e", "HOME=" + home}
+	if egress != "" {
+		u := "http://127.0.0.1:" + egress
+		a = append(a, "-e", "HTTPS_PROXY="+u, "-e", "HTTP_PROXY="+u, "-e", "https_proxy="+u, "-e", "http_proxy="+u)
+	}
+	a = append(a, "-e", "NO_PROXY=127.0.0.1,localhost,::1", "-e", "no_proxy=127.0.0.1,localhost,::1")
+	for _, e := range env {
+		a = append(a, "-e", e)
+	}
+	for _, e := range rt.cfg.Env {
+		a = append(a, "-e", e)
+	}
+	return append(a, rt.cfg.Image, "/bin/sh", "-c", "x")
+}
+
+// A gate container: no -i, no claude, plugin or API; the checkout and home
+// at their host paths; setup spliced to the egress proxy only with hosts
+// pinned, a gate command never.
+func TestGateArgv(t *testing.T) {
+	for _, hosts := range [][]string{nil, {"registry.npmjs.org"}} {
+		cfg, _ := testConfig(t)
+		cfg.Env = []string{"LSF_TEST_PASS"}
+		launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+			rt.PinHosts(hosts)
+			env := []string{"LSF_GATE_COMMAND", "LSF_GATE_SEQ=1"}
+			for _, setup := range []bool{true, false} {
+				got := rt.containerArgv(containerSpec{kind: kindGate, name: "g", dir: "/s/gates/k", home: "/s/gates/k.home", egress: setup, env: env, cmd: []string{"/bin/sh", "-c", "x"}})
+				egress := ""
+				if setup {
+					egress = rt.egressPort()
+				}
+				if want := wantGateArgv(rt, "g", "/s/gates/k", "/s/gates/k.home", egress, env); !slices.Equal(got, want) {
+					t.Errorf("hosts %v setup %v:\n got %q\nwant %q", hosts, setup, got, want)
+				}
+				if setup && hosts != nil && !strings.HasPrefix(flagValue(got, "--network"), "pasta:") {
+					t.Errorf("setup with hosts not spliced: %q", got)
+				}
+			}
+			return nil, nil
+		})
+	}
 }
 
 // A dry run reports orphaned containers and leaves them running.

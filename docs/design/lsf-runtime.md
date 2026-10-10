@@ -401,6 +401,7 @@ podman run --rm -i --init --pull=never --log-driver=none --name <name> --label l
   - API spend that neither `--max-budget-usd` nor the runtime's `maxCostUSD` sees, since both count only the call's stream;
   - whatever else the OAuth token is authorised for at `api.anthropic.com`.
 - **Allowed hosts are an exfiltration channel.** Agent Bash and code that `setup` runs (package install hooks) can send what they read in the clone or gate checkout to any host in `hosts`. A host that accepts writes, such as GitHub, can receive the repo.
+- **The egress proxy takes no credential.** Any local process can reach `127.0.0.1:<egress port>` and tunnel to a pinned host on 443, which gains it nothing it could not reach from the host directly.
 - **The egress proxy dials from the host.** A `hosts` name reaches whatever it resolves to on the host: a private or link-local address, or host loopback, where the proxies and any local service listen. Only a listed name is reachable, and only on port 443.
 - **Only proxy-aware tools get network.** A tool that ignores the proxy variables gets none, even to an allowed host.
 - **No cache survives a call.** `HOME` is a tmpfs, so each call fetches its dependencies again. A stage that wants a cache must put it in its clone.
@@ -454,7 +455,7 @@ Unit `runtime-core`, plan `docs/plans/runtime-core-plan.md`. Package `lsfrt` in 
   At launch end the proxy waits up to 5 s for requests in flight, then closes, before the summary is written.
 
   Every call reaches the API through it (Permissions → A call's launch), so `Run` starts it before the body and a body never sees the zero value.
-- **`rt.PinHosts(hosts)`** records the gate block's `hosts` as the orchestrator pinned them from the plan at `args.planSha`, before any agent call; **`rt.Hosts()`** reads them (nil when the plan has none). Nothing confines a call by them yet: `s2-egress-gates` does.
+- **`rt.PinHosts(hosts)`** records the gate block's `hosts` as the orchestrator pinned them from the plan at `args.planSha`, before any agent call; **`rt.Hosts()`** reads them (nil when the plan has none). With hosts, it starts the egress proxy that confines agent calls to them (Permissions → Network).
 - **`rt.Log`** and **`rt.Args`**: `Args` is the config's `args`, passed through.
 
 `opts` mirrors the JavaScript: `label`, `phase` (telemetry only), `model`, `effort`, `agentType`, `isolation`, `schema`. It adds `dir`: an existing directory under `<stateDir>/merge/` to run in as found, with no clone, fetch-back or uncommitted check (the conflict call). `dir` is not in the call's hash, and `dir` with `isolation` is a `runtime-error` stop.
@@ -584,7 +585,7 @@ Every call in a kept clone that spawned and returns a value or a null reports th
 - The `Retains:` move: `retained-artefacts-impl`.
 - A stop file, status readers and detaching: `runtime-cli-drive`.
 - The roles' content: `s2-permissions-design`.
-- Confining calls and `setup` to `hosts`, and gates in containers: `s2-egress-gates`.
+- Confining `setup` to `hosts`, and gates in containers: `s2-egress-gates`.
 - Presenting `auth-failed` to the requester ("renew the credential and relaunch"): `runtime-cli-drive` and `phronithm:lsf-drive`.
 
 ### Known limits

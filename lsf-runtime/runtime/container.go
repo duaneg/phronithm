@@ -63,13 +63,25 @@ func claudeArgv(o Opts, role Role, sessionID string) []string {
 		"--dangerously-skip-permissions", "--json-schema", string(o.Schema))
 }
 
+// containerKind is what a container runs.
+type containerKind int
+
+const (
+	kindCall  containerKind = iota // an agent call: claude, spliced to the proxies
+	kindSmoke                      // the launch check: claude, no network
+	kindGate                       // setup or a gate command: no claude
+)
+
 // containerSpec is one container's inputs.
 type containerSpec struct {
+	kind     containerKind
 	name     string
 	dir      string   // the working directory, bound at its host path
 	gitBinds bool     // dir is a clone: bind its .git entries read-only
-	network  string   // "" for pasta spliced to the proxy
+	home     string   // a gate's home, bound at its host path
+	egress   bool     // a gate (setup) spliced to the egress proxy, when it runs
 	labels   []string // beyond the state label
+	env      []string // -e entries beyond the kind's own
 	cmd      []string // after the image
 }
 
@@ -79,16 +91,28 @@ type containerSpec struct {
 // env passthrough name likewise takes its value from the runtime's own
 // environment, which podman inherits and the container does not.
 func (rt *Runtime) containerArgv(s containerSpec) []string {
-	a := []string{"run", "--rm", "-i", "--init", "--pull=never", "--log-driver=none",
-		"--name", s.name, "--label", labelState + "=" + rt.stateHash}
+	a := []string{"run", "--rm"}
+	if s.kind != kindGate { // a gate's stdin is /dev/null
+		a = append(a, "-i")
+	}
+	a = append(a, "--init", "--pull=never", "--log-driver=none",
+		"--name", s.name, "--label", labelState+"="+rt.stateHash)
 	for _, l := range s.labels {
 		a = append(a, "--label", l)
 	}
-	network, egress := s.network, ""
-	if network == "" {
+	// The egress port is read once, so the splice and the variables agree.
+	network, egress := "none", ""
+	switch s.kind {
+	case kindCall:
 		network = "pasta:--splice-only,-T," + rt.proxyPort()
 		if egress = rt.egressPort(); egress != "" {
 			network += ",-T," + egress
+		}
+	case kindGate:
+		if s.egress {
+			if egress = rt.egressPort(); egress != "" {
+				network = "pasta:--splice-only,-T," + egress
+			}
 		}
 	}
 	a = append(a, "--userns=keep-id", "--cap-drop=all", "--security-opt", "no-new-privileges",
@@ -104,10 +128,14 @@ func (rt *Runtime) containerArgv(s containerSpec) []string {
 			a = append(a, "-v", p+":"+p+":ro")
 		}
 	}
-	a = append(a, "-v", rt.cfg.ClaudeBin+":"+ctrClaude+":ro", "-v", rt.cfg.PluginDir+":"+ctrPlugin+":ro",
-		"-w", s.dir, "-e", "HOME=/tmp/home", "-e", "SHELL=/bin/bash", "-e", "DISABLE_AUTOUPDATER=1",
-		"-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
-	if s.network == "" { // the API's route: only a call spliced to the proxy gets it
+	if s.kind == kindGate {
+		a = append(a, "-v", s.home+":"+s.home+":rw", "-w", s.dir, "-e", "HOME="+s.home)
+	} else {
+		a = append(a, "-v", rt.cfg.ClaudeBin+":"+ctrClaude+":ro", "-v", rt.cfg.PluginDir+":"+ctrPlugin+":ro",
+			"-w", s.dir, "-e", "HOME=/tmp/home", "-e", "SHELL=/bin/bash", "-e", "DISABLE_AUTOUPDATER=1",
+			"-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
+	}
+	if s.kind == kindCall { // the API's route
 		a = append(a, "-e", "ANTHROPIC_BASE_URL="+rt.Proxy().URL, "-e", "ANTHROPIC_AUTH_TOKEN")
 	}
 	if egress != "" {
@@ -115,6 +143,9 @@ func (rt *Runtime) containerArgv(s containerSpec) []string {
 		a = append(a, "-e", "HTTPS_PROXY="+u, "-e", "HTTP_PROXY="+u, "-e", "https_proxy="+u, "-e", "http_proxy="+u)
 	}
 	a = append(a, "-e", "NO_PROXY="+noProxy, "-e", "no_proxy="+noProxy)
+	for _, e := range s.env {
+		a = append(a, "-e", e)
+	}
 	for _, e := range rt.cfg.Env {
 		a = append(a, "-e", e)
 	}
@@ -154,6 +185,7 @@ func (rt *Runtime) removeContainer(name string) error {
 // callContainer is a call attempt's container in placement p.
 func (rt *Runtime) callContainer(c *callState, p placement, sessionID string) containerSpec {
 	return containerSpec{
+		kind:     kindCall,
 		name:     rt.containerName(sessionID),
 		dir:      p.dir,
 		gitBinds: p.git,
@@ -336,7 +368,7 @@ func (rt *Runtime) smoke(parent context.Context) error {
 	}
 	name := "lsf-" + rt.stateHash[:8] + "-smoke-" + rt.launchID
 	cmd := exec.CommandContext(ctx, rt.cfg.PodmanBin, rt.containerArgv(containerSpec{
-		name: name, dir: dir, gitBinds: true, network: "none", labels: []string{labelSmoke},
+		kind: kindSmoke, name: name, dir: dir, gitBinds: true, labels: []string{labelSmoke},
 		cmd: []string{"/bin/sh", "-c", smokeScript},
 	})...)
 	cmd.Env = rt.podmanEnv()

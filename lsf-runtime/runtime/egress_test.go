@@ -42,6 +42,14 @@ func TestEgressAllowed(t *testing.T) {
 		{"192.0.2.2:443", "", false},          // an unlisted IP
 		{"[2001:db8::2]:443", "", false},      // an unlisted IPv6
 		{"[::ffff:192.0.2.1]:443", "", false}, // another spelling of a listed IP
+		{"API.GitHub.COM:443", "api.github.com", true},
+		{"*.github.com:443", "", false}, // a wildcard as a target
+		{"[a.registry.npmjs.org]:443", "", false},
+		{"[registry.npmjs.org]:443", "", false}, // brackets around a name
+		{"registry.npmjs.org..:443", "", false},
+		{"[fe80::1%25eth0]:443", "", false},
+		{"[2001:db8::1%eth0]:443", "", false}, // a zone on a listed IP
+		{"x..y.github.com:443", "", false},
 	} {
 		host, ok := e.allowed(tc.target)
 		if ok != tc.ok || host != tc.host {
@@ -155,6 +163,23 @@ func TestEgressProxy(t *testing.T) {
 				c.Close()
 			}
 		}
+		// The Host header does not choose the target: the request-target does.
+		for _, req := range []string{
+			"CONNECT example.com:443 HTTP/1.1\r\nHost: registry.npmjs.org:443\r\n\r\n",
+			"CONNECT http://registry.npmjs.org:443/ HTTP/1.1\r\nHost: registry.npmjs.org:443\r\n\r\n",
+		} {
+			c, err := net.DialTimeout("tcp", addr, 5*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.SetDeadline(time.Now().Add(10 * time.Second))
+			io.WriteString(c, req)
+			status, _ := bufio.NewReader(c).ReadString('\n')
+			if strings.Contains(status, " 200 ") {
+				t.Errorf("%q: %q", req, status)
+			}
+			c.Close()
+		}
 		if status, _, c := egressRequest(t, addr, "CONNECT down.example:443 HTTP/1.1", ""); !strings.HasPrefix(status, "HTTP/1.1 502") {
 			t.Errorf("dial failure: %q", status)
 		} else {
@@ -169,7 +194,7 @@ func TestEgressProxy(t *testing.T) {
 	if countEvents(evs, "egress") != 1 || countEvents(evs, "egress-allowed") != 1 || countEvents(evs, "egress-refused") != 1 {
 		t.Errorf("egress events: %d start, %d allowed, %d refused", countEvents(evs, "egress"), countEvents(evs, "egress-allowed"), countEvents(evs, "egress-refused"))
 	}
-	if log := readFile(t, cfg, "log.txt"); !strings.Contains(log, "egress: 3 tunnel(s) allowed, 5 request(s) refused this launch") {
+	if log := readFile(t, cfg, "log.txt"); !strings.Contains(log, "egress: 3 request(s) allowed, 7 refused this launch") {
 		t.Errorf("no counts in the log:\n%s", log)
 	}
 }
@@ -221,6 +246,66 @@ func TestEgressCloseEndsTunnels(t *testing.T) {
 		if _, err := net.DialTimeout("tcp", e.ln.Addr().String(), time.Second); err == nil {
 			t.Error("still accepting after close")
 		}
+		return nil, nil
+	})
+}
+
+// close racing handlers and tunnels: CONNECTs opened while close runs, and
+// one held mid-dial, all end, and close returns.
+func TestEgressCloseRacesHandlers(t *testing.T) {
+	cfg, _ := testConfig(t)
+	echo := echoServer(t)
+	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		rt.PinHosts([]string{"a.example", "slow.example"})
+		e := rt.egress.Load()
+		dialling := make(chan struct{})
+		e.dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if strings.HasPrefix(addr, "slow.") {
+				close(dialling)
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, echo)
+		}
+		addr := e.ln.Addr().String()
+		slow, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer slow.Close()
+		io.WriteString(slow, "CONNECT slow.example:443 HTTP/1.1\r\nHost: slow.example:443\r\n\r\n")
+		<-dialling
+		var wg sync.WaitGroup
+		var conns sync.Map
+		for range 20 {
+			wg.Go(func() {
+				c, err := net.DialTimeout("tcp", addr, time.Second)
+				if err != nil {
+					return
+				}
+				conns.Store(c, true)
+				c.SetDeadline(time.Now().Add(10 * time.Second))
+				io.WriteString(c, "CONNECT a.example:443 HTTP/1.1\r\nHost: a.example:443\r\n\r\nping")
+				io.Copy(io.Discard, c) // until the proxy closes it
+			})
+		}
+		time.Sleep(20 * time.Millisecond)
+		done := make(chan struct{})
+		go func() { e.close(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("close did not return")
+		}
+		rt.egress.Store(nil)
+		waited := make(chan struct{})
+		go func() { wg.Wait(); close(waited) }()
+		select {
+		case <-waited:
+		case <-time.After(10 * time.Second):
+			t.Error("a client connection outlived close")
+		}
+		conns.Range(func(k, _ any) bool { k.(net.Conn).Close(); return true })
 		return nil, nil
 	})
 }
