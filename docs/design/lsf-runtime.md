@@ -69,7 +69,7 @@ Facts from the Claude Code plugin docs (code.claude.com/docs/en/plugins, fetched
 **Routes for a compiled runtime:**
 
 - **D1: download on first use.**
-  - A shell script at `${CLAUDE_PLUGIN_ROOT}/lsf-runtime/` downloads the platform's binary from a GitHub release into a cache. It checks a pinned sha256 (as built: the decision below).
+  - A shell script at `${CLAUDE_PLUGIN_ROOT}/lsf-runtime/` downloads the platform's binary from a GitHub release into a cache. It checks a pinned sha256.
   - CI builds the binaries.
   - The user needs `sh`, `curl`, and `sha256sum` or `shasum`, and must be online at first use.
   - Every release edits the pinned hashes. A plugin version whose release is missing cannot run.
@@ -77,11 +77,11 @@ Facts from the Claude Code plugin docs (code.claude.com/docs/en/plugins, fetched
 - **D3: commit the binaries.** History grows by the full binary set every release; rejected.
 - **D4: ship a CI-built archive.** The marketplace entry switches to an `archive` source built by CI with every target inside. This changes how the whole plugin ships.
 
-**Decision: D1** (requester verdict, 2026-10-11; unit `runtime-distribution`). D4 is rejected: it puts the whole plugin behind a release archive, so a broken release breaks every skill, not only LSF, and whether a zip keeps the exec bit is undocumented.
+**Decision: D1** (requester verdict, 2026-10-11; unit `runtime-distribution`). D4 is rejected: it puts the whole plugin behind a release archive, so a broken release breaks every skill; under D1 it breaks LSF and `phronithm:breakdown`'s quality check, which falls back to a check by hand on exit 125. Whether a zip keeps the exec bit is undocumented; the git route keeps it (the copied cache's `tools/*.py` are 755, observed 2026-10-11).
 
 - **Launcher.** `${CLAUDE_PLUGIN_ROOT}/lsf-runtime/lsf-runtime <command> [args]` (POSIX `sh`) execs a binary with the arguments unchanged. First match wins:
   1. `LSF_RUNTIME_BIN`, which must be an executable file.
-  2. A working tree: a `.git` (file or directory) at the plugin root and `go` on `PATH`. It runs `go -C <root>/lsf-runtime build -buildvcs=false ./cli` on every invocation into `lsf-runtime/.build/` (gitignored). The result replaces `.build/lsf-runtime` only when it differs (`cmp`), by an atomic `mv`, so a live driver's binary is left alone when the tree has not changed. A failed build exits 125 with the compiler's output and never falls through to a release. A working tree without `go` runs the release and says so on stderr. Copied plugin caches have no `.git`; a directory marketplace loaded in place does.
+  2. A working tree: a `.git` (file or directory) at the plugin root and `go` on `PATH`. It runs `go -C <root>/lsf-runtime build -buildvcs=false ./cli` on every invocation into `lsf-runtime/.build/` (gitignored). The result replaces `.build/lsf-runtime` only when it differs (`cmp`), by an atomic `mv`, so a live driver's binary is left alone when the tree has not changed. A failed build exits 125 with the compiler's output and never falls through to a release. A working tree without `go` runs the release and says so on stderr. A copied plugin cache had no `.git` (`~/.claude/plugins/cache/phronithm/phronithm/0.3.1/`, observed 2026-10-11), so it takes the release; a directory marketplace loaded in place, or any install that keeps `.git`, builds the tree, and a `go` older than `go.mod`'s toolchain then fetches that toolchain (`GOTOOLCHAIN=auto`).
   3. The release pinned in `lsf-runtime/dist/release`, for `uname -m` mapped to `amd64` or `arm64` (anything else is refused). It is downloaded once with `curl -q --proto =https --tlsv1.2` (no `.curlrc` applies; connect, total-time and size limits) from `https://github.com/duaneg/phronithm/releases/download/<tag>/lsf-runtime-linux-<arch>` (`LSF_RUNTIME_RELEASE_URL` overrides the base, and then `file:` is allowed too, for tests) into `${LSF_RUNTIME_CACHE:-${XDG_CACHE_HOME:-~/.cache}/lsf-runtime}/release/<tag>/`, created 0700: the file is trusted between its check and its exec, so the cache must be private. Its sha256 is checked against the pin on every run. A download that mismatches is removed and refused. A cached file that mismatches is refused with "remove <path> and rerun", never re-downloaded silently.
   - The cache is not `${CLAUDE_PLUGIN_DATA}`: that variable is substituted in skill bodies but is not in the Bash tool's environment (plugins-reference, fetched 2026-10-11), so the launcher cannot read it.
   - The launcher's own failures exit **125** with `lsf-runtime launcher:` on stderr, distinct from every CLI code (0–4) and from `validate`'s 0/1/2.
@@ -92,9 +92,10 @@ Facts from the Claude Code plugin docs (code.claude.com/docs/en/plugins, fetched
   - `build`: `CGO_ENABLED=0` linux amd64 and arm64 binaries, checked static with `file`, with `SHA256SUMS`, uploaded as a workflow artefact.
   - `release`, on a pushed `lsf-runtime-v*` tag after `test` and `build`: `gh release create --verify-tag --latest=false`, so the plugin's own releases stay the latest, marked a pre-release when the version has a `-` suffix. Nothing checks that the tag is on `main`: whoever tags is trusted to tag a reviewed commit, and `pin-drift` then holds `main`'s pin to it.
   - `pin-drift`: `dist/check-pin.sh`, failing, on pushes to `main`, pull requests to `main` and `v*` tags. It does not run on other branches, where the pin lags by design.
+- **First release.** `dist/release` ships unpinned until the first release, so the launcher works only from a working tree, and `pin-drift` fails. The pin is committed before the branch merges to `main` or a plugin version is tagged: a plugin user without a working tree has no other route.
 - **Binary identity.** Release builds use `CGO_ENABLED=0 -trimpath -ldflags "-s -w -X main.version=<tag> -X main.commit=<sha>"`; `lsf-runtime version` prints `<version> <commit>`, `dev unknown` for a working-tree build.
 
-- **Prerequisites** for the CLI route: Linux on amd64 or arm64 (Windows outside WSL and macOS are out of scope); `sh`, `curl` and `sha256sum` or `shasum` for the first download; rootless podman with `pasta` networking (6.1.3 tested); git 2.38 or later; `claude` at the version the host config pins, if it pins one. `phronithm:breakdown`'s quality check also runs through the launcher, so a user without a working tree needs network and `curl` at the first check.
+- **Prerequisites** for the CLI route: Linux on amd64 or arm64 (Windows outside WSL and macOS are out of scope; the launcher refuses another `uname -s` or `-m` with exit 125); `sh` and the POSIX utilities it uses (`awk`, `mktemp`, `cmp`, `chmod`, `mv`), and `curl` and `sha256sum` or `shasum` for the first download; rootless podman with `pasta` networking (6.1.3 tested); git 2.38 or later; `claude` at the version the host config pins, if it pins one. `phronithm:breakdown`'s quality check also runs through the launcher, so a user without a working tree needs network and `curl` at the first check.
 - **Host config and image.** `lsf-runtime config init [-config FILE] [-plugin-dir DIR]` writes a starter host config (CLI → Configuration) with the image and, when `~/.claude/.credentials.json` is absent, the proxy's credentials file marked `REQUIRED:`. The image is built from the reference `lsf-runtime/container/Containerfile`, extended with the project's toolchain (a `FROM` naming the reference image's digest, then the packages the builds and tests need), and recorded by digest:
 
   ```
@@ -160,7 +161,7 @@ Go was recommended, and chosen, on the probed cross-builds and iteration speed, 
 
 Go's type weaknesses (no sum types, lenient decoding by default) fall on code that classifies by list membership. Strict decoding comes from the schema validator plus `DisallowUnknownFields`.
 
-The decision carries the cost of the distribution unit (`runtime-distribution`): CI for four targets, a release, and the D1-or-D4 choice.
+The decision carries the cost of the distribution unit (`runtime-distribution`): CI, a release, and the route (D1, below).
 
 **Alternatives put to the verdict:**
 
@@ -190,7 +191,7 @@ The decision carries the cost of the distribution unit (`runtime-distribution`):
 
 ### Plan consequences
 
-- **Distribution.** Decided by `runtime-distribution`: D1 (Distribution). `claude --plugin-dir` and the shakedown fixture run the working tree's build, which the launcher prefers to a release; `LSF_RUNTIME_BIN` names any other binary.
+- **Distribution.** Decided by `runtime-distribution`: D1 (Distribution). `claude --plugin-dir` runs the working tree's build, which the launcher prefers to a release, and so does a shakedown through `phronithm:lsf-drive`; `tools/fixturerun` runs the tree by `go run`. `LSF_RUNTIME_BIN` names any other binary.
 - **Shared root files.**
   - The skeleton (`go.mod`, the four package stubs and `testdata/claude`) is committed at `c3330d2`, so `runtime-core` and `orchestrator-port-plan` run side by side.
   - `testdata/` is in `runtime-core`'s Scope, and `tools/` in the two port units', which are serial.
@@ -703,7 +704,7 @@ A load error reaches the requester as the runtime gives it. One naming `allow`, 
 | `stop [addr]` | SIGTERM to the running driver (Supervision → Signals). The first lets in-flight calls finish, which can take as long as the longest call; a second `stop` cancels them. |
 | `resume [addr] [-config FILE] [-plugin-dir DIR]` | Replays the last launch (below). |
 | `validate [-decisions PATH] PLAN` | The plan pre-flight check, as `validate/cmd/lsf-validate` (`validate.Command`): problems on stdout, exit 0 none, 1 problems, 2 a usage or I/O error. |
-| `config init [-config FILE] [-plugin-dir DIR]` | Writes the starter host config to `-config` or the default path, parent made 0700, file 0600 with `O_EXCL`: an existing file is never overwritten (exit 1). Prints the path. `image` is marked `REQUIRED:`, naming the Containerfile under `-plugin-dir`; `proxy.credentialsFile` is `~/.claude/.credentials.json` when it exists, else marked; `env` is empty; there are no `caps`. |
+| `config init [-config FILE] [-plugin-dir DIR]` | Writes the starter host config to `-config` or the default path, parent made 0700, file 0600 with `O_EXCL`: an existing file is never overwritten (exit 1). Prints the path. `image` is marked `REQUIRED:`, naming the Containerfile under `-plugin-dir`; `proxy.credentialsFile` is `~/.claude/.credentials.json` when it exists, else marked; `proxy.listen` is `127.0.0.1:0`; `env` is empty; there are no `caps`. |
 | `version` | Prints `<version> <commit>`: the release build's `-X` values, `dev unknown` otherwise. |
 | `drive -state DIR -launch FILE` | Hidden: the driver. |
 

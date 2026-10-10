@@ -58,6 +58,7 @@ if [ -e "$root/.git" ]; then
 	untree=1
 fi
 
+[ "$(uname -s)" = Linux ] || die "unsupported system $(uname -s): Linux only; set LSF_RUNTIME_BIN or run from a working tree with Go"
 case $(uname -m) in
 x86_64 | amd64) arch=amd64 ;;
 aarch64 | arm64) arch=arm64 ;;

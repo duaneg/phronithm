@@ -249,10 +249,24 @@ func TestUnknownMachine(t *testing.T) {
 	r := newRoot(t)
 	env := r.release("v1", nil)
 	shim := t.TempDir()
-	write(t, filepath.Join(shim, "uname"), []byte("#!/bin/sh\necho mips\n"), 0o755)
+	write(t, filepath.Join(shim, "uname"), []byte("#!/bin/sh\ncase $1 in -s) echo Linux ;; *) echo mips ;; esac\n"), 0o755)
 	res := r.run(append(env, "PATH="+shim+":"+os.Getenv("PATH")), "version")
 	eq(t, res.code, 125)
 	contains(t, res.stderr, "unsupported machine mips")
+}
+
+// A Linux binary is never run on another system.
+func TestUnknownSystem(t *testing.T) {
+	r := newRoot(t)
+	env := r.release("v1", nil)
+	shim := t.TempDir()
+	write(t, filepath.Join(shim, "uname"), []byte("#!/bin/sh\ncase $1 in -s) echo Darwin ;; *) echo arm64 ;; esac\n"), 0o755)
+	res := r.run(append(env, "PATH="+shim+":"+os.Getenv("PATH")), "version")
+	eq(t, res.code, 125)
+	contains(t, res.stderr, "unsupported system Darwin: Linux only")
+	if _, err := os.Stat(r.cached("v1")); err == nil {
+		t.Error("the release was downloaded")
+	}
 }
 
 // A working tree without go on PATH runs the release, saying so.
