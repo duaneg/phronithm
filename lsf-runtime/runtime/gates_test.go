@@ -3,9 +3,11 @@ package lsfrt
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -152,10 +154,10 @@ func TestRunGatesCheckoutFailure(t *testing.T) {
 	}
 }
 
-// A stop mid-gate kills the gate's group, a TERM-ignoring grandchild
-// included, and is returned with no runs.
+// A stop mid-gate removes the gate's container, which ends a
+// TERM-ignoring grandchild, and is returned with no runs.
 func TestRunGatesStopKillsGroup(t *testing.T) {
-	cfg, _ := testConfig(t)
+	cfg, stub := testConfig(t)
 	sha := gateRepo(t, &cfg)
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	cmd := "trap '' TERM; (trap '' TERM; sleep 30) & echo $! > " + pidFile + "; sleep 30"
@@ -180,90 +182,195 @@ func TestRunGatesStopKillsGroup(t *testing.T) {
 	b, _ := os.ReadFile(pidFile)
 	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
 	waitFor(t, 3*time.Second, "grandchild to die", func() bool { return !alive(pid) })
+	if !strings.Contains(podmanCalls(stub), "rm -f -t 0 --ignore "+flagValue(gateRuns(t, stub)[0], "--name")) {
+		t.Error("stopped gate's container not removed")
+	}
 	if _, err := os.Stat(filepath.Join(cfg.StateDir, "gates", journalKey("gates:x"))); !os.IsNotExist(err) {
 		t.Errorf("checkout left behind after a stop: %v", err)
 	}
 }
 
-// A gate's shell keeps its marker in its arguments, however simple the
-// command, so the next launch reaps a gate a SIGKILLed launch left running.
-func TestOrphanGateReaped(t *testing.T) {
-	cfg, _ := testConfig(t)
-	os.MkdirAll(cfg.StateDir, 0o755)
-	marker := gateMarkerPrefix + "test-1"
-	cmd := exec.Command("sh", "-c", gateScript, marker)
-	cmd.Env = append(os.Environ(), "LSF_GATE_COMMAND=sleep 30")
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer cmd.Process.Kill()
-	go cmd.Wait()
-	waitFor(t, 2*time.Second, "sleep under the marked shell", func() bool {
-		out, _ := exec.Command("pgrep", "-g", strconv.Itoa(cmd.Process.Pid), "sleep").Output()
-		return len(out) > 0
-	})
-	procs, err := processes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !matchesChild(procs[cmd.Process.Pid], marker) {
-		t.Fatalf("marker not in the shell's arguments: %q", procs[cmd.Process.Pid])
-	}
-	b, _ := json.Marshal(map[string]int{marker: cmd.Process.Pid})
-	os.WriteFile(filepath.Join(cfg.StateDir, "children.json"), b, 0o644)
-	launch(t, cfg, func(context.Context, *Runtime) (json.RawMessage, error) { return nil, nil })
-	waitFor(t, 3*time.Second, "orphaned gate to die", func() bool { return !alive(cmd.Process.Pid) })
-	if n := countEvents(telemetry(t, cfg), "orphan-terminated"); n != 1 {
-		t.Errorf("%d orphan-terminated events", n)
-	}
-	if matchesChild("sh -c x lsf-gate:test-10", marker) || matchesChild("claude --session-id "+marker, "abc") {
-		t.Error("marker matching is too loose")
+// gateRuns are the stub podman's recorded gate runs, in order.
+func gateRuns(t *testing.T, stub string) [][]string {
+	t.Helper()
+	var runs [][]string
+	for n := 1; ; n++ {
+		b, err := os.ReadFile(filepath.Join(stub, "podman", "run."+strconv.Itoa(n)))
+		if err != nil {
+			return runs
+		}
+		if a := strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00"); strings.Contains(flagValue(a, "--name"), "-gate-") {
+			runs = append(runs, a)
+		}
 	}
 }
 
-// A real gate is registered for reaping under a marker its live shell's
-// arguments match; a TERM-ignoring command is still ended at its timeout,
-// and a background process a green command left is killed.
-func TestRunGatesRegistersAndCleansUp(t *testing.T) {
-	cfg, _ := testConfig(t)
+// podmanCalls are the stub podman's recorded non-run invocations.
+func podmanCalls(stub string) string {
+	b, _ := os.ReadFile(filepath.Join(stub, "podman", "calls"))
+	return string(b)
+}
+
+// A gate that times out has its container removed; one that leaves a
+// background process behind has it ended.
+func TestRunGatesTimeoutRemovesContainer(t *testing.T) {
+	cfg, stub := testConfig(t)
 	cfg.KillGrace = Duration(200 * time.Millisecond)
 	sha := gateRepo(t, &cfg)
-	dir := t.TempDir()
-	bg, ready := filepath.Join(dir, "bg"), filepath.Join(dir, "ready")
-	var matched bool
-	var runs []GateRun
-	checked := make(chan struct{})
-	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
-		go func() {
-			defer close(checked)
-			waitFor(t, 5*time.Second, "gate to start", func() bool { _, err := os.Stat(ready); return err == nil })
-			var kids map[string]int
-			json.Unmarshal([]byte(readFile(t, cfg, "children.json")), &kids)
-			procs, _ := processes()
-			for marker, pid := range kids {
-				matched = matched || (strings.HasPrefix(marker, gateMarkerPrefix) && matchesChild(procs[pid], marker))
-			}
-		}()
-		var err error
-		runs, err = rt.RunGates(ctx, "gates:x", sha, "", []GateSpec{
-			{Name: "stubborn", Command: "touch " + ready + "; trap '' TERM; sleep 30", Timeout: 700 * time.Millisecond},
-			{Name: "leaves", Command: "sleep 30 & echo $! > " + bg},
-		})
-		return nil, err
+	bg := filepath.Join(t.TempDir(), "bg")
+	runs, err, _ := runGates(t, cfg, "gates:x", sha, "", []GateSpec{
+		{Name: "stubborn", Command: "trap '' TERM; sleep 30", Timeout: 700 * time.Millisecond},
+		{Name: "leaves", Command: "sleep 30 & echo $! > " + bg},
 	})
-	<-checked
-	if !matched {
-		t.Error("no live gate shell matched its children.json marker")
+	if err != nil || runs[0].Status != GateNotRun || runs[0].Secs > 5 || runs[1].Status != GateGreen {
+		t.Fatalf("%v %+v", err, runs)
 	}
-	if runs[0].Status != GateNotRun || runs[0].Secs > 5 || runs[1].Status != GateGreen {
-		t.Fatalf("%+v", runs)
+	name := flagValue(gateRuns(t, stub)[0], "--name")
+	if !strings.Contains(podmanCalls(stub), "rm -f -t 0 --ignore "+name+"\n") {
+		t.Errorf("timed-out gate %s not removed:\n%s", name, podmanCalls(stub))
 	}
 	b, _ := os.ReadFile(bg)
 	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
 	waitFor(t, 2*time.Second, "background process to die", func() bool { return !alive(pid) })
-	if strings.Contains(readFile(t, cfg, "children.json"), gateMarkerPrefix) {
-		t.Error("finished gates left in children.json")
+}
+
+// setup and the gates run in named, labelled containers: setup spliced to
+// the egress proxy with hosts pinned and with no network otherwise, gate
+// commands with no network; both bind the checkout and the shared home at
+// their host paths, and the home is removed with the checkout.
+func TestRunGatesContainers(t *testing.T) {
+	for _, hosts := range [][]string{nil, {"registry.npmjs.org"}} {
+		cfg, stub := testConfig(t)
+		sha := gateRepo(t, &cfg)
+		var port string
+		var runs []GateRun
+		var err error
+		launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+			rt.PinHosts(hosts)
+			port = rt.egressPort()
+			runs, err = rt.RunGates(ctx, "gates:x", sha, "echo dep > \"$HOME/x\"", []GateSpec{{Name: "a", Command: "test \"$(cat \"$HOME/x\")\" = dep && test ! -t 0"}})
+			return nil, err
+		})
+		if err != nil || runs[0].Status != GateGreen {
+			t.Fatalf("hosts %v: %v %+v", hosts, err, runs)
+		}
+		dir := filepath.Join(cfg.StateDir, "gates", journalKey("gates:x"))
+		home := dir + ".home"
+		h, _ := stateHashOf(cfg.StateDir)
+		argvs := gateRuns(t, stub)
+		if len(argvs) != 2 {
+			t.Fatalf("%d gate runs", len(argvs))
+		}
+		for i, a := range argvs {
+			net := flagValue(a, "--network")
+			switch {
+			case i == 0 && hosts != nil:
+				if net != "pasta:--splice-only,-T,"+port || !slices.Contains(a, "HTTPS_PROXY=http://127.0.0.1:"+port) {
+					t.Errorf("setup with hosts: %q", a)
+				}
+			case net != "none" || slices.ContainsFunc(a, func(s string) bool { return strings.Contains(s, "_PROXY=http") || strings.Contains(s, "_proxy=http") }):
+				t.Errorf("run %d (hosts %v): network %q: %q", i, hosts, net, a)
+			}
+			if !slices.Contains(a, dir+":"+dir+":rw") || !slices.Contains(a, home+":"+home+":rw") || flagValue(a, "-w") != dir ||
+				!slices.Contains(a, "HOME="+home) || !slices.Contains(a, "lsf.state="+h) || slices.Contains(a, "-i") {
+				t.Errorf("run %d: %q", i, a)
+			}
+		}
+		if exists(dir) || exists(home) {
+			t.Errorf("checkout or home left")
+		}
+	}
+}
+
+// A tree written read-only, as Go writes its module cache, is removed with
+// the home; so is a home a gate made unreadable.
+func TestRunGatesRemovesReadOnlyTrees(t *testing.T) {
+	cfg, _ := testConfig(t)
+	sha := gateRepo(t, &cfg)
+	runs, err, _ := runGates(t, cfg, "gates:x", sha,
+		"mkdir -p \"$HOME/mod/a/b\" junk/c && touch \"$HOME/mod/a/b/f\" junk/c/f && chmod -R a-w \"$HOME/mod\" junk && chmod 0 \"$HOME/mod/a\"",
+		[]GateSpec{{Name: "a", Command: "true"}})
+	if err != nil || runs[0].Status != GateGreen {
+		t.Fatalf("%v %+v", err, runs)
+	}
+	dir := filepath.Join(cfg.StateDir, "gates", journalKey("gates:x"))
+	if exists(dir) || exists(dir+".home") {
+		t.Error("read-only tree left")
+	}
+}
+
+// A container that fails before its command starts (no started marker)
+// stops the run with runtime-error and returns no verdict; a command that
+// itself exits 125 is red.
+func TestRunGatesLaunchFailure(t *testing.T) {
+	cfg, _ := testConfig(t)
+	sha := gateRepo(t, &cfg)
+	if runs, err, _ := runGates(t, cfg, "gates:x", sha, "", []GateSpec{{Name: "a", Command: "exit 125"}}); err != nil || runs[0].Status != GateRed || runs[0].ExitCode != 125 {
+		t.Fatalf("command exit 125: %v %+v", err, runs)
+	}
+	t.Setenv("STUB_PODMAN_RUN_EXIT", "125")
+	runs, err, s := runGates(t, cfg, "gates:y", sha, "", []GateSpec{{Name: "a", Command: "true"}})
+	if r, ok := IsStop(err); !ok || r != StopRuntimeError || runs != nil || s.StopReason != StopRuntimeError || !strings.Contains(s.Detail, "before its command started") {
+		t.Fatalf("podman exit 125: %v %+v %+v", err, runs, s)
+	}
+	os.Unsetenv("STUB_PODMAN_RUN_EXIT")
+	// An unwritable home: the marker cannot be written.
+	runs, err, s = runGates(t, cfg, "gates:z", sha, "chmod 0500 \"$HOME\"", []GateSpec{{Name: "a", Command: "true"}})
+	if r, ok := IsStop(err); !ok || r != StopRuntimeError || runs != nil || !strings.Contains(s.Detail, "before its command started") {
+		t.Fatalf("unwritable home: %v %+v %+v", err, runs, s)
+	}
+	if dir := filepath.Join(cfg.StateDir, "gates", journalKey("gates:z")); exists(dir + ".home") {
+		t.Error("unwritable home left")
+	}
+}
+
+// A gate container whose removal fails stops the run with runtime-error,
+// and its checkout and home are kept while it may run.
+func TestRunGatesContainerLeft(t *testing.T) {
+	cfg, stub := testConfig(t)
+	cfg.KillGrace = Duration(200 * time.Millisecond)
+	sha := gateRepo(t, &cfg)
+	t.Setenv("STUB_PODMAN_DETACH", "1")
+	t.Setenv("STUB_PODMAN_RM_EXIT", "1")
+	t.Cleanup(func() { killStubs(os.Getenv("STUB_STATE")) })
+	runs, err, s := runGates(t, cfg, "gates:x", sha, "", []GateSpec{{Name: "a", Command: "sleep 30", Timeout: 300 * time.Millisecond}})
+	var left *containerLeftError
+	if r, ok := IsStop(err); !ok || r != StopRuntimeError || !errors.As(err, &left) || runs != nil || s.StopReason != StopRuntimeError {
+		t.Fatalf("%v %+v %+v", err, runs, s)
+	}
+	dir := filepath.Join(cfg.StateDir, "gates", journalKey("gates:x"))
+	if !exists(dir) || !exists(dir+".home") {
+		t.Error("checkout removed while its container may run")
+	}
+	if !strings.Contains(readFile(t, cfg, "log.txt"), left.name) {
+		t.Error("the log does not name the container")
+	}
+	_ = stub
+}
+
+// A gate container a SIGKILLed launch left running is removed by the next
+// launch's reaping by label, and the checkout and home it left are wiped.
+func TestOrphanGateContainerReaped(t *testing.T) {
+	cfg, stub := testConfig(t)
+	sha := gateRepo(t, &cfg)
+	t.Setenv("LSFRT_GATE_COMMIT", sha)
+	cmd := startHelper(t, cfg, "gate-hang")
+	waitFor(t, 10*time.Second, "the gate container", func() bool { return len(liveCalls(t, stub)) == 1 })
+	name := liveCalls(t, stub)[0]
+	b, _ := os.ReadFile(filepath.Join(stub, "podman", "name."+name))
+	pid, _ := strconv.Atoi(strings.SplitN(string(b), "\n", 2)[0])
+	cmd.Process.Signal(syscall.SIGKILL)
+	cmd.Wait()
+	if !strings.Contains(name, "-gate-") || !alive(pid) {
+		t.Fatalf("%s (pid %d) not a live gate container", name, pid)
+	}
+	launch(t, cfg, func(context.Context, *Runtime) (json.RawMessage, error) { return nil, nil })
+	waitFor(t, 3*time.Second, "the orphaned gate to die", func() bool { return !alive(pid) })
+	if countEvents(telemetry(t, cfg), "orphan-terminated") != 1 {
+		t.Error("no orphan-terminated event")
+	}
+	if entries, _ := os.ReadDir(filepath.Join(cfg.StateDir, "gates")); len(entries) != 1 || entries[0].Name() != "logs" {
+		t.Errorf("leftover gate trees: %v", entries)
 	}
 }
 
@@ -387,5 +494,70 @@ func TestRunGatesCommitForms(t *testing.T) {
 	}
 	if runs, err, _ := runGates(t, cfg, "gates:x", sha, "", []GateSpec{{Name: "a", Command: "test \"$(git rev-parse HEAD)\" = " + sha}}); err != nil || runs[0].Status != GateGreen {
 		t.Fatalf("sha256: %v %+v", err, runs)
+	}
+}
+
+// hostileGate commits a gitlink to a nested repo and a .gitattributes,
+// then configures filters (the checkout's and the nested repo's) and
+// core.hooksPath that touch canary, and dirties the tree, so that host git
+// run in the tree afterwards would touch canary.
+func hostileGate(canary string) string {
+	return `set -e
+g() { git -c user.name=t -c user.email=t@example.invalid -c core.hooksPath=/dev/null "$@"; }
+git init -q sub
+echo d > sub/f
+g -C sub add -A
+g -C sub commit -q -m sub
+echo '* filter=x' > .gitattributes
+g add .gitattributes sub
+g commit -q -m hostile
+git config filter.x.clean 'touch ` + canary + `; cat'
+git config filter.x.smudge 'touch ` + canary + `; cat'
+printf '[filter "x"]\n\tclean = touch %s; cat\n' '` + canary + `' >> sub/.git/config
+echo '* filter=x' > sub/.gitattributes
+mkdir hooks
+for h in post-checkout pre-commit post-index-change reference-transaction; do
+  printf '#!/bin/sh\ntouch %s\n' '` + canary + `' > hooks/$h
+  chmod +x hooks/$h
+done
+git config core.hooksPath "$PWD/hooks"
+echo more >> f.txt
+echo more >> sub/f
+test ! -e '` + canary + `'
+`
+}
+
+// No host git runs in a gate checkout once a container has run there: a
+// gate that writes a filter and core.hooksPath into the checkout's
+// .git/config and commits a gitlink finds no canary through the
+// checkout's removal. The control shows host git in a tree prepared alike
+// does touch it.
+func TestRunGatesHostileGit(t *testing.T) {
+	cfg, _ := testConfig(t)
+	sha := gateRepo(t, &cfg)
+	tmp := t.TempDir()
+
+	ctl, ctlCanary := filepath.Join(tmp, "ctl"), filepath.Join(tmp, "ctl-canary")
+	git(t, tmp, "clone", "-q", cfg.Repo, ctl)
+	cmd := exec.Command("sh", "-c", hostileGate(ctlCanary))
+	cmd.Dir = ctl
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("control setup: %v %s", err, out)
+	}
+	git(t, ctl, "status", "--porcelain")
+	if !exists(ctlCanary) {
+		t.Fatal("control: host git status did not touch the canary; the test cannot fail")
+	}
+
+	canary := filepath.Join(tmp, "canary")
+	runs, err, _ := runGates(t, cfg, "gates:x", sha, hostileGate(canary), []GateSpec{{Name: "after", Command: "test ! -e " + canary}})
+	if err != nil || runs[0].Status != GateGreen {
+		t.Fatalf("%v %+v", err, runs)
+	}
+	if exists(canary) {
+		t.Error("host git ran in the gate checkout")
+	}
+	if dir := filepath.Join(cfg.StateDir, "gates", journalKey("gates:x")); exists(dir) {
+		t.Error("checkout left")
 	}
 }

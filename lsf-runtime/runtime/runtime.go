@@ -29,9 +29,6 @@ type Runtime struct {
 	telMu   sync.Mutex
 	telFile *os.File
 
-	childMu  sync.Mutex
-	children map[string]int // gate marker → pid (0 before Start)
-
 	sem chan struct{} // concurrency slots
 
 	mu         sync.Mutex
@@ -45,7 +42,7 @@ type Runtime struct {
 
 	wtSem   chan struct{} // one slot: serialises git worktree and clone operations
 	gateSem chan struct{} // GateConcurrency slots: bounds concurrent RunGates
-	gateSeq atomic.Int64  // numbers gate processes for their orphan markers
+	gateSeq atomic.Int64  // numbers gate containers
 
 	seenMu sync.Mutex
 	seen   map[string]string // journal key → input hash, this launch
@@ -119,7 +116,6 @@ func Run(ctx context.Context, cfg Config, body func(ctx context.Context, rt *Run
 		cfg:       cfg,
 		stateHash: stateHash,
 		started:   time.Now(),
-		children:  map[string]int{},
 		seen:      map[string]string{},
 		sem:       make(chan struct{}, cfg.Concurrency),
 		stopCh:    make(chan struct{}),

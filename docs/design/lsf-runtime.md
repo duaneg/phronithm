@@ -316,9 +316,9 @@ podman run --rm -i --init --pull=never --log-driver=none --name <name> --label l
 - **A cancel** sends SIGTERM to the `podman run` process group, as the runtime cancels any call. `--init` passes the signal to the container's processes.
 - **After `killGrace`,** the client gets SIGKILL and the runtime runs `podman rm -f -t 0 --ignore <name>`: SIGKILL to the client alone would leave the container running, since its processes run under `conmon`, not the client (F3). `-t 0` because SIGTERM and the grace have already passed. The removal runs whatever the call's context, under its own 60 s bound, and also after any non-zero exit, since a client killed mid-cleanup can leave its container. These are `s2-sandbox` additions.
 - **A removal that fails** while `podman container exists` still finds the container (`--rm`'s own removal may have won the race), or that hits the 60 s bound, stops the run with `runtime-error` before anything reads the clone: no fetch-back, no uncommitted check, no discard and no journal record. The next launch's reaping removes the container.
-- **Gate containers** (`setup` and each gate command) are named and labelled the same way, and a timeout or a stop removes them the same way.
+- **Gate containers** (`setup` and each gate command) are named `lsf-<hash8>-gate-<launch>-<n>` and labelled the same way, and a timeout or a stop removes them the same way (Declared gates).
 - **Nothing reads a clone or checkout until its container is gone.** Fetch-back, the uncommitted check and removal wait for `podman rm -f` to return.
-- **Orphan reaping** at launch removes every container carrying this state dir's label (`podman rm -f -t 0`). A failed `podman ps`, or a container not removed, refuses the launch: a live container may still write a clone the launch would read. `--session-id` matching is gone; the `lsf-gate:` marker stays until gate commands run in containers (`s2-egress-gates`).
+- **Orphan reaping** at launch removes every container carrying this state dir's label (`podman rm -f -t 0`). A failed `podman ps`, or a container not removed, refuses the launch: a live container may still write a clone the launch would read. Gate containers are reaped the same way, by label; `--session-id` matching and the `lsf-gate:` marker are gone.
 
 ### Credential proxy
 
@@ -365,31 +365,38 @@ podman run --rm -i --init --pull=never --log-driver=none --name <name> --label l
 - **Each command runs in its own container** from the same image:
 
   ```
-  podman run --rm --init --name <name> --label lsf.state=<stateDir hash>
+  podman run --rm --init --pull=never --log-driver=none --name lsf-<hash8>-gate-<launch>-<n> --label lsf.state=<stateDir hash>
     --userns=keep-id --cap-drop=all --security-opt no-new-privileges
     --read-only --tmpfs /tmp:rw,exec
     --network none | pasta:--splice-only,-T,<egress port>
-    -v <checkout>:/work:rw -v <gate home>:/home/lsf:rw
-    -w /work -e HOME=/home/lsf -e … <image> sh -c <command>
+    -v <checkout>:<checkout>:rw -v <gate home>:<gate home>:rw
+    -w <checkout> -e HOME=<gate home> [-e HTTPS_PROXY=… -e HTTP_PROXY=… -e https_proxy=… -e http_proxy=…]
+    -e NO_PROXY=127.0.0.1,localhost,::1 -e no_proxy=… -e LSF_GATE_COMMAND -e LSF_GATE_SEQ=<n> [-e <passthrough>…]
+    <image> /bin/sh -c ': > "$HOME/.lsf-started-$LSF_GATE_SEQ" && eval "$LSF_GATE_COMMAND"'
   ```
 
-  - **`setup`** gets `pasta:--splice-only,-T,<egress port>` and the proxy variables when `hosts` is set, and `--network none` otherwise.
+  - **`setup`** gets `pasta:--splice-only,-T,<egress port>` and the proxy variables when the egress proxy runs (`hosts` set), and `--network none` otherwise.
   - **Gate commands** get `--network none`.
+  - **No `-i`:** a command's stdin is `/dev/null`. Its stdout and stderr go to the gate's log, interleaved with podman's own.
+  - **The command** reaches the container as `-e LSF_GATE_COMMAND` from podman's environment, so the argv is fixed.
   - **`--userns=keep-id`** keeps what a command writes owned by the invoking user, so the checkout's removal succeeds.
-  - **`<gate home>`** is a per-checkout directory beside it, removed with it. Removal first makes both trees user-writable: Go writes its module cache read-only. `setup` and the gates share it and the checkout, so a dependency `setup` installs reaches the gates whether it lands in the tree (`node_modules`) or in a cache under `HOME` (Go modules, Cargo, pip `--user`).
-  - **Environment.** `PATH` is the image's, plus the config `env` passthrough list; no Anthropic variables.
-  - **No git runs in a gate checkout after its first command;** only its removal. So a command that writes the checkout's `.git/config` is harmless, and the checkout gets no read-only binds.
-- **Evidence.** The fixture gates passed in a container (Z3). `setup` under `hosts`, and the shared gate home, were not run. A hostile gate under `--network none` found the env canary absent and the file canaries unreachable, could not write outside its checkout or `/tmp`, had every egress blocked and found no engine socket (Z3).
+  - **The checkout and home are mounted at their host paths** (requester, 2026-10-10). The checkout's local config holds absolute host paths, as a call's clone's does: `core.hooksPath`, and `core.excludesFile` and `core.attributesFile` under `.git/lsf-global/`. At `/work` they would dangle, and git a gate runs itself (a test calling `git status`, a build calling `git describe`) would skip the global excludes and attributes. The cost is that gate code sees the state dir's host path.
+  - **`<gate home>`** is `<stateDir>/gates/<key>.home`, made `0700` with the checkout and removed with it. Removal first makes every directory in both trees user-writable: Go writes its module cache read-only. `setup` and the gates share it and the checkout, so a dependency `setup` installs reaches the gates whether it lands in the tree (`node_modules`) or in a cache under `HOME` (Go modules, Cargo, pip `--user`).
+  - **Environment.** `PATH` is the image's; `HOME`, the proxy variables and the config `env` passthrough list as above; no Anthropic variables.
+  - **The started marker.** A container that exits non-zero without having written `$HOME/.lsf-started-<n>` failed before its command started (an image, mount, `pasta` or name fault, or an unwritable home). That stops the run with `runtime-error`, quoting the log's last line, and returns no verdict, which would otherwise be replayed. A command that ran and exited non-zero is red, 137 (a kill in the container) included; a podman client killed by a signal, or a timeout, is not-run. The marker is removed after each command.
+  - **Teardown.** A timeout or a stop sends SIGTERM to the podman client's group and SIGKILL after `killGrace`; after that, or any non-zero exit, the container is removed by name (Teardown). A removal that fails stops the run with `runtime-error`, and the checkout and home are kept while the container may run; the next launch reaps it, then wipes every `gates/` entry but `logs`.
+  - **No git runs in a gate checkout after its first command,** only its removal (`chmod` and unlink). A command that writes the checkout's `.git/config`, a filter, `core.hooksPath` or a gitlink is therefore harmless, and the checkout gets no read-only binds. Any host git added there later goes through the clone guards (`gitenv`).
+- **Evidence.** The fixture gates passed in a container (Z3). A hostile gate under `--network none` found the env canary absent and the file canaries unreachable, could not write outside its checkout or `/tmp`, had every egress blocked and found no engine socket (Z3).
 - **Gate block.** The `lsf-gates` block carries `hosts`, with or without gate commands (`s2-boundary-common`).
 
 ### Runtime changes
 
-`s2-clones` carried the clones, fetch-back, removal, the merge clone and the `clone` role field. `s2-boundary-common` carried the credential proxy, the 401 stop, `hosts`, its parser and its pin, the plain-clone gate checkout and git isolation in clones. **`s2-sandbox` carries 1, 2, 3 for calls, 4's `listen` restriction, 6, 7 and 8; `s2-egress-gates` carries 3 for gates, 4's egress proxy and 5**, before `runtime-cli-drive` and `retained-artefacts-impl`:
+`s2-clones` carried the clones, fetch-back, removal, the merge clone and the `clone` role field. `s2-boundary-common` carried the credential proxy, the 401 stop, `hosts`, its parser and its pin, the plain-clone gate checkout and git isolation in clones. `s2-sandbox` carried 1, 2, 3 for calls, 4's `listen` restriction, 6, 7 and 8; `s2-egress-gates` carried 3 for gates, 4's egress proxy and 5. The runtime now does all of:
 
 1. **Container config:** the image digest, the `claude` binary path, the `env` passthrough list, and the launch checks of Image.
 2. **The call's launch** as A call's launch states. Roles reduce to `tools` and `clone`; `allow`, `deny`, `permissionMode` and the `<plugin>` substitution are dropped.
 3. **Teardown and reaping** by container name and label, for calls and gate commands, replacing process-group reaping by `--session-id` and the `lsf-gate:` marker; podman launch failures stop with `runtime-error`.
-4. **Proxies:** the credential proxy's `listen` host must be `127.0.0.1`. A new egress proxy (`CONNECT` to port 443 of a pinned host only) starts with the launch when `hosts` is set.
+4. **Proxies:** the credential proxy's `listen` host must be `127.0.0.1`. An egress proxy (`CONNECT` to port 443 of a pinned host only) starts when `hosts` are pinned, before any agent call.
 5. **Gates in containers:** `setup` and each gate command, with the shared gate home, as Declared gates states.
 6. **Placement refusals:** the refusal of a repo or state dir under `/tmp` or `/var/tmp` is dropped, since no container sees the host's `/tmp`. The shallow, submodule and LFS refusals stay.
 7. **A reference `Containerfile`** shipped with the runtime.
@@ -446,7 +453,7 @@ Unit `runtime-core`, plan `docs/plans/runtime-core-plan.md`. Package `lsfrt` in 
 
   The ancestor check is about commits; which labels may lose uncommitted work is the caller's choice.
 - **`rt.MergeClone(ctx, name)`** is the merge clone `<stateDir>/merge/<name>` on the integration branch, made or, when it is a clone on that branch, reused as found, a merge in progress included. A directory there that is not one is an error, not a stop. **`rt.RemoveMergeClone(ctx, name)`** removes it.
-- **`rt.RunGates(ctx, label, commit, setup, gates)`** runs a plan's declared gate commands on a clean detached checkout of `commit` at `<stateDir>/gates/<key>`, which is removed afterwards. The checkout is a plain clone, not a worktree: `commit` is resolved in the main repo and fetched by its object ID into a new repository of the main repo's object format (no tags; a commit reachable from no branch, such as a merge candidate under `refs/lsf/`, included), which takes the clone setup (line-ending keys, the info files) before the checkout, built at `<key>.partial` and renamed into place. Its git is clone-isolated (Supervision). When the main repo lists a worktree under `gates/` (a gate worktree from before plain clones), removal prunes the stale registrations. A stale checkout that cannot be removed fails the run's checkout. It runs `setup` first, then each gate in order. Each command runs through `sh` in its own process group, with stdin `/dev/null`, its output logged under `<stateDir>/gates/logs`, and the runtime's environment less the variables that point git elsewhere (`GIT_DIR` and the like). Setup runs under `gateTimeout`. Exit 0 is `green` and any other exit `red`. A timeout is `not-run`, and a failed setup makes every gate `not-run`. Any process a command leaves behind is killed when it ends. A stop kills the running group, and the stop is returned. Runs are bounded by `gateConcurrency`; the caller journals them.
+- **`rt.RunGates(ctx, label, commit, setup, gates)`** runs a plan's declared gate commands on a clean detached checkout of `commit` at `<stateDir>/gates/<key>`, which is removed afterwards. The checkout is a plain clone, not a worktree: `commit` is resolved in the main repo and fetched by its object ID into a new repository of the main repo's object format (no tags; a commit reachable from no branch, such as a merge candidate under `refs/lsf/`, included), which takes the clone setup (line-ending keys, the info files) before the checkout, built at `<key>.partial` and renamed into place. Its git is clone-isolated (Supervision). When the main repo lists a worktree under `gates/` (a gate worktree from before plain clones), removal prunes the stale registrations. A stale checkout that cannot be removed fails the run's checkout. It runs `setup` first, then each gate in order, each in its own container with the checkout and a shared gate home (Permissions → Declared gates), stdin `/dev/null` and its output logged under `<stateDir>/gates/logs`. `setup` has the egress proxy when `hosts` are pinned and no network otherwise; gate commands have none. Setup runs under `gateTimeout`. Exit 0 is `green` and any other exit of a command that started `red`. A timeout is `not-run`, and a failed setup makes every gate `not-run`. A container that fails before its command starts stops the run with `runtime-error`. Any process a command leaves behind ends with its container. A stop removes the running container, and the stop is returned. Runs are bounded by `gateConcurrency`; the caller journals them.
 - **`rt.Proxy()`** is the credential proxy's base URL (`http://<listen address>`) and the launch's placeholder bearer, 32 random bytes in hex. The proxy starts after the state-dir lock, before the body, and closes when `Run` returns, its port then refusing. A bind failure or a credentials file with no access token (`claudeAiOauth.accessToken`, or a top-level `accessToken`) is a setup error. For each request it:
   - refuses with 403 and the body `lsf-proxy: placeholder bearer required` unless there is exactly one `Authorization` header and it is `Bearer <placeholder>` (compared in constant time), and refuses `CONNECT`; no refused request reaches the upstream, and the first refusal (method and path quoted) and the launch's count are logged, never a header's value;
   - otherwise forwards to the upstream (`httputil.ReverseProxy`, flushing every write; the default transport's settings, so `HTTPS_PROXY` reaches an https upstream by a tunnel, with a 10-minute bound on response headers) with `Authorization` set to the live token, `x-api-key` and `Proxy-Authorization` dropped and `oauth-2025-04-20` added to `anthropic-beta` when absent; an upstream failure is a 502, logged;
@@ -455,7 +462,7 @@ Unit `runtime-core`, plan `docs/plans/runtime-core-plan.md`. Package `lsfrt` in 
   At launch end the proxy waits up to 5 s for requests in flight, then closes, before the summary is written.
 
   Every call reaches the API through it (Permissions → A call's launch), so `Run` starts it before the body and a body never sees the zero value.
-- **`rt.PinHosts(hosts)`** records the gate block's `hosts` as the orchestrator pinned them from the plan at `args.planSha`, before any agent call; **`rt.Hosts()`** reads them (nil when the plan has none). With hosts, it starts the egress proxy that confines agent calls to them (Permissions → Network).
+- **`rt.PinHosts(hosts)`** records the gate block's `hosts` as the orchestrator pinned them from the plan at `args.planSha`, before any agent call; **`rt.Hosts()`** reads them (nil when the plan has none). With hosts, it starts the egress proxy that confines agent calls and `setup` to them (Permissions → Network).
 - **`rt.Log`** and **`rt.Args`**: `Args` is the config's `args`, passed through.
 
 `opts` mirrors the JavaScript: `label`, `phase` (telemetry only), `model`, `effort`, `agentType`, `isolation`, `schema`. It adds `dir`: an existing directory under `<stateDir>/merge/` to run in as found, with no clone, fetch-back or uncommitted check (the conflict call). `dir` is not in the call's hash, and `dir` with `isolation` is a `runtime-error` stop.
@@ -551,19 +558,18 @@ Every call in a kept clone that spawned and returns a value or a null reports th
 | `journal/<key>.json` | a completed call's or step's record: label, kind, input hash, return, flags, denials, uncommitted paths, whether the uncommitted check failed, and a call's branch, clone kind and clone HEAD |
 | `journal/<key>.intent` | a step's input hash while it runs |
 | `calls/<key>.<launch>.a<n>.<session>.jsonl` | each attempt's stream |
-| `children.json` | gate marker → pid of running gate commands (calls are found by their containers' label) |
 | `clone/<key>` | kept clones |
 | `scratch/<key>` | discarded clones, wiped at launch |
 | `merge/w<n>` | merge clones |
 | `wt/<key>` | code steps' worktrees, on `lsf/<plan8>/<key>` |
-| `gates/<key>`, `gates/logs` | a declared gate run's checkout while it runs, and its logs |
+| `gates/<key>`, `gates/<key>.home`, `gates/logs` | a declared gate run's checkout and gate home while it runs, and its logs |
 | `status.json`, `summary.json`, `log.txt`, `telemetry.jsonl` | launch state, the `stop_reason`, the log, one event per line |
 
 - **Keys.** `<key>` is the label made filename-safe plus 8 hex digits of its hash. Labels must be unique per call: the journal keeps one record per label, and a label reused with other inputs in one launch is logged `label-reused`.
 - **Call records.** A call's hash covers the prompt, the skill it is sent as, the schema, the model, the effort and the isolation. Role and permissions are excluded, so changing them does not re-run completed work, with one exception: a repo call recorded from a discarded clone re-runs once its role keeps its clone, since its commits were lost. A null return is not recorded, so a resume retries it. A call with the same label and inputs is replayed within a launch as well as across launches.
 - **Step records.** A step writes an intent, runs, records its return (null included) and removes the intent. A step that errors keeps its intent, so the next run of that step, in this launch or a later one, gets `interrupted=true` for its own effect check. An unreadable record of a step stops the run with `runtime-error` rather than rerun it blind.
 - **Replays.** A replayed value is byte-identical to the live one (compacted JSON).
-- **File writes.** Records, intents, `children.json`, the status and the summary are written by temp file and rename.
+- **File writes.** Records, intents, the status and the summary are written by temp file and rename.
 - **Mode.** The state dir is made `0700`, and one readable by group or others (an earlier runtime made them `0755`) is changed to `0700`, logged: a transcript can carry the placeholder bearer (an agent's `env`), which spends the credential through the proxy. The launch resolves the state dir's symlinks once and uses that path throughout.
 
 ### Supervision
@@ -571,7 +577,7 @@ Every call in a kept clone that spawned and returns a value or a null reports th
 - **Signals.** The first SIGINT or SIGTERM sets the sticky stop `signal-SIGINT` or `signal-SIGTERM`. In-flight attempts finish and their results are journaled. Retries, backoff and gate waits are abandoned, and every later boundary returns the stop. A second signal cancels in-flight attempts and ends the ctx a running code step was given, so its git stops too. A journal replay is still served after a stop, since it costs nothing; the stop returns at the first call that would spawn.
 - **`stop_reason` precedence.** A stop the runtime recorded wins, even if the body swallowed it. Then a `StopError` from the body, then `cancelled` (the parent context), then `crashed` (a body error or panic), then `returned`.
 - **Caps** are checked at spawn. A cap that passes during a step or a backoff stops the run at the next spawn.
-- **Orphans.** At launch, before `scratch/` is wiped, every container carrying the state dir's label is a call left by a killed launch, and is removed with `podman rm -f -t 0`. A failed `podman ps`, or a container not removed, is a setup error: the launch refuses to start. A gate's shell is recorded in `children.json` under an `lsf-gate:` marker, which it carries as `$0`, and is found by it in `ps`. A gate command that begins with `exec` replaces that shell, so it cannot be found. Its group gets SIGTERM, then SIGKILL after `killGrace`; a zombie counts as gone. If `ps` fails, or a kill fails, those records are carried into this launch's `children.json` for the next launch to reap. An entry that is not a gate marker (a call an earlier runtime recorded) is logged and dropped, not killed. A torn `children.json` is reported and treated as empty. In a dry run, orphans are reported, not removed.
+- **Orphans.** At launch, before `scratch/` is wiped, every container carrying the state dir's label is a call or gate left by a killed launch, and is removed with `podman rm -f -t 0`. A failed `podman ps`, or a container not removed, is a setup error: the launch refuses to start. Then every `gates/` entry but `logs` (checkouts, homes, half-built checkouts) is removed. A `children.json` an earlier runtime left is logged (`children-dropped`) and removed, not acted on. In a dry run, orphans are reported, not removed.
 - **Clones and worktrees.**
   - Creation, fetch-back and removal are serialised. One 5-minute bound covers each whole operation (a clone's creation, a fetch-back, a removal), and its git ends on a repeated signal; the runtime's git runs with `core.fsmonitor=false`, since an agent can write its clone's config.
   - **Git config isolation.** The runtime's and the orchestrator's own git in a clone (its creation, the uncommitted check, a removal's reads, the merge step in its merge clone, the gate checkout) runs with `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`, and without config from the environment (`GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT` and its keys). A driver a clone's `.gitattributes` selects (a filter, a diff or merge driver) therefore runs only if the clone's local config defines it, and an agent cannot select a host-defined one there (outside clones, see Known limits). This needs git 2.32 or later for `GIT_CONFIG_GLOBAL`; the runtime does not check the version. Git in the main checkout and in code steps' worktrees keeps the host config: commits there need the user's identity, and a worktree shares the main repo's config. A clone takes, besides the `configCopied` keys (identity, signing including the `gpg.*program` keys, line endings), a copy of the files the main repo's `core.excludesFile` and `core.attributesFile` name, under `.git/lsf-global/` and set as the clone's own `core.excludesFile` and `core.attributesFile`, so they keep their place below `.gitignore` and `.gitattributes`.
@@ -585,7 +591,6 @@ Every call in a kept clone that spawned and returns a value or a null reports th
 - The `Retains:` move: `retained-artefacts-impl`.
 - A stop file, status readers and detaching: `runtime-cli-drive`.
 - The roles' content: `s2-permissions-design`.
-- Confining `setup` to `hosts`, and gates in containers: `s2-egress-gates`.
 - Presenting `auth-failed` to the requester ("renew the credential and relaunch"): `runtime-cli-drive` and `phronithm:lsf-drive`.
 
 ### Known limits

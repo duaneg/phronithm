@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -43,33 +45,35 @@ const (
 	GateRed    = "red"
 	GateNotRun = "not-run"
 
-	gateMarkerPrefix = "lsf-gate:"
-	gateTailBytes    = 4096
-	gateSummaryMax   = 300
+	gateTailBytes  = 4096
+	gateSummaryMax = 300
+	gateHomeSuffix = ".home"
 )
 
-// gateScript runs the command from the environment, so the shell's
-// arguments are fixed and carry the marker as $0. Two commands keep the
-// shell from exec-ing the gate command, which would drop the marker from
-// the process's arguments.
-const gateScript = `eval "$LSF_GATE_COMMAND"; exit $?`
+// gateScript runs in a gate container: it marks the command as started in
+// the gate home, then runs the command from the environment, so the
+// container's arguments stay fixed.
+const gateScript = `: > "$HOME/.lsf-started-$LSF_GATE_SEQ" && eval "$LSF_GATE_COMMAND"`
 
 // RunGates runs a project's declared gates on a clean detached checkout of
 // commit at <stateDir>/gates/<key> (a leftover directory there is removed
-// first): setup, then each gate in order, each through sh in its own process
-// group with stdin /dev/null and its output in <stateDir>/gates/logs. A
-// failed setup makes every gate not-run. The checkout is removed afterwards.
-// A stop or cancellation kills the running group and is returned; no runs
-// are returned with it. A checkout failure is an error. Runs are bounded
-// by gateConcurrency, and are not journaled here. The checkout and log
-// names derive from label, which must be unique in the launch.
+// first): setup, then each gate in order, each in its own container
+// (docs/design/lsf-runtime.md, Permissions → Declared gates) with stdin
+// /dev/null and its output in <stateDir>/gates/logs. The checkout and a
+// gate home beside it, <key>.home, are bound at their host paths and
+// shared by setup and the gates. setup has the egress proxy when hosts are
+// pinned and no network otherwise; gate commands have no network. A failed
+// setup makes every gate not-run. The checkout and home are removed
+// afterwards, unless a container could not be removed. A stop or
+// cancellation removes the running container and is returned; no runs are
+// returned with it. A container that fails before its command starts
+// stops the run with runtime-error. A checkout failure is an error. Runs
+// are bounded by gateConcurrency, and are not journaled here. The checkout
+// and log names derive from label, which must be unique in the launch.
 //
-// Every process a command leaves behind is killed when it ends, setup's
-// included: a service the gates need is started by the gate command
-// itself. A command that begins with `exec` replaces the marked shell, so a
-// launch killed during it leaves an orphan the next launch cannot find.
-// Commands run with the runtime's environment, credentials included: the
-// declaration is trusted as the plan document is.
+// Every process a command leaves behind ends with its container: a service
+// the gates need is started by the gate command itself. No host git runs
+// in the checkout once a container has run there; only its removal.
 func (rt *Runtime) RunGates(ctx context.Context, label, commit, setup string, gates []GateSpec) ([]GateRun, error) {
 	if err := rt.boundary(ctx); err != nil {
 		return nil, err
@@ -92,7 +96,14 @@ func (rt *Runtime) RunGates(ctx context.Context, label, commit, setup string, ga
 	if err := rt.gateCheckout(ctx, label, dir, commit); err != nil {
 		return nil, err
 	}
-	defer rt.gateRemove(ctx, label, dir)
+	left := false // a container may still run in the checkout
+	defer func() {
+		if left {
+			rt.Log(fmt.Sprintf("%s: gate checkout %s kept: a container in it was not removed; the next launch reaps it", label, dir))
+			return
+		}
+		rt.gateRemove(ctx, label, dir)
+	}()
 	rt.event("gates-start", map[string]any{"label": label, "commit": commit, "gates": len(gates)})
 	t0 := time.Now()
 	logBase := filepath.Join(rt.cfg.StateDir, "gates", "logs", fmt.Sprintf("%s-%s-%d", key, rt.launchID, rt.gateSeq.Add(1)))
@@ -100,8 +111,9 @@ func (rt *Runtime) RunGates(ctx context.Context, label, commit, setup string, ga
 	runs := make([]GateRun, len(gates))
 	notRun := ""
 	if setup != "" {
-		r, err := rt.gateProcess(ctx, dir, logBase+"-setup.log", setup, rt.cfg.GateTimeout.D())
+		r, err := rt.gateProcess(ctx, dir, logBase+"-setup.log", setup, rt.cfg.GateTimeout.D(), true)
 		if err != nil {
+			left = errors.As(err, new(*containerLeftError))
 			return nil, err
 		}
 		switch r.Status {
@@ -125,8 +137,9 @@ func (rt *Runtime) RunGates(ctx context.Context, label, commit, setup string, ga
 		if timeout <= 0 {
 			timeout = rt.cfg.GateTimeout.D()
 		}
-		r, err := rt.gateProcess(ctx, dir, log, g.Command, timeout)
+		r, err := rt.gateProcess(ctx, dir, log, g.Command, timeout, false)
 		if err != nil {
+			left = errors.As(err, new(*containerLeftError))
 			return nil, err
 		}
 		r.Name, r.Command = g.Name, g.Command
@@ -150,15 +163,19 @@ func (rt *Runtime) gateCheckout(ctx context.Context, label, dir, commit string) 
 	if strings.HasPrefix(commit, "-") || commit == "" {
 		return fmt.Errorf("%s: %q is not a commit", label, commit)
 	}
+	home := dir + gateHomeSuffix
+	for _, d := range []string{dir, home} {
+		if err := removeGateTree(d); err != nil {
+			return fmt.Errorf("%s: stale gate checkout %s not removable: %w", label, d, err)
+		}
+	}
 	if err := rt.withWorktreeLock(ctx); err != nil {
 		return err
 	}
 	defer func() { <-rt.wtSem }()
 	gctx, cancel := rt.gitContext(ctx)
 	defer cancel()
-	if err := rt.removeGateDir(gctx, dir); err != nil {
-		return fmt.Errorf("%s: stale gate checkout %s not removable: %w", label, dir, err)
-	}
+	rt.pruneGateWorktrees(gctx)
 	tmp := dir + partialSuffix
 	defer func() {
 		if err == nil {
@@ -213,6 +230,9 @@ func (rt *Runtime) gateCheckout(ctx context.Context, label, dir, commit string) 
 	if err := run(tmp, "-c", "advice.detachedHead=false", "checkout", "-q", "--detach", sha, "--"); err != nil {
 		return err
 	}
+	if err := os.Mkdir(home, 0o700); err != nil {
+		return fmt.Errorf("%s: gate home: %w", label, err)
+	}
 	return os.Rename(tmp, dir)
 }
 
@@ -221,25 +241,42 @@ func fullObjectID(s string) bool {
 	return (len(s) == 40 || len(s) == 64) && strings.Trim(s, "0123456789abcdef") == ""
 }
 
-// gateRemove removes the checkout. A failure is logged: the results stand,
-// and the next run at dir removes it first.
+// gateRemove removes the checkout and its home. A failure is logged: the
+// results stand, and the next run at dir, or the next launch, removes them.
 func (rt *Runtime) gateRemove(ctx context.Context, label, dir string) {
+	for _, d := range []string{dir, dir + gateHomeSuffix} {
+		if err := removeGateTree(d); err != nil {
+			rt.Log(fmt.Sprintf("%s: gate checkout %s not removed: %v", label, d, err))
+		}
+	}
 	// Removal runs after a stop too, so it waits on the lock without
 	// yielding to one; ctx without cancellation keeps git running.
 	rt.wtSem <- struct{}{}
 	defer func() { <-rt.wtSem }()
 	gctx, cancel := rt.gitContext(context.WithoutCancel(ctx))
 	defer cancel()
-	if err := rt.removeGateDir(gctx, dir); err != nil {
-		rt.Log(fmt.Sprintf("%s: gate checkout %s not removed: %v", label, dir, err))
-	}
+	rt.pruneGateWorktrees(gctx)
 }
 
-// removeGateDir removes a gate checkout at dir. When the main repo lists a
-// worktree under gates/ (a gate checkout made as a worktree before plain
-// clones), it prunes the stale registrations. The caller holds wtSem.
-func (rt *Runtime) removeGateDir(ctx context.Context, dir string) error {
-	err := os.RemoveAll(dir)
+// removeGateTree removes a tree a gate container wrote, making each
+// directory user-writable first (Go writes its module cache read-only).
+// Symlinks are not followed. No git runs in it.
+func removeGateTree(dir string) error {
+	filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			if fi, err := d.Info(); err == nil && fi.Mode().Perm()&0o700 != 0o700 {
+				os.Chmod(p, fi.Mode().Perm()|0o700)
+			}
+		}
+		return nil
+	})
+	return os.RemoveAll(dir)
+}
+
+// pruneGateWorktrees prunes the main repo's stale registrations when it
+// lists a worktree under gates/ (a gate checkout made as a worktree before
+// plain clones). The caller holds wtSem.
+func (rt *Runtime) pruneGateWorktrees(ctx context.Context) {
 	gates := filepath.Join(rt.cfg.StateDir, "gates")
 	if resolved, rerr := filepath.EvalSymlinks(gates); rerr == nil {
 		gates = resolved // git lists resolved paths
@@ -248,7 +285,6 @@ func (rt *Runtime) removeGateDir(ctx context.Context, dir string) error {
 	if lerr == nil && strings.Contains(string(list), "\nworktree "+gates+string(filepath.Separator)) {
 		gitRun(ctx, rt.cfg.Repo, "worktree", "prune")
 	}
-	return err
 }
 
 // withWorktreeLock takes wtSem, yielding to a stop or cancellation.
@@ -269,15 +305,35 @@ func (rt *Runtime) withWorktreeLock(ctx context.Context) error {
 
 var errGateTimeout = errors.New("gate timeout")
 
-// gateProcess runs one command in dir. Its status is green, red, or not-run
-// for a timeout; a stop or cancellation is returned as the error. The group
-// is killed as spawn kills a call's: SIGTERM, KillGrace, SIGKILL to the
-// leader, then SIGKILL to the group, which also ends background processes a
-// command that finished left behind. The pid-reuse window spawn accepts for
-// a cancelled call is accepted here for every command: a reuse needs the
-// pid space to wrap between Wait and the kill. A file that cannot be
-// created for the log makes the command not-run.
-func (rt *Runtime) gateProcess(ctx context.Context, dir, logPath, command string, timeout time.Duration) (GateRun, error) {
+// containerLeftError is a gate container that could not be removed: it may
+// still run in the checkout, which is therefore kept. It unwraps to the
+// stop in force.
+type containerLeftError struct {
+	name string
+	err  error
+	stop *StopError
+}
+
+func (e *containerLeftError) Error() string {
+	return fmt.Sprintf("gate container %s not removed: %v", e.name, e.err)
+}
+
+func (e *containerLeftError) Unwrap() error { return e.stop }
+
+// gateProcess runs one command in its own container on the checkout at
+// dir (setup is spliced to the egress proxy when one runs). Its status is
+// green (exit 0), red (another exit of a command that started), or not-run
+// for a timeout or a podman client killed by a signal; a stop or
+// cancellation is returned as the error. A cancel sends SIGTERM to the
+// podman client's group, SIGKILL after KillGrace; after a cancel or a
+// non-zero exit the container is removed with podman rm -f, and the group
+// then gets SIGKILL. A container that exits non-zero before the command
+// started (no started marker in the gate home: an image, mount, pasta or
+// name fault, or an unwritable home) sets the runtime-error stop: it is
+// not the gate's verdict, which would be replayed. A removal that fails
+// sets runtime-error too and returns a containerLeftError. A file that
+// cannot be created for the log makes the command not-run.
+func (rt *Runtime) gateProcess(ctx context.Context, dir, logPath, command string, timeout time.Duration, setup bool) (GateRun, error) {
 	r := GateRun{Status: GateNotRun, ExitCode: -1, Log: logPath}
 	out, err := os.Create(logPath)
 	if err != nil {
@@ -299,9 +355,17 @@ func (rt *Runtime) gateProcess(ctx context.Context, dir, logPath, command string
 		}
 	}()
 
-	marker := fmt.Sprintf("%s%s-%d", gateMarkerPrefix, rt.launchID, rt.gateSeq.Add(1))
-	cmd := exec.CommandContext(pctx, "sh", "-c", gateScript, marker)
-	cmd.Dir = dir
+	seq := strconv.FormatInt(rt.gateSeq.Add(1), 10)
+	home := dir + gateHomeSuffix
+	marker := filepath.Join(home, ".lsf-started-"+seq)
+	name := "lsf-" + rt.stateHash[:8] + "-gate-" + rt.launchID + "-" + seq
+	cmd := exec.CommandContext(pctx, rt.cfg.PodmanBin, rt.containerArgv(containerSpec{
+		kind: kindGate, name: name, dir: dir, home: home, egress: setup,
+		env: []string{"LSF_GATE_COMMAND", "LSF_GATE_SEQ=" + seq},
+		cmd: []string{"/bin/sh", "-c", gateScript},
+	})...)
+	// The command reaches the container by -e LSF_GATE_COMMAND, from
+	// podman's environment.
 	cmd.Env = append(gitenv.Scrubbed(), "LSF_GATE_COMMAND="+command)
 	cmd.Stdout, cmd.Stderr = out, out
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -312,8 +376,6 @@ func (rt *Runtime) gateProcess(ctx context.Context, dir, logPath, command string
 	}
 	cmd.WaitDelay = rt.cfg.KillGrace.D()
 
-	rt.addChild(marker)
-	defer rt.removeChild(marker)
 	t0 := time.Now()
 	if err := cmd.Start(); err != nil {
 		if pctx.Err() == nil {
@@ -324,17 +386,28 @@ func (rt *Runtime) gateProcess(ctx context.Context, dir, logPath, command string
 			return r, s
 		}
 		return r, &StopError{Reason: StopCancelled}
-	} else {
-		pid := cmd.Process.Pid
-		rt.setChildPid(marker, pid)
-		cmd.Wait()
-		syscall.Kill(-pid, syscall.SIGKILL)
 	}
+	pid := cmd.Process.Pid
+	rt.event("gate-spawn", map[string]any{"pid": pid, "container": name, "setup": setup})
+	cmd.Wait()
+	var rmErr error
+	if cmd.ProcessState == nil || cmd.ProcessState.ExitCode() != 0 || cancelled.Load() {
+		rmErr = rt.removeContainer(name)
+	}
+	syscall.Kill(-pid, syscall.SIGKILL)
 	r.Secs = time.Since(t0).Seconds()
+	_, merr := os.Lstat(marker)
+	started := merr == nil
+	os.Remove(marker)
+	if rmErr != nil {
+		msg := fmt.Sprintf("gate container %s not removed: %v", name, rmErr)
+		rt.Log(msg)
+		return r, &containerLeftError{name: name, err: rmErr, stop: rt.setStop(StopRuntimeError, msg)}
+	}
 	// A command reaped before a timeout or stop reached it keeps its result
 	// (one that exits in the instant before it is reaped may still count as
-	// stopped). A shell killed by a signal is not a verdict; a command the
-	// shell runs that is killed is the shell's exit 128+N, red.
+	// stopped). A podman client killed by a signal is not a verdict; a
+	// command killed in the container is the container's exit 128+N, red.
 	ws, _ := cmd.ProcessState.Sys().(syscall.WaitStatus)
 	switch cause := context.Cause(pctx); {
 	case cancelled.Load() && errors.Is(cause, errGateTimeout):
@@ -346,6 +419,10 @@ func (rt *Runtime) gateProcess(ctx context.Context, dir, logPath, command string
 		return r, &StopError{Reason: StopCancelled}
 	case ws.Signaled():
 		r.Summary = "killed by signal " + ws.Signal().String()
+	case cmd.ProcessState.ExitCode() != 0 && !started:
+		msg := fmt.Sprintf("gate container %s failed before its command started (exit %d): %s", name, cmd.ProcessState.ExitCode(), lastLine(fileTail(logPath, gateTailBytes)))
+		rt.Log(msg)
+		return r, rt.setStop(StopRuntimeError, msg)
 	default:
 		r.ExitCode = cmd.ProcessState.ExitCode()
 		r.Status = GateRed

@@ -87,8 +87,8 @@ func (e *egressProxy) allowed(target string) (string, bool) {
 		return "", false
 	}
 	host := normaliseHost(h)
-	// No wildcard, zone, empty label or brackets left in a target, and
-	// brackets only around an IPv6 literal.
+	// No wildcard, zone or empty label in a target. The bracket checks
+	// repeat SplitHostPort's own.
 	if strings.HasPrefix(target, "[") && !strings.Contains(host, ":") {
 		return "", false
 	}

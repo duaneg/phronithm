@@ -599,12 +599,23 @@ func (rt *Runtime) wipeScratch() {
 		rt.Log("scratch: " + err.Error())
 	}
 	os.MkdirAll(dir, 0o755)
-	for _, sub := range []string{"clone", "merge", "gates"} {
+	for _, sub := range []string{"clone", "merge"} {
 		partial, _ := filepath.Glob(filepath.Join(rt.cfg.StateDir, sub, "*"+partialSuffix))
 		for _, p := range partial {
 			if err := os.RemoveAll(p); err != nil {
 				rt.Log("half-built clone: " + err.Error())
 			}
+		}
+	}
+	// Gate checkouts, homes and half-built checkouts a killed launch left;
+	// their containers were reaped first.
+	entries, _ := os.ReadDir(filepath.Join(rt.cfg.StateDir, "gates"))
+	for _, e := range entries {
+		if e.Name() == "logs" {
+			continue
+		}
+		if err := removeGateTree(filepath.Join(rt.cfg.StateDir, "gates", e.Name())); err != nil {
+			rt.Log("leftover gate tree: " + err.Error())
 		}
 	}
 }

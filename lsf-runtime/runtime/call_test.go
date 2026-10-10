@@ -120,9 +120,9 @@ func TestSpawnErrorAndChildrenRecord(t *testing.T) {
 		}
 		return nil, nil
 	})
-	// Calls are no longer recorded there: their containers carry a label.
-	if b, err := os.ReadFile(filepath.Join(cfg.StateDir, "children.json")); err == nil && string(b) != "{}" {
-		t.Errorf("children.json %q", b)
+	// Nothing is recorded there: containers carry a label.
+	if _, err := os.Stat(filepath.Join(cfg.StateDir, "children.json")); !os.IsNotExist(err) {
+		t.Errorf("children.json written: %v", err)
 	}
 }
 

@@ -44,6 +44,9 @@ func helperMain(scenario string) int {
 			rt.Agent(ctx, "a", o)
 			rt.Agent(ctx, "b", other)
 			return json.RawMessage(`{"status":"complete"}`), nil
+		case "gate-hang":
+			_, err := rt.RunGates(ctx, "gates:hang", os.Getenv("LSFRT_GATE_COMMIT"), "", []GateSpec{{Name: "hang", Command: "sleep 30"}})
+			return nil, err
 		case "three-hangs":
 			var thunks []func(context.Context) (json.RawMessage, error)
 			for i := range 3 {
@@ -217,18 +220,6 @@ func TestOrphansReapedByNextLaunch(t *testing.T) {
 	}
 	if n := countEvents(telemetry(t, cfg), "orphan-terminated"); n != 3 {
 		t.Errorf("%d orphan-terminated events, want 3", n)
-	}
-}
-
-func TestTornChildrenFile(t *testing.T) {
-	cfg, _ := testConfig(t)
-	os.MkdirAll(cfg.StateDir, 0o755)
-	os.WriteFile(filepath.Join(cfg.StateDir, "children.json"), []byte(`{"abc`), 0o644)
-	if s := launch(t, cfg, func(context.Context, *Runtime) (json.RawMessage, error) { return nil, nil }); s.StopReason != StopReturned {
-		t.Fatalf("summary %+v", s)
-	}
-	if countEvents(telemetry(t, cfg), "children-unreadable") != 1 {
-		t.Error("torn children.json not reported")
 	}
 }
 
@@ -490,14 +481,27 @@ func TestReapFailureRefusesLaunch(t *testing.T) {
 	}
 }
 
-// An entry children.json holds that is not a gate marker (a call recorded
-// by an earlier runtime) is logged and dropped, not killed.
-func TestLegacyCallEntryDropped(t *testing.T) {
-	cfg, _ := testConfig(t)
-	os.MkdirAll(cfg.StateDir, 0o755)
-	os.WriteFile(filepath.Join(cfg.StateDir, "children.json"), []byte(`{"0b3c5d1e-session":4242}`), 0o644)
-	launch(t, cfg, func(context.Context, *Runtime) (json.RawMessage, error) { return nil, nil })
-	if countEvents(telemetry(t, cfg), "children-dropped") != 1 || readFile(t, cfg, "children.json") != "{}" {
-		t.Errorf("children.json %q", readFile(t, cfg, "children.json"))
+// A children.json an earlier runtime left, torn or not, is logged and
+// removed, not acted on: a gate marker's pid is not signalled.
+func TestLegacyChildrenDropped(t *testing.T) {
+	sleeper := exec.Command("sleep", "30")
+	if err := sleeper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer sleeper.Process.Kill()
+	go sleeper.Wait()
+	for _, body := range []string{`{"abc`, `{"0b3c5d1e-session":4242}`, fmt.Sprintf(`{"lsf-gate:x-1":%d}`, sleeper.Process.Pid)} {
+		cfg, _ := testConfig(t)
+		os.MkdirAll(cfg.StateDir, 0o755)
+		os.WriteFile(filepath.Join(cfg.StateDir, "children.json"), []byte(body), 0o644)
+		if s := launch(t, cfg, func(context.Context, *Runtime) (json.RawMessage, error) { return nil, nil }); s.StopReason != StopReturned {
+			t.Fatalf("%s: summary %+v", body, s)
+		}
+		if countEvents(telemetry(t, cfg), "children-dropped") != 1 || exists(filepath.Join(cfg.StateDir, "children.json")) {
+			t.Errorf("%s: not dropped", body)
+		}
+	}
+	if !alive(sleeper.Process.Pid) {
+		t.Error("a recorded gate pid was signalled")
 	}
 }

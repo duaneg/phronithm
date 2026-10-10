@@ -371,3 +371,38 @@ func TestLiveTmpPlacement(t *testing.T) {
 		t.Errorf("commit not fetched back: %v %s", err, out)
 	}
 }
+
+// L-gate: setup and a gate run in real containers on the checkout at its
+// host path; output reaches the log through attach without -i under
+// --log-driver=none; the home is shared; files are the invoking user's;
+// the gates have no network; the checkout and home are removed.
+func TestLiveGate(t *testing.T) {
+	cfg := liveConfig(t)
+	sha := gateRepo(t, &cfg)
+	var runs []GateRun
+	var err error
+	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		runs, err = rt.RunGates(ctx, "gates:live", sha, `echo dep > "$HOME/x" && mkdir -p "$HOME/mod/a" && chmod -R a-w "$HOME/mod" && id -u > uid`,
+			[]GateSpec{
+				{Name: "ok", Command: `test "$(cat "$HOME/x")" = dep && test "$(cat uid)" = "$(id -u)" && test "$(pwd)" = "$PWD" && git status --porcelain >/dev/null && echo gate-out && echo gate-err >&2`},
+				{Name: "offline", Command: `curl -sS --max-time 5 https://example.com/ >/dev/null`},
+			})
+		return nil, err
+	})
+	if err != nil || len(runs) != 2 {
+		t.Fatalf("%v %+v", err, runs)
+	}
+	if runs[0].Status != GateGreen || runs[1].Status != GateRed {
+		t.Errorf("statuses %+v", runs)
+	}
+	if b, _ := os.ReadFile(runs[0].Log); !strings.Contains(string(b), "gate-out") || !strings.Contains(string(b), "gate-err") {
+		t.Errorf("gate output not logged: %q", b)
+	}
+	dir := filepath.Join(cfg.StateDir, "gates", journalKey("gates:live"))
+	if exists(dir) || exists(dir+".home") {
+		t.Error("checkout or home left")
+	}
+	if left := liveContainers(t, cfg); len(left) > 0 {
+		t.Errorf("containers left: %q", left)
+	}
+}

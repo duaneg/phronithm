@@ -455,6 +455,12 @@ func TestGateArgv(t *testing.T) {
 				if want := wantGateArgv(rt, "g", "/s/gates/k", "/s/gates/k.home", egress, env); !slices.Equal(got, want) {
 					t.Errorf("hosts %v setup %v:\n got %q\nwant %q", hosts, setup, got, want)
 				}
+				for _, a := range got {
+					if a == "-i" || strings.HasPrefix(a, "ANTHROPIC_") || strings.Contains(a, "/opt/claude") || strings.Contains(a, "/opt/plugin") ||
+						strings.HasPrefix(a, "SHELL=") || strings.HasPrefix(a, "DISABLE_AUTOUPDATER") || strings.HasPrefix(a, "CLAUDE_CODE_") {
+						t.Errorf("gate argv carries %q", a)
+					}
+				}
 				if setup && hosts != nil && !strings.HasPrefix(flagValue(got, "--network"), "pasta:") {
 					t.Errorf("setup with hosts not spliced: %q", got)
 				}

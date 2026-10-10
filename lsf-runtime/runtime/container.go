@@ -67,7 +67,8 @@ func claudeArgv(o Opts, role Role, sessionID string) []string {
 type containerKind int
 
 const (
-	kindCall  containerKind = iota // an agent call: claude, spliced to the proxies
+	kindUnset containerKind = iota // a spec without a kind: refused
+	kindCall                       // an agent call: claude, spliced to the proxies
 	kindSmoke                      // the launch check: claude, no network
 	kindGate                       // setup or a gate command: no claude
 )
@@ -91,6 +92,9 @@ type containerSpec struct {
 // env passthrough name likewise takes its value from the runtime's own
 // environment, which podman inherits and the container does not.
 func (rt *Runtime) containerArgv(s containerSpec) []string {
+	if s.kind == kindUnset || s.kind == kindGate && s.home == "" {
+		panic(fmt.Sprintf("containerArgv: spec without a kind or a gate home: %+v", s))
+	}
 	a := []string{"run", "--rm"}
 	if s.kind != kindGate { // a gate's stdin is /dev/null
 		a = append(a, "-i")
