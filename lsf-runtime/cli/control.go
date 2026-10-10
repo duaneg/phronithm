@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -37,15 +36,21 @@ func cmdPause(args []string, stdout, stderr io.Writer) int {
 	}
 	fb := fallback{name: a.name}
 	if a.repo != "" || a.state == "" {
-		fb.repo, _ = repoTop(a.repo)
+		if fb.repo, err = repoTop(a.repo); err != nil {
+			return fail(stderr, err)
+		}
 	}
 	r := statusOf(state, fb)
 	if r.Pause == nil {
 		return fail(stderr, errors.New("no repo and name for the pause ref: pass -repo and -name, or -state of a launched run"))
 	}
 	ref := r.Pause.Ref
+	if _, err := readLaunched(state); err != nil {
+		fmt.Fprintf(stderr, "lsf-runtime: no launch.json on %s: using the default ref %s; a launch with another args.pauseRef reads that one instead\n", state, ref)
+	}
+	was := r.Pause.Set
 	git := func(args ...string) error {
-		out, err := exec.Command("git", append([]string{"-C", r.Repo}, args...)...).CombinedOutput()
+		out, err := output("git", append([]string{"-C", r.Repo}, args...)...)
 		if err != nil {
 			return fmt.Errorf("git %s: %v %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 		}
@@ -66,10 +71,13 @@ func cmdPause(args []string, stdout, stderr io.Writer) int {
 	if set == *lift {
 		return fail(stderr, fmt.Errorf("%s: set is %t after the update", ref, set))
 	}
-	if set {
-		fmt.Fprintf(stdout, "pause set: %s; the run pauses at its next wave boundary, not at once\n", ref)
-	} else {
-		fmt.Fprintf(stdout, "pause lifted: %s deleted\n", ref)
+	switch {
+	case set:
+		fmt.Fprintf(stdout, "pause set: %s in %s; the run pauses at its next wave boundary, not at once\n", ref, r.Repo)
+	case was:
+		fmt.Fprintf(stdout, "pause lifted: %s deleted in %s\n", ref, r.Repo)
+	default:
+		fmt.Fprintf(stdout, "pause not set: %s does not exist in %s\n", ref, r.Repo)
 	}
 	return exitOK
 }
@@ -138,9 +146,10 @@ func cmdResume(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, fmt.Errorf("nothing to resume on %s (%v): use launch", state, err))
 	}
-	// A crashed driver wrote no summary; summary.json is then an earlier
-	// launch's.
-	if r.Driver != driverCrashed {
+	// summary.json is launch.json's run's only when status.json, written
+	// after it, says that run returned. A crash leaves status.json at
+	// running, and summary.json an earlier launch's.
+	if s, err := readStatus(state); err == nil && s.State == string(lsfrt.StopReturned) {
 		var sum lsfrt.Summary
 		b, err := os.ReadFile(filepath.Join(state, "summary.json"))
 		if err == nil && json.Unmarshal(b, &sum) == nil && sum.StopReason == lsfrt.StopReturned {
@@ -148,8 +157,10 @@ func cmdResume(args []string, stdout, stderr io.Writer) int {
 				Status  string `json:"status"`
 				PlanSha string `json:"planSha"`
 			}
-			json.Unmarshal(sum.Outcome, &o)
-			return fail(stderr, fmt.Errorf("the last launch returned an outcome (status %s): relaunch with launch -args from its planSha %s, passing its unscribed, as phronithm:lsf-drive's Relaunch says", o.Status, o.PlanSha))
+			if json.Unmarshal(sum.Outcome, &o) != nil || o.Status == "" {
+				return fail(stderr, errors.New("the last launch returned (summary.json): read its outcome with status, and relaunch with launch -args, as phronithm:lsf-drive's Relaunch says"))
+			}
+			return fail(stderr, fmt.Errorf("the last launch returned an outcome (status %s): relaunch with launch -args from its planSha %s, passing its unscribed rows, as phronithm:lsf-drive's Relaunch says", o.Status, o.PlanSha))
 		}
 	}
 	if err := checkGit(); err != nil {

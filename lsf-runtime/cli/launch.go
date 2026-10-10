@@ -115,8 +115,10 @@ func start(in launchIn, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	defer ll.Close()
-	if err := syscall.Flock(int(ll.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := syscall.Flock(int(ll.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); errors.Is(err, syscall.EWOULDBLOCK) {
 		return fail(stderr, fmt.Errorf("another launch is starting a driver on %s; see status", in.stateDir))
+	} else if err != nil {
+		return fail(stderr, fmt.Errorf("launch.lock: %w", err))
 	}
 	if held, err := lockHeld(in.stateDir); err != nil {
 		return fail(stderr, err)
@@ -141,6 +143,9 @@ func start(in launchIn, stdout, stderr io.Writer) int {
 		switch {
 		case r.started:
 			keep = true
+			if r.left != "" {
+				fmt.Fprintln(stderr, "lsf-runtime: warning:", r.left)
+			}
 			b, _ := json.Marshal(map[string]any{"stateDir": in.stateDir, "pid": r.pid, "launch": r.launch})
 			fmt.Fprintf(stdout, "%s\n", b)
 			return exitOK
@@ -216,17 +221,14 @@ func spawn(state, file string) (spawned, error) {
 	// Started: wait, briefly, for the body's rename of the composed file
 	// to launch.json, so a status right after launch reads this launch's.
 	startedAt := func(l string) spawned {
-		for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(launchPoll / 4) {
+		r := spawned{started: true, pid: pid, launch: l}
+		for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
 			if _, err := os.Stat(file); errors.Is(err, os.ErrNotExist) {
-				break
-			}
-			select {
-			case <-exited:
-				return spawned{started: true, pid: pid, launch: l}
-			default:
+				return r
 			}
 		}
-		return spawned{started: true, pid: pid, launch: l}
+		r.left = fmt.Sprintf("%s not yet renamed to %s; status may report the previous launch's repo and name until it is", filepath.Base(file), launchFile)
+		return r
 	}
 
 	sig := make(chan os.Signal, 1)

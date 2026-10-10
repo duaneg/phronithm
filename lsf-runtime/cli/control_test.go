@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -171,4 +172,84 @@ func TestResume(t *testing.T) {
 	eq(t, r.code, exitError)
 	contains(t, r.stderr, "returned an outcome (status complete)")
 	contains(t, r.stderr, "launch -args")
+}
+
+// holdLock takes an exclusive flock on a state dir file for the test.
+func holdLock(t *testing.T, path string) {
+	t.Helper()
+	os.MkdirAll(filepath.Dir(path), 0o700)
+	fh, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(fh.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fh.Close() })
+}
+
+// stop signals only a live driver this CLI launched: not a run with no
+// driver.json, nor a pid whose command line is not this state dir's
+// driver.
+func TestStopRefusesForeignDriver(t *testing.T) {
+	f := newFixture(t)
+	st := f.stateDir()
+	holdLock(t, filepath.Join(st, "lock"))
+	b, _ := json.Marshal(M{"pid": os.Getpid(), "state": "running", "at": "x", "launch": "l"})
+	os.WriteFile(filepath.Join(st, "status.json"), b, 0o600)
+	r := f.cli(nil, "stop", "-state", st)
+	eq(t, r.code, exitError)
+	contains(t, r.stderr, "not launched by this CLI")
+	b, _ = json.Marshal(driverRecord{PID: os.Getpid(), State: st})
+	os.WriteFile(filepath.Join(st, driverFile), b, 0o600)
+	r = f.cli(nil, "stop", "-state", st)
+	eq(t, r.code, exitError)
+	contains(t, r.stderr, "is not this state dir's driver")
+}
+
+// A second launch while one holds launch.lock is refused.
+func TestLaunchLock(t *testing.T) {
+	f := newFixture(t)
+	holdLock(t, filepath.Join(f.stateDir(), "launch.lock"))
+	r := f.launch(nil)
+	eq(t, r.code, exitError)
+	contains(t, r.stderr, "another launch is starting a driver")
+}
+
+// A launch that returned, then one that crashed, then one refused at its
+// launch check: resume replays the crashed launch, as summary.json is the
+// first launch's.
+func TestResumeAfterCrashThenRefusal(t *testing.T) {
+	f := newFixture(t)
+	f.git("update-ref", "refs/lsf/f/pause", "HEAD")
+	r := f.launch(nil)
+	eq(t, r.code, 0, r.stderr)
+	f.cli(nil, "watch", "-state", f.stateDir())
+	f.git("update-ref", "-d", "refs/lsf/f/pause")
+
+	r = f.launch([]string{"STUB_MODE=hang"})
+	d, err := readDriver(f.stateDir())
+	if err == nil {
+		t.Cleanup(func() { killRun(t, f, d.PID) })
+	}
+	eq(t, r.code, 0, r.stderr)
+	waitFor(t, 20*time.Second, "the call's container", func() bool {
+		s, _ := f.status()
+		return len(s.Containers) > 0
+	})
+	killRun(t, f, d.PID)
+	w, _ := f.decode(f.cli(nil, "watch", "-state", f.stateDir()))
+	eq(t, w.Driver, driverCrashed)
+
+	r = f.launch([]string{"STUB_PODMAN_NOIMAGE=1"})
+	eq(t, r.code, exitError)
+	s, _ := f.status()
+	eq(t, s.Driver, driverFailed)
+
+	f.git("update-ref", "refs/lsf/f/pause", "HEAD") // the resumed run pauses at load
+	r = f.cli(nil, "resume", "-state", f.stateDir(), "-config", f.host)
+	eq(t, r.code, 0, r.stderr)
+	w, _ = f.decode(f.cli(nil, "watch", "-state", f.stateDir()))
+	eq(t, w.Driver, driverEnded)
+	eq(t, outcomeStatus(t, w), "paused")
 }
