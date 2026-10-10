@@ -273,3 +273,19 @@ func readFile(t *testing.T, path string) string {
 	}
 	return string(b)
 }
+
+// status runs status on the fixture's state dir and decodes it.
+func (f *fixture) status() (report, int) {
+	f.t.Helper()
+	return f.decode(f.cli(nil, "status", "-state", f.stateDir()))
+}
+
+// decode decodes a status or watch report.
+func (f *fixture) decode(r result) (report, int) {
+	f.t.Helper()
+	var rep report
+	if err := json.Unmarshal([]byte(r.stdout), &rep); err != nil {
+		f.t.Fatalf("report: %v: %q %q", err, r.stdout, r.stderr)
+	}
+	return rep, r.code
+}
