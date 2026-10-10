@@ -11,15 +11,15 @@ func retainsPlan(id, retains string) string {
 }
 
 func TestParseRetains(t *testing.T) {
-	p, problems := ParsePlanGraph(retainsPlan("u", "[out/data, results.csv, .tmp, a/.git]"))
+	p, problems := ParsePlanGraph(retainsPlan("u", "[out/data, results.csv, .tmp, a/.git, .gitignore]"))
 	if len(problems) != 0 {
 		t.Fatalf("problems: %v", problems)
 	}
-	if got := p.Units[0].Retains; !slices.Equal(got, []string{"out/data", "results.csv", ".tmp", "a/.git"}) {
+	if got := p.Units[0].Retains; !slices.Equal(got, []string{"out/data", "results.csv", ".tmp", "a/.git", ".gitignore"}) {
 		t.Errorf("retains: %q", got)
 	}
 	b, _ := MarshalJS(p.Units[0], "")
-	if !strings.Contains(string(b), `"retains":["out/data","results.csv",".tmp","a/.git"]`) {
+	if !strings.Contains(string(b), `"retains":["out/data","results.csv",".tmp","a/.git",".gitignore"]`) {
 		t.Errorf("JSON: %s", b)
 	}
 	// Absent and empty both leave the unit's JSON as it was.
@@ -120,8 +120,9 @@ func TestParseDeclarationStore(t *testing.T) {
 		t.Errorf("combined: %v %s", problems, d3.Identity())
 	}
 	for _, c := range []struct{ name, body, want string }{
-		{"relative", "store: srv/s\n", `store must be a clean absolute directory path other than /; got "srv/s"`},
+		{"relative", "store: srv/s\n", `store must be a clean absolute directory path other than /, without control characters; got "srv/s"`},
 		{"root", "store: /\n", `got "/"`},
+		{"control", "store: \"/srv/a\\nb\"\n", `got "/srv/a\nb"`},
 		{"unclean", "store: /srv/../s\n", `got "/srv/../s"`},
 		{"trailing slash", "store: /srv/s/\n", `got "/srv/s/"`},
 		{"null", "store:\n", "got null"},

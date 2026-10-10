@@ -85,7 +85,8 @@ func TestRetainsNeedStore(t *testing.T) {
 		"no block":    {strings.Replace(retaining, "```yaml lsf-gates", "```yaml not-gates", 1), want},
 		"store":       {strings.Replace(retaining, "gates:\n  - name: tests", "store: /srv/lsf-store\ngates:\n  - name: tests", 1), ""},
 		"store alone": {strings.Replace(retaining, "gates:\n  - name: tests\n    command: go test ./...\n", "store: /srv/lsf-store\n", 1), ""},
-		"bad store":   {strings.Replace(retaining, "gates:\n  - name: tests", "store: srv\ngates:\n  - name: tests", 1), "invalid-plan [store]: gates block: store must be a clean absolute directory path other than /; got \"srv\"\n"},
+		"bad store":   {strings.Replace(retaining, "gates:\n  - name: tests", "store: srv\ngates:\n  - name: tests", 1), "invalid-plan [store]: gates block: store must be a clean absolute directory path other than /, without control characters; got \"srv\"\n"},
+		"bad block":   {strings.Replace(retaining, "    command: go test ./...\n", "", 1), "invalid-plan [tests]: gates block: tests: command must be a non-empty string\n"},
 		"bad retains": {strings.Replace(ok, "    type: feature\n", "    type: feature\n    retains: [/abs]\n", 1), "invalid-plan [parser]: parser: retains \"/abs\": must be a path relative to the clone, not absolute\n" + want},
 	} {
 		code, out, errOut := runCmd("-decisions", testdata+"ok.decisions.md", writeTemp(t, "x.plan.md", c.plan))

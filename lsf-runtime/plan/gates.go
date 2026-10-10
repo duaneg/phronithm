@@ -91,8 +91,8 @@ func ParseDeclaration(markdown string) (*Declaration, []Problem) {
 	rawStore, hasStore := top.Get("store")
 	if hasStore {
 		s, ok := rawStore.(string)
-		if !ok || !filepath.IsAbs(s) || filepath.Clean(s) != s || s == "/" {
-			problems = append(problems, gatesProblem("store must be a clean absolute directory path other than /; got "+jsJSON(rawStore), "store"))
+		if !ok || !filepath.IsAbs(s) || filepath.Clean(s) != s || s == "/" || strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+			problems = append(problems, gatesProblem("store must be a clean absolute directory path other than /, without control characters; got "+jsJSON(rawStore), "store"))
 		}
 		d.Store = s
 	}
