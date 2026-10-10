@@ -142,7 +142,7 @@ func readHost(path string) (map[string]json.RawMessage, string, error) {
 	}
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, "", fmt.Errorf("host config %s does not exist: create it (%s) or pass -config", path, configDoc)
+		return nil, "", fmt.Errorf("host config %s does not exist: create it (lsf-runtime config init; %s) or pass -config", path, configDoc)
 	}
 	if err != nil {
 		return nil, "", err
@@ -166,6 +166,9 @@ func readHost(path string) (map[string]json.RawMessage, string, error) {
 	}
 	if len(set) > 0 {
 		return nil, "", fmt.Errorf("host config %s: set by the CLI per launch, remove: %s", path, strings.Join(set, ", "))
+	}
+	if u := unfilled(host); len(u) > 0 {
+		return nil, "", fmt.Errorf("host config %s: fill in the starter's %s fields: %s", path, strings.TrimSpace(required), strings.Join(u, ", "))
 	}
 	return host, path, nil
 }

@@ -108,6 +108,9 @@ type leftovers struct {
 	Scratch []string `json:"scratch"`
 	Merge   []string `json:"merge"`
 	Partial []string `json:"partial"`
+	// Retain are the state dir's retain staging and scratch directories
+	// in the stores its retain records name.
+	Retain []string `json:"retain"`
 }
 
 // statusFile is the runtime's status.json.
@@ -139,6 +142,7 @@ func readDriver(state string) (driverRecord, error) {
 // launched is what status reads from launch.json.
 type launched struct {
 	Repo      string          `json:"repo"`
+	StateDir  string          `json:"stateDir"`
 	PodmanBin string          `json:"podmanBin"`
 	PluginDir string          `json:"pluginDir"`
 	Args      json.RawMessage `json:"args"`
@@ -225,7 +229,7 @@ type fallback struct{ repo, name string }
 // left out and named in errors.
 func statusOf(state string, fb fallback) report {
 	r := report{StateDir: state, Repo: fb.repo, Name: fb.name, XferRefs: []string{}, Containers: []string{}}
-	r.Leftovers = leftovers{Clone: []string{}, Scratch: []string{}, Merge: []string{}, Partial: []string{}}
+	r.Leftovers = leftovers{Clone: []string{}, Scratch: []string{}, Merge: []string{}, Partial: []string{}, Retain: []string{}}
 	note := func(err error) {
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			r.Errors = append(r.Errors, err.Error())
@@ -273,9 +277,12 @@ func statusOf(state string, fb fallback) report {
 		}
 	}
 
-	podman, pauseRef := "podman", ""
+	podman, pauseRef, runState := "podman", "", state
 	if l, err := readLaunched(state); err == nil {
 		r.Repo = l.Repo
+		if l.StateDir != "" {
+			runState = l.StateDir
+		}
 		if l.PodmanBin != "" {
 			podman = l.PodmanBin
 		}
@@ -307,6 +314,9 @@ func statusOf(state string, fb fallback) report {
 			r.Leftovers.Partial = append(r.Leftovers.Partial, rel)
 		}
 	}
+	retain, errs := retainLeftovers(state, runState)
+	r.Leftovers.Retain = append(r.Leftovers.Retain, retain...)
+	r.Errors = append(r.Errors, errs...)
 	if r.Repo != "" {
 		refs, err := xferRefs(r.Repo)
 		note(err)
@@ -320,6 +330,48 @@ func statusOf(state string, fb fallback) report {
 		r.Containers = append(r.Containers, names...)
 	}
 	return r
+}
+
+// retainLeftovers are the retain staging and scratch directories, by
+// path, in each store named by a record in state's retained/: every entry
+// named with runState's RetainPrefix, whatever its record says, so one a
+// done or edited record no longer names is listed too. runState is the
+// state dir as the runtime spelled it (launch.json's), which the prefix
+// hashes.
+func retainLeftovers(state, runState string) (dirs, errs []string) {
+	recs, _ := filepath.Glob(filepath.Join(state, "retained", "*.json"))
+	prefix := lsfrt.RetainPrefix(runState)
+	seen := map[string]bool{}
+	for _, rec := range recs {
+		var r struct {
+			Store string `json:"store"`
+		}
+		b, err := os.ReadFile(rec)
+		if err == nil {
+			err = json.Unmarshal(b, &r)
+		}
+		if err == nil && !filepath.IsAbs(r.Store) {
+			err = fmt.Errorf("store %q is not an absolute path", r.Store)
+		}
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("retain record %s: %v", rec, err))
+			continue
+		}
+		if seen[r.Store] {
+			continue
+		}
+		seen[r.Store] = true
+		es, err := os.ReadDir(r.Store)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, fmt.Sprintf("retain store %s: %v", r.Store, err))
+		}
+		for _, e := range es {
+			if strings.HasPrefix(e.Name(), prefix) {
+				dirs = append(dirs, filepath.Join(r.Store, e.Name()))
+			}
+		}
+	}
+	return dirs, errs
 }
 
 // entries are a directory's entry names; none when it is missing.

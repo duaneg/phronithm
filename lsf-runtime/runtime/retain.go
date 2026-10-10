@@ -474,13 +474,20 @@ func (rt *Runtime) finishRetain(unit, store, dest, recPath string, rec *retainRe
 // retainDirs are the staging and scratch directories for unit's move: in
 // the store, hidden, named for the state dir and the unit.
 func retainDirs(store, stateDir, unit string) (staging, scratch string) {
+	base := filepath.Join(store, RetainPrefix(stateDir)+journalKey(unit))
+	return base + ".partial", base + ".copy"
+}
+
+// RetainPrefix is the name prefix of a state dir's retain staging and
+// scratch directories in a store: ".lsf-retain-", the first 4 bytes of
+// the SHA-256 of the state dir's absolute path in hex, and "-".
+func RetainPrefix(stateDir string) string {
 	abs, err := filepath.Abs(stateDir)
 	if err != nil {
 		abs = stateDir
 	}
 	sum := sha256.Sum256([]byte(abs))
-	base := filepath.Join(store, ".lsf-retain-"+hex.EncodeToString(sum[:4])+"-"+journalKey(unit))
-	return base + ".partial", base + ".copy"
+	return ".lsf-retain-" + hex.EncodeToString(sum[:4]) + "-"
 }
 
 // ownRetainDirs reports whether a record's staging and scratch directories
