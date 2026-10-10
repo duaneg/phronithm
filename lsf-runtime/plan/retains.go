@@ -1,7 +1,9 @@
 package plan
 
 import (
+	"errors"
 	"path"
+	"slices"
 	"strings"
 )
 
@@ -45,6 +47,18 @@ func retainsProblems(ref string, retains []string) []Problem {
 		}
 	}
 	return problems
+}
+
+// CheckRetainsPaths is the load's checks on a unit's retains, for a caller
+// that re-checks them: nil when every entry is acceptable.
+func CheckRetainsPaths(retains []string) error {
+	if slices.Contains(retains, "") {
+		return errors.New("retains has an empty entry")
+	}
+	if ps := retainsProblems("retains", retains); len(ps) > 0 {
+		return errors.New(ps[0].Statement)
+	}
+	return nil
 }
 
 // SafeUnitDir reports whether a unit id can name one directory in the

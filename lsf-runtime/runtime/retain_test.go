@@ -104,11 +104,23 @@ func retainLaunch(t *testing.T, body func(ctx context.Context, rt *Runtime, stor
 	cfg, _ := testConfig(t)
 	commitFile(t, cfg.Repo, ".gitignore", "*.log\nout/\n")
 	store := t.TempDir()
+	t.Cleanup(func() { writable(store); writable(cfg.StateDir) })
 	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
 		body(ctx, rt, store)
 		return nil, nil
 	})
 	return cfg
+}
+
+// writable gives every directory under root owner permissions, so a test's
+// read-only trees can be removed.
+func writable(root string) {
+	filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			os.Chmod(p, 0o755)
+		}
+		return nil
+	})
 }
 
 func storeEntries(t *testing.T, store string) []string {
@@ -138,6 +150,7 @@ func TestMoveRetainedRename(t *testing.T) {
 		_, newer = mustCall(t, ctx, rt, "implement:U", "worktree")
 		writeTree(t, older, map[string]string{"out/a.txt": "old", "only-old.log": "o"})
 		writeTree(t, newer, map[string]string{"out/a.txt": "new", "out/sub/b.txt": "b", "run.log": "r", "keep.log": "k"})
+		os.Chmod(filepath.Join(newer, "out"), 0o555)
 		res, err = rt.MoveRetained(ctx, "U", store, "main", []string{"run.log", "out", "only-old.log", "nothere"}, []string{"plan:U", "implement:U"})
 		again, err2 = rt.MoveRetained(ctx, "U", store, "main", []string{"run.log", "out", "only-old.log", "nothere"}, []string{"plan:U", "implement:U"})
 		removal = remove(t, ctx, rt, "plan:U", true)
@@ -155,6 +168,9 @@ func TestMoveRetainedRename(t *testing.T) {
 		t.Errorf("\n got %+v\nagain %+v\nwant %+v", res, again, want)
 	}
 	got := snapshot(t, dest)
+	if got["out"] != "dr-xr-xr-x" {
+		t.Errorf("a read-only directory moves with its mode: %q", got["out"])
+	}
 	if got["out/a.txt"] != "-rw-r--r-- new" || got["out/sub/b.txt"] != "-rw-r--r-- b" || got["run.log"] != "-rw-r--r-- r" || got["only-old.log"] != "-rw-r--r-- o" || len(got) != 7 {
 		t.Errorf("dest: %v", got)
 	}
@@ -340,11 +356,17 @@ func TestMoveRetainedRefusals(t *testing.T) {
 		{"symlinked parent", "U", []string{"via/secret.txt"}, func(t *testing.T, clone string) {
 			os.Symlink(outside, filepath.Join(clone, "via"))
 		}, "via is a symlink"},
+		{"second path refused", "U", []string{"out", "zfifo"}, func(t *testing.T, clone string) {
+			if err := syscall.Mkfifo(filepath.Join(clone, "zfifo"), 0o644); err != nil {
+				t.Skip(err)
+			}
+		}, "zfifo is a special file"},
+		{"git path", "U", []string{"out", ".git"}, nil, `retains ".git": must not be in .git`},
 		{"unsafe unit", "../U", []string{"out"}, nil, `unit id "../U" cannot name a store directory`},
 		{"colon unit", "U:1", []string{"out"}, nil, "cannot name a store directory"},
 		{"no space", "U", []string{"out"}, func(t *testing.T, clone string) {
 			deviceOf = func(fi fs.FileInfo) uint64 {
-				if strings.Contains(fi.Name(), "lsf-retain") || fi.Name() == "out" {
+				if fi.Name() == "out" { // the source; the store is elsewhere
 					return 1
 				}
 				return 2
@@ -358,7 +380,7 @@ func TestMoveRetainedRefusals(t *testing.T) {
 			var err error
 			var before, after map[string]string
 			var store string
-			retainLaunch(t, func(ctx context.Context, rt *Runtime, st string) {
+			cfg := retainLaunch(t, func(ctx context.Context, rt *Runtime, st string) {
 				store = st
 				_, clone := mustCall(t, ctx, rt, "implement:"+c.unit, "worktree")
 				writeTree(t, clone, map[string]string{"out/a.txt": "aaaa"})
@@ -377,6 +399,9 @@ func TestMoveRetainedRefusals(t *testing.T) {
 			}
 			if es := storeEntries(t, store); len(es) != 0 {
 				t.Errorf("store: %v", es)
+			}
+			if exists(filepath.Join(cfg.StateDir, "retained")) {
+				t.Error("a refusal wrote a move record")
 			}
 		})
 	}
@@ -517,9 +542,23 @@ func TestMoveRetainedKillResume(t *testing.T) {
 				store = st
 				_, clone := mustCall(t, ctx, rt, "implement:"+unit, "worktree")
 				writeTree(t, clone, files)
+				os.Chmod(filepath.Join(clone, "out", "b"), 0o555)
 				hit = killAt(t, c.point, c.n, func() {
 					rt.MoveRetained(ctx, unit, store, "main", []string{"out", "res.log"}, []string{"implement:" + unit})
 				})
+				// After the kill every path is whole somewhere: its clone,
+				// staging or the destination; the destination exists only
+				// once staging is renamed.
+				staging, _ := retainDirs(store, rt.cfg.StateDir, unit)
+				dest := filepath.Join(store, unit)
+				for _, p := range []string{"out/a.txt", "out/b/c.txt", "res.log"} {
+					if !exists(filepath.Join(clone, p)) && !exists(filepath.Join(staging, p)) && !exists(filepath.Join(dest, p)) {
+						t.Errorf("after the kill %s is nowhere", p)
+					}
+				}
+				if late := c.point == "after-staging-rename" || c.point == "before-done-record"; exists(dest) != late {
+					t.Errorf("destination exists %v after a kill at %s", exists(dest), c.point)
+				}
 				if b, err := os.ReadFile(rt.retainRecordPath(unit)); err == nil {
 					var rec retainRecord
 					json.Unmarshal(b, &rec)
@@ -536,7 +575,7 @@ func TestMoveRetainedKillResume(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := snapshot(t, filepath.Join(store, unit))
-			if got["out/a.txt"] != "-rw-r--r-- a" || got["out/b/c.txt"] != "-rw-r--r-- c" || got["res.log"] != "-rw-r--r-- r" || len(got) != 6 {
+			if got["out/a.txt"] != "-rw-r--r-- a" || got["out/b/c.txt"] != "-rw-r--r-- c" || got["res.log"] != "-rw-r--r-- r" || got["out/b"] != "dr-xr-xr-x" || len(got) != 6 {
 				t.Errorf("dest: %v", got)
 			}
 			if es := storeEntries(t, store); !slices.Equal(es, []string{unit}) {
@@ -557,7 +596,7 @@ func TestMoveRetainedKillResume(t *testing.T) {
 // directory removed after a recorded move is an error; a done record whose
 // destination is gone returns its result.
 func TestMoveRetainedDamage(t *testing.T) {
-	var errStaging, errDone error
+	var errStaging, errDone, errAdded error
 	var done RetainedMove
 	cfg := retainLaunch(t, func(ctx context.Context, rt *Runtime, store string) {
 		_, c := mustCall(t, ctx, rt, "implement:S", "worktree")
@@ -576,6 +615,8 @@ func TestMoveRetainedDamage(t *testing.T) {
 		}
 		os.Rename(filepath.Join(store, "G"), filepath.Join(store, "G.archived"))
 		done, errDone = rt.MoveRetained(ctx, "G", store, "main", []string{"a.log"}, []string{"implement:G"})
+		writeTree(t, c, map[string]string{"late.log": "l"})
+		_, errAdded = rt.MoveRetained(ctx, "G", store, "main", []string{"a.log", "late.log"}, []string{"implement:G"})
 	})
 	if errStaging == nil || !strings.Contains(errStaging.Error(), "a.log was moved to the staging directory but is not there now") {
 		t.Errorf("staging gone: %v", errStaging)
@@ -583,19 +624,30 @@ func TestMoveRetainedDamage(t *testing.T) {
 	if errDone != nil || len(done.Moved) != 1 {
 		t.Errorf("done, dest gone: %+v %v", done, errDone)
 	}
+	if errAdded == nil || !strings.Contains(errAdded.Error(), "late.log is declared but was not part of the completed move") {
+		t.Errorf("a path declared after the move: %v", errAdded)
+	}
 	if b, _ := os.ReadFile(filepath.Join(cfg.StateDir, "log.txt")); !strings.Contains(string(b), "G: retained paths were moved to") {
 		t.Error("no warning for a moved destination")
 	}
 
-	var errCorrupt error
-	retainLaunch(t, func(ctx context.Context, rt *Runtime, store string) {
-		p := rt.retainRecordPath("X")
-		os.MkdirAll(filepath.Dir(p), 0o755)
-		os.WriteFile(p, []byte("{not json"), 0o644)
-		_, errCorrupt = rt.MoveRetained(ctx, "X", store, "main", []string{"a"}, nil)
-	})
-	if r, ok := IsStop(errCorrupt); !ok || r != StopRuntimeError {
-		t.Errorf("corrupt record: %v", errCorrupt)
+	for name, body := range map[string]func(store string) string{
+		"corrupt": func(string) string { return "{not json" },
+		"foreign staging": func(store string) string {
+			b, _ := json.Marshal(retainRecord{Phase: "moving", Unit: "X", Store: store, Staging: t.TempDir(), Scratch: filepath.Join(store, ".lsf-retain-x.copy")})
+			return string(b)
+		},
+	} {
+		var errCorrupt error
+		retainLaunch(t, func(ctx context.Context, rt *Runtime, store string) {
+			p := rt.retainRecordPath("X")
+			os.MkdirAll(filepath.Dir(p), 0o755)
+			os.WriteFile(p, []byte(body(store)), 0o644)
+			_, errCorrupt = rt.MoveRetained(ctx, "X", store, "main", []string{"a"}, nil)
+		})
+		if r, ok := IsStop(errCorrupt); !ok || r != StopRuntimeError {
+			t.Errorf("%s record: %v", name, errCorrupt)
+		}
 	}
 }
 

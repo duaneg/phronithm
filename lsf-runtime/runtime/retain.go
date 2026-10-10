@@ -98,7 +98,9 @@ func (rt *Runtime) writeRetainRecord(path string, rec *retainRecord) error {
 // Missing. Every check runs before anything changes, so a refusal (a
 // symlink on the path, a special file, a destination that exists, too
 // little space, a latest holder that cleanup keeps) leaves the clones and
-// the store as they were. A path on the store's filesystem is renamed; one
+// the store as they were; a failure during the moves (a rename refused, a
+// full disk) leaves the paths moved so far in staging, for a rerun. A path
+// on the store's filesystem is renamed; one
 // on another (EXDEV) is copied to a scratch directory, verified (sha256,
 // size and mode of each file, each link's target, the set of entries) and
 // renamed into staging before its source is removed.
@@ -127,6 +129,9 @@ func (rt *Runtime) MoveRetained(ctx context.Context, unit, store, integration st
 	if !plan.SafeUnitDir(unit) {
 		return res, fmt.Errorf("unit id %q cannot name a store directory", unit)
 	}
+	if err := plan.CheckRetainsPaths(paths); err != nil {
+		return res, fmt.Errorf("%s: %w", unit, err)
+	}
 	if !filepath.IsAbs(store) || filepath.Clean(store) != store {
 		return res, fmt.Errorf("%s: store %q is not a clean absolute path", unit, store)
 	}
@@ -151,13 +156,25 @@ func (rt *Runtime) MoveRetained(ctx context.Context, unit, store, integration st
 	switch b, err := os.ReadFile(recPath); {
 	case err == nil:
 		rec = &retainRecord{}
-		if err := json.Unmarshal(b, rec); err != nil || rec.Unit != unit || rec.Staging == "" || rec.Phase == "done" && rec.Result == nil {
+		if err := json.Unmarshal(b, rec); err != nil || rec.Unit != unit || rec.Phase == "done" && rec.Result == nil || !ownRetainDirs(rec) {
 			return res, rt.setStop(StopRuntimeError, fmt.Sprintf("%s: retained-move record %s unreadable (%v); inspect it, the store's staging directory and the unit's clones", unit, recPath, err))
 		}
 	case !errors.Is(err, fs.ErrNotExist):
 		return res, rt.setStop(StopRuntimeError, fmt.Sprintf("%s: retained-move record %s: %v", unit, recPath, err))
 	}
 	if rec != nil && rec.Phase == "done" {
+		covered := map[string]bool{}
+		for _, m := range rec.Result.Moved {
+			covered[m.Path] = true
+		}
+		for _, m := range rec.Result.Missing {
+			covered[m] = true
+		}
+		for _, p := range paths {
+			if !covered[p] {
+				return res, fmt.Errorf("%s: %s is declared but was not part of the completed move recorded in %s", unit, p, recPath)
+			}
+		}
 		if rec.Result.Dest != "" {
 			if fi, err := os.Lstat(rec.Result.Dest); err != nil || devIno(fi) != [2]uint64{rec.Dev, rec.Ino} {
 				rt.Log(fmt.Sprintf("%s: retained paths were moved to %s, which is now absent or replaced", unit, rec.Result.Dest))
@@ -283,11 +300,8 @@ func (rt *Runtime) MoveRetained(ctx context.Context, unit, store, integration st
 
 	// Moves.
 	if rec == nil {
-		if len(moves) == 0 {
+		if len(moves) == 0 && len(already) == 0 {
 			r := RetainedMove{Unit: unit, Moved: []RetainedPath{}, Missing: missing}
-			if len(already) > 0 {
-				return res, fmt.Errorf("%s: internal: staged paths without a record", unit)
-			}
 			return rt.finishRetain(unit, store, "", recPath, &retainRecord{Unit: unit, Store: store, Staging: staging, Scratch: scratch, Moved: []RetainedPath{}}, &r)
 		}
 		rec = &retainRecord{Phase: "moving", Unit: unit, Store: store, Staging: staging, Scratch: scratch, Moved: []RetainedPath{}}
@@ -311,14 +325,14 @@ func (rt *Runtime) MoveRetained(ctx context.Context, unit, store, integration st
 			return res, wrap(err)
 		}
 		method := "rename"
-		err := renameFn(m.src, dst)
+		err := renameDir(renameFn, m.src, dst)
 		switch {
 		case err == nil:
 			retainHook("after-path-rename")
 			syncDir(filepath.Dir(m.src))
 		case errors.Is(err, syscall.EXDEV):
 			method = "copy"
-			if err := os.RemoveAll(scratch); err != nil {
+			if err := removeTree(scratch); err != nil {
 				return res, wrap(err)
 			}
 			if err := os.Mkdir(scratch, 0o700); err != nil {
@@ -333,7 +347,7 @@ func (rt *Runtime) MoveRetained(ctx context.Context, unit, store, integration st
 				return res, wrap(fmt.Errorf("%s: %s: copy failed verification, source kept: %w", unit, m.path, err))
 			}
 			retainHook("after-copy-verify")
-			if err := os.Rename(x, dst); err != nil {
+			if err := renameDir(os.Rename, x, dst); err != nil {
 				return res, wrap(err)
 			}
 			retainHook("after-final-name")
@@ -356,7 +370,7 @@ func (rt *Runtime) MoveRetained(ctx context.Context, unit, store, integration st
 		}
 		retainHook("after-path-record")
 		if method == "copy" {
-			if err := os.RemoveAll(m.src); err != nil {
+			if err := removeTree(m.src); err != nil {
 				return res, wrap(fmt.Errorf("%s: remove copied source %s: %w", unit, m.src, err))
 			}
 			retainHook("after-source-remove")
@@ -368,10 +382,10 @@ func (rt *Runtime) MoveRetained(ctx context.Context, unit, store, integration st
 	}
 	r := RetainedMove{Unit: unit, Dest: dest, Moved: moved, Missing: missing}
 	if len(moved) == 0 {
-		if err := os.RemoveAll(staging); err != nil {
+		if err := removeTree(staging); err != nil {
 			return res, wrap(err)
 		}
-		os.RemoveAll(scratch)
+		removeTree(scratch)
 		r.Dest = ""
 		return rt.finishRetain(unit, store, "", recPath, rec, &r)
 	}
@@ -381,7 +395,7 @@ func (rt *Runtime) MoveRetained(ctx context.Context, unit, store, integration st
 // renameRetained renames the staging directory to dest and finishes. r is
 // nil on a rerun from the renaming phase, which takes the recorded result.
 func (rt *Runtime) renameRetained(unit, store, staging, scratch, dest, recPath string, rec *retainRecord, r *RetainedMove, wrap func(error) error) (RetainedMove, error) {
-	if err := os.RemoveAll(scratch); err != nil {
+	if err := removeTree(scratch); err != nil {
 		return RetainedMove{}, wrap(err)
 	}
 	if rec.Phase != "renaming" {
@@ -439,6 +453,47 @@ func retainDirs(store, stateDir, unit string) (staging, scratch string) {
 	sum := sha256.Sum256([]byte(abs))
 	base := filepath.Join(store, ".lsf-retain-"+hex.EncodeToString(sum[:4])+"-"+journalKey(unit))
 	return base + ".partial", base + ".copy"
+}
+
+// ownRetainDirs reports whether a record's staging and scratch directories
+// are this move's own: directly in its store and named as retainDirs names
+// them, so a record edited by hand cannot make a rerun remove another tree.
+func ownRetainDirs(rec *retainRecord) bool {
+	ok := func(d, suffix string) bool {
+		return filepath.Dir(d) == rec.Store && strings.HasPrefix(filepath.Base(d), ".lsf-retain-") && strings.HasSuffix(d, suffix)
+	}
+	return rec.Store != "" && ok(rec.Staging, ".partial") && ok(rec.Scratch, ".copy") &&
+		strings.TrimSuffix(rec.Staging, ".partial") == strings.TrimSuffix(rec.Scratch, ".copy")
+}
+
+// renameDir renames src to dst with rename. A directory without owner
+// write permission, which rename(2) cannot move to another parent, gets it
+// for the rename and loses it after.
+func renameDir(rename func(string, string) error, src, dst string) error {
+	fi, err := os.Lstat(src)
+	if err != nil || !fi.IsDir() || fi.Mode().Perm()&0o200 != 0 {
+		return rename(src, dst)
+	}
+	if err := os.Chmod(src, fi.Mode().Perm()|0o200); err != nil {
+		return err
+	}
+	if err := rename(src, dst); err != nil {
+		os.Chmod(src, fi.Mode().Perm())
+		return err
+	}
+	return os.Chmod(dst, fi.Mode().Perm())
+}
+
+// removeTree is os.RemoveAll over a tree that may hold directories without
+// owner write or search permission (a copied read-only tree).
+func removeTree(root string) error {
+	filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			os.Chmod(p, 0o700)
+		}
+		return nil
+	})
+	return os.RemoveAll(root)
 }
 
 // insideClone checks that rel, a clean relative path, names a file inside
