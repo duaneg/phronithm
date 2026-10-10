@@ -1,0 +1,18 @@
+# Reference image for lsf-runtime agent calls (docs/design/lsf-runtime.md,
+# Permissions → Image). It carries no claude and no plugin: both are
+# bind-mounted read-only from the host at each call.
+#
+# Extend it with the project's toolchain (a FROM line naming this image's
+# digest, then the packages the stages' builds and tests need), build it,
+# and name the result in the runtime config by digest:
+#
+#   podman build -t localhost/lsf-ref container/
+#   podman image inspect --format '{{.Digest}}' localhost/lsf-ref
+#   "image": "localhost/lsf-ref@sha256:<that digest>"
+#
+# The digest pins the image, not how it was built: packages come from the
+# distribution's current archive at build time.
+FROM docker.io/library/debian:trixie-slim@sha256:918311b7b6c4c6f68b232ba516584925f6c78ad82b6fd534b98979df6438e483
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends bash ca-certificates curl git procps ripgrep \
+ && rm -rf /var/lib/apt/lists/*

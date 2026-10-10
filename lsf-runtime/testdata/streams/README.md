@@ -20,3 +20,7 @@ Trimming:
 - Paths are replaced with `/work/repo` and `/home/user`.
 
 Other values are unchanged.
+
+## Re-check against 2.1.294 (R17)
+
+`2.1.294/` holds `ok`, `permanent`, `skill-loaded`, `skill-tool`, `skill-absent` and `skill-unknown` re-recorded on 2026-10-10 from the 2.1.294 binary called directly (`DISABLE_AUTOUPDATER=1`), haiku/low, with the container-era flags (`--strict-mcp-config --plugin-dir <phronithm> --tools <…> --dangerously-skip-permissions`) and a verdict-and-count schema, trimmed as above. Compared per event type with the 2.1.289 files: no field the runtime reads moved. `assistant` lost `wire_tool_inputs` and `thinking_duration_ms`, `result` gained `safety_stops` and `user` gained `tool_result_meta`, none read by `stream.go`. `TestClassifyFixtures2_1_294` classifies them as their 2.1.289 counterparts. The 2.1.289 files stay: other tests depend on their outputs. A session-limit stream cannot be forced and stays unverified.

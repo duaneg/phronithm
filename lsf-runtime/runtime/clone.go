@@ -558,6 +558,8 @@ func checkRepo(cfg Config) error {
 	}
 	if gitRun(ctx, cfg.Repo, "cat-file", "-e", tip+":.gitmodules") == nil {
 		errs = append(errs, fmt.Errorf("has submodules (.gitmodules at %s)", tip))
+	} else if tree, err := gitStdout(ctx, cfg.Repo, "ls-tree", "-r", "-z", tip); err == nil && (strings.HasPrefix(string(tree), "160000 ") || strings.Contains(string(tree), "\x00160000 ")) {
+		errs = append(errs, fmt.Errorf("has a nested repository (a gitlink at %s)", tip))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("repo %s: per-call clones are untested with a repo that %w", cfg.Repo, err)

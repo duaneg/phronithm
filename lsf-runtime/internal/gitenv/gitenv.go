@@ -3,6 +3,8 @@
 package gitenv
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -83,22 +85,29 @@ func CloneGitDir(dir string) error {
 // looks inside a gitlink, a .gitmodules ignore setting overriding the
 // config's default, and runs the nested repository's own filter on the
 // host. ls-files and ls-tree read only the index and objects.
-func CloneGitlinks(dir string) error {
-	for _, args := range [][]string{{"ls-files", "--stage", "-z"}, {"ls-tree", "-r", "-z", "HEAD"}} {
-		cmd := exec.Command("git", append(slices.Clone(CloneArgs), args...)...)
+func CloneGitlinks(ctx context.Context, dir string) error {
+	git := func(args ...string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, "git", append(slices.Clone(CloneArgs), args...)...)
 		cmd.Dir = dir
 		cmd.Env = append(Env(true), Ceiling(dir))
-		out, err := cmd.Output()
+		return cmd
+	}
+	for _, args := range [][]string{{"ls-files", "--stage", "-z"}, {"ls-tree", "-r", "-z", "HEAD"}} {
+		out, err := git(args...).Output()
 		if err != nil {
-			if args[0] == "ls-tree" && exec.Command("git", "-C", dir, "rev-parse", "-q", "--verify", "HEAD").Run() != nil {
+			if args[0] == "ls-tree" && git("rev-parse", "-q", "--verify", "HEAD").Run() != nil {
 				continue // an unborn HEAD has no tree
+			}
+			var ee *exec.ExitError
+			if errors.As(err, &ee) {
+				err = fmt.Errorf("%w: %s", err, strings.TrimSpace(string(ee.Stderr)))
 			}
 			return fmt.Errorf("git %s in %s: %w", args[0], dir, err)
 		}
 		for _, rec := range strings.Split(string(out), "\x00") {
 			if strings.HasPrefix(rec, "160000 ") {
 				_, path, _ := strings.Cut(rec, "\t")
-				return fmt.Errorf("%s holds a nested repository (gitlink %s); the runtime's git does not run there", dir, path)
+				return fmt.Errorf("%s holds a nested repository (gitlink %s), which an agent made (a main repo with one is refused at launch); the runtime's git does not run there", dir, path)
 			}
 		}
 	}
@@ -109,7 +118,12 @@ func CloneGitlinks(dir string) error {
 // subcommand: on the command line it overrides a .gitmodules ignore
 // setting, which the config default does not.
 func IgnoreSubmodules(args []string) []string {
-	for i, a := range args {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "-c" || a == "-C" {
+			i++ // its value
+			continue
+		}
 		if strings.HasPrefix(a, "-") {
 			continue
 		}

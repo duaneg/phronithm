@@ -91,7 +91,7 @@ func (e execGit) run(ctx context.Context, dir string, args ...string) ([]byte, e
 		if err := gitenv.CloneGitDir(dir); err != nil {
 			return nil, err
 		}
-		if err := gitenv.CloneGitlinks(dir); err != nil {
+		if err := gitenv.CloneGitlinks(ctx, dir); err != nil {
 			return nil, err
 		}
 		pre = gitenv.CloneArgs

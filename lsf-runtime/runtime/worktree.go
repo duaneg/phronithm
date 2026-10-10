@@ -338,7 +338,7 @@ func cloneCmd(ctx context.Context, dir string, args ...string) *exec.Cmd {
 	if len(args) == 0 || (args[0] != "clone" && args[0] != "init") { // these two make the clone, from its parent
 		cmd.Err = gitenv.CloneGitDir(dir) // Start returns it: git never runs
 		if cmd.Err == nil {
-			cmd.Err = gitenv.CloneGitlinks(dir)
+			cmd.Err = gitenv.CloneGitlinks(ctx, dir)
 		}
 	}
 	return cmd

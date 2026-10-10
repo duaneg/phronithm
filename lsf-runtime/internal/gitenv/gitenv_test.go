@@ -1,7 +1,9 @@
 package gitenv
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -81,9 +83,37 @@ func TestIgnoreSubmodules(t *testing.T) {
 		{[]string{"diff", "--name-only", "HEAD"}, []string{"diff", "--ignore-submodules=all", "--name-only", "HEAD"}},
 		{[]string{"rev-parse", "HEAD"}, []string{"rev-parse", "HEAD"}},
 		{[]string{"commit", "-m", "diff"}, []string{"commit", "-m", "diff"}},
+		{[]string{"-c", "a=b", "-C", "status", "diff"}, []string{"-c", "a=b", "-C", "status", "diff", "--ignore-submodules=all"}},
 	} {
 		if got := IgnoreSubmodules(tc.in); !slices.Equal(got, tc.want) {
 			t.Errorf("%q: %q", tc.in, got)
 		}
+	}
+}
+
+func TestCloneGitlinks(t *testing.T) {
+	git := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.invalid"}, args...)...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	d := t.TempDir()
+	git(d, "init", "-q")
+	if err := CloneGitlinks(context.Background(), d); err != nil {
+		t.Errorf("unborn HEAD: %v", err)
+	}
+	git(d, "init", "-q", "sub")
+	git(filepath.Join(d, "sub"), "commit", "-q", "--allow-empty", "-m", "s")
+	git(d, "add", "sub") // staged only
+	if err := CloneGitlinks(context.Background(), d); err == nil || !strings.Contains(err.Error(), "gitlink sub") {
+		t.Errorf("staged gitlink: %v", err)
+	}
+	git(d, "commit", "-q", "-m", "c")
+	git(d, "rm", "-q", "--cached", "sub") // in HEAD only
+	if err := CloneGitlinks(context.Background(), d); err == nil || !strings.Contains(err.Error(), "gitlink sub") {
+		t.Errorf("gitlink in HEAD: %v", err)
 	}
 }

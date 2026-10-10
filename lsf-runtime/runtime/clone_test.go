@@ -254,8 +254,8 @@ func TestCloneStaleDirectoryStops(t *testing.T) {
 	}
 }
 
-// A shallow repo, one with submodules and one using LFS (its config or its
-// .gitattributes) are refused at launch, by name; a global LFS filter alone
+// A shallow repo, one with submodules or a gitlink without them, and one
+// using LFS (its config or its .gitattributes) are refused at launch, by name; a global LFS filter alone
 // is not use.
 func TestCloneRepoPreconditions(t *testing.T) {
 	cfg, _ := testConfig(t)
@@ -270,7 +270,12 @@ func TestCloneRepoPreconditions(t *testing.T) {
 	git(t, lfs.Repo, "config", "filter.lfs.clean", "git-lfs clean -- %f")
 	attrs, _ := testConfig(t)
 	commitFile(t, attrs.Repo, ".gitattributes", "*.bin filter=lfs diff=lfs merge=lfs -text\n")
-	for repo, want := range map[string]string{shallow: "is shallow", sub.Repo: "has submodules", lfs.Repo: "uses LFS", attrs.Repo: "uses LFS"} {
+	link, _ := testConfig(t)
+	git(t, link.Repo, "init", "-q", "nested")
+	git(t, filepath.Join(link.Repo, "nested"), "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "--allow-empty", "-m", "n")
+	git(t, link.Repo, "add", "nested")
+	git(t, link.Repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "gitlink")
+	for repo, want := range map[string]string{shallow: "is shallow", sub.Repo: "has submodules", lfs.Repo: "uses LFS", attrs.Repo: "uses LFS", link.Repo: "has a nested repository"} {
 		c, _ := testConfig(t)
 		c.Repo = repo
 		_, err := Run(context.Background(), c, func(context.Context, *Runtime) (json.RawMessage, error) { return nil, nil })

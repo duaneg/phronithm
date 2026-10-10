@@ -72,6 +72,33 @@ func TestClassifyFixtures(t *testing.T) {
 	}
 }
 
+// The streams re-recorded from the headless pin, 2.1.294 (R17), classify
+// as their 2.1.289 counterparts do. Their schema is verdict-and-count.
+func TestClassifyFixtures2_1_294(t *testing.T) {
+	const schema = `{"type":"object","properties":{"verdict":{"type":"string","enum":["pass","fail"]},"n":{"type":"integer"}},"required":["verdict","n"]}`
+	for _, tc := range []struct {
+		fixture, skill string
+		prefixed       bool
+		want           class
+	}{
+		{"ok", "", false, classOK},
+		{"permanent", "", false, classPermanent},
+		{"skill-loaded", "phronithm:critique", true, classOK},
+		{"skill-tool", "phronithm:critique", false, classOK},
+		{"skill-absent", "phronithm:critique", false, classSkillMissing},
+		{"skill-unknown", "phronithm:nonexistent-skill", true, classSkillMissing},
+	} {
+		acc := accFromFixture(t, "2.1.294/"+tc.fixture)
+		a := &attempt{acc: acc}
+		if got := classify(a, []byte(schema), tc.skill, tc.prefixed).class; got != tc.want {
+			t.Errorf("%s: class %s, want %s", tc.fixture, got, tc.want)
+		}
+		if acc.BadLines != 0 || acc.Result == nil || (tc.want == classOK && acc.Result.CostUSD <= 0) {
+			t.Errorf("%s: bad lines %d, result %+v", tc.fixture, acc.BadLines, acc.Result)
+		}
+	}
+}
+
 // A 401 or authentication_failed marks a permanent verdict auth; another
 // permanent error does not.
 func TestClassifyAuth(t *testing.T) {
