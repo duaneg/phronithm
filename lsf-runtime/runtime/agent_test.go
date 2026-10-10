@@ -55,6 +55,7 @@ func TestRetryClasses(t *testing.T) {
 		{"transient", 4, false, classTransient, 30 * time.Millisecond}, // len(Backoff)+1
 		{"fixture:permanent,ok", 1, false, classPermanent, 0},
 		{"session-noreset,ok", 2, true, classOK, 50 * time.Millisecond},
+		{"bare429,ok", 2, true, classOK, 50 * time.Millisecond},
 	} {
 		t.Run(tc.script, func(t *testing.T) {
 			cfg, stub := testConfig(t)
@@ -125,6 +126,22 @@ func TestSessionLimitWaitsAreCapped(t *testing.T) {
 	res, err := call(t, cfg, vOpts)
 	if err != nil || res.Value != nil || stubCount(t, stub) != 3 {
 		t.Fatalf("res %+v err %v spawns %d", res, err, stubCount(t, stub))
+	}
+}
+
+// A bare 429 waits the session-limit fallback and does not spend a
+// transient retry.
+func TestBare429WaitsFallback(t *testing.T) {
+	cfg, stub := testConfig(t)
+	cfg.SessionLimitFallback = Duration(50 * time.Millisecond)
+	cfg.Backoff = nil
+	t.Setenv("STUB_SCRIPT", "bare429,ok")
+	res, err := call(t, cfg, vOpts)
+	if err != nil || res.Value == nil || stubCount(t, stub) != 2 {
+		t.Fatalf("res %+v err %v spawns %d", res, err, stubCount(t, stub))
+	}
+	if countEvents(telemetry(t, cfg), "session-limit-wait") != 1 {
+		t.Error("want one session-limit-wait event")
 	}
 }
 
