@@ -72,7 +72,8 @@ var (
 // reservedEnv are names the runtime sets in the container, or that carry a
 // credential or a route; env cannot pass them. ANTHROPIC_* is reserved too.
 var reservedEnv = []string{"PATH", "HOME", "SHELL", "DISABLE_AUTOUPDATER", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
-	"NO_PROXY", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy", "CLAUDE_CODE_OAUTH_TOKEN"}
+	"NO_PROXY", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy", "CLAUDE_CODE_OAUTH_TOKEN",
+	"LSF_GATE_COMMAND", "LSF_GATE_SEQ"}
 
 // RoleRule matches when every non-empty matcher matches (AND); at least one is
 // set. Express OR as two rules. Label is an RE2 regex, unanchored: anchor it

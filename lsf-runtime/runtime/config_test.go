@@ -201,6 +201,7 @@ func TestLoadConfigRejectsContainer(t *testing.T) {
 		{`"image":"img@`, `"image":"-v/:/h@`, "name it by digest"},
 		{`"claudeVersion"`, `"env":["1BAD"],"claudeVersion"`, `"1BAD" is not a variable name`},
 		{`"claudeVersion"`, `"env":["GOOD","HTTPS_PROXY"],"claudeVersion"`, "HTTPS_PROXY is set by the runtime"},
+		{`"claudeVersion"`, `"env":["LSF_GATE_SEQ"],"claudeVersion"`, "LSF_GATE_SEQ is set by the runtime"},
 		{`"claudeVersion"`, `"env":["ANTHROPIC_API_KEY"],"claudeVersion"`, "ANTHROPIC_API_KEY is set by the runtime"},
 		{`"claudeVersion"`, `"env":["CLAUDE_CODE_OAUTH_TOKEN"],"claudeVersion"`, "CLAUDE_CODE_OAUTH_TOKEN is set by the runtime"},
 		{`"claudeVersion"`, `"env":["PATH"],"claudeVersion"`, "PATH is set by the runtime"},

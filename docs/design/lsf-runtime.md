@@ -294,7 +294,7 @@ podman run --rm -i --init --pull=never --log-driver=none --name <name> --label l
   - `DISABLE_AUTOUPDATER=1` and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`.
   - `ANTHROPIC_BASE_URL=http://127.0.0.1:<inject port>` and `ANTHROPIC_AUTH_TOKEN=<placeholder>`. The placeholder is given as `-e ANTHROPIC_AUTH_TOKEN`, its value in podman's environment, not its argv, which every local user can read.
   - With `hosts` set: `HTTPS_PROXY`, `HTTP_PROXY` and their lower-case forms at `http://127.0.0.1:<egress port>`. `NO_PROXY` and `no_proxy` are `127.0.0.1,localhost,::1` in every case: loopback stays in the container's own network namespace (requester, 2026-10-10).
-  - The names in a config `env` passthrough list, each `-e NAME` taking its value from the runtime's environment. A name the runtime sets, a proxy variable, `ANTHROPIC_*` and `CLAUDE_CODE_OAUTH_TOKEN` are refused.
+  - The names in a config `env` passthrough list, each `-e NAME` taking its value from the runtime's environment. A name the runtime sets (`LSF_GATE_COMMAND` and `LSF_GATE_SEQ` included), a proxy variable, `ANTHROPIC_*` and `CLAUDE_CODE_OAUTH_TOKEN` are refused.
 - **The clone's git identity** is set in its local config before the call, from the main repo's.
 
 ### Image
@@ -409,7 +409,7 @@ podman run --rm -i --init --pull=never --log-driver=none --name <name> --label l
   - whatever else the OAuth token is authorised for at `api.anthropic.com`.
 - **Allowed hosts are an exfiltration channel.** Agent Bash and code that `setup` runs (package install hooks) can send what they read in the clone or gate checkout to any host in `hosts`. A host that accepts writes, such as GitHub, can receive the repo.
 - **The egress proxy takes no credential.** Any local process can reach `127.0.0.1:<egress port>` and tunnel to a pinned host on 443, which gains it nothing it could not reach from the host directly.
-- **The egress proxy dials from the host.** A `hosts` name reaches whatever it resolves to on the host: a private or link-local address, or host loopback, where the proxies and any local service listen. Only a listed name is reachable, and only on port 443.
+- **The egress proxy dials from the host.** A `hosts` name reaches whatever it resolves to on the host: a private or link-local address, or host loopback, where the proxies and any local service listen. Only a listed name is reachable, and only on port 443; a `*.` entry extends this to every name under it, so one under a domain whose DNS others control (a shared hosting suffix) can point at a host-local address.
 - **Only proxy-aware tools get network.** A tool that ignores the proxy variables gets none, even to an allowed host.
 - **No cache survives a call.** `HOME` is a tmpfs, so each call fetches its dependencies again. A stage that wants a cache must put it in its clone.
 - **A call cannot change its clone's `.git/config`, hooks or info.** `git config` fails with `EBUSY`. The identity is set before the call; a stage that needs another local key fails.

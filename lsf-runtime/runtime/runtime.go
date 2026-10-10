@@ -302,6 +302,13 @@ func (rt *Runtime) PinHosts(hosts []string) {
 	rt.egress.Store(e)
 }
 
+// hostsWerePinned reports whether PinHosts has run.
+func (rt *Runtime) hostsWerePinned() bool {
+	rt.hostsMu.Lock()
+	defer rt.hostsMu.Unlock()
+	return rt.hostsPinned
+}
+
 // Hosts are the pinned hosts, nil before PinHosts or for a plan with none.
 func (rt *Runtime) Hosts() []string {
 	rt.hostsMu.Lock()

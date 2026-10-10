@@ -71,6 +71,9 @@ const gateScript = `: > "$HOME/.lsf-started-$LSF_GATE_SEQ" && eval "$LSF_GATE_CO
 // are bounded by gateConcurrency, and are not journaled here. The checkout
 // and log names derive from label, which must be unique in the launch.
 //
+// The orchestrator pins the hosts (PinHosts) before any call or gate; a
+// setup run before that has no network.
+//
 // Every process a command leaves behind ends with its container: a service
 // the gates need is started by the gate command itself. No host git runs
 // in the checkout once a container has run there; only its removal.
@@ -110,6 +113,9 @@ func (rt *Runtime) RunGates(ctx context.Context, label, commit, setup string, ga
 
 	runs := make([]GateRun, len(gates))
 	notRun := ""
+	if setup != "" && !rt.hostsWerePinned() {
+		rt.Log(label + ": setup runs before PinHosts, with no network")
+	}
 	if setup != "" {
 		r, err := rt.gateProcess(ctx, dir, logBase+"-setup.log", setup, rt.cfg.GateTimeout.D(), true)
 		if err != nil {
@@ -395,10 +401,7 @@ func (rt *Runtime) gateProcess(ctx context.Context, dir, logPath, command string
 	}
 	pid := cmd.Process.Pid
 	rt.event("gate-spawn", map[string]any{"pid": pid, "container": name, "setup": setup})
-	cmd.Wait()
-	if cmd.ProcessState == nil { // not expected after a successful Start
-		cmd.ProcessState = &os.ProcessState{}
-	}
+	werr := cmd.Wait()
 	var rmErr error
 	if cmd.ProcessState == nil || cmd.ProcessState.ExitCode() != 0 || cancelled.Load() {
 		rmErr = rt.removeContainer(name)
@@ -417,6 +420,10 @@ func (rt *Runtime) gateProcess(ctx context.Context, dir, logPath, command string
 		msg := fmt.Sprintf("gate container %s not removed: %v", name, rmErr)
 		rt.Log(msg)
 		return r, &containerLeftError{name: name, err: rmErr, stop: rt.setStop(StopRuntimeError, msg)}
+	}
+	if cmd.ProcessState == nil { // not expected after a successful Start: no verdict
+		r.Summary = fmt.Sprintf("no exit status: %v", werr)
+		return r, nil
 	}
 	// A command reaped before a timeout or stop reached it keeps its result
 	// (one that exits in the instant before it is reaped may still count as

@@ -28,8 +28,10 @@ func (rt *Runtime) reapOrphans() error {
 		return nil
 	}
 	var recorded map[string]int
-	json.Unmarshal(b, &recorded)
-	rt.Log(fmt.Sprintf("children.json from an earlier runtime dropped, not acted on: %s", strings.TrimSpace(string(b))))
+	if err := json.Unmarshal(b, &recorded); err != nil {
+		recorded = nil
+	}
+	rt.Log(fmt.Sprintf("children.json from an earlier runtime (%d bytes, %d entries) dropped, not acted on", len(b), len(recorded)))
 	rt.event("children-dropped", map[string]any{"entries": recorded})
 	if !rt.cfg.DryRun {
 		os.Remove(path)

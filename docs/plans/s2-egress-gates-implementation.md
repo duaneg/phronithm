@@ -204,5 +204,22 @@ The critic was sonnet with the critique-code appendix. No round raised a Critica
 - **Steps 3b and 3c:** one commit.
 - **The home's mode** is restored after each command (a marker-read fix). A `setup` that `chmod`s `$HOME` no longer carries that mode to the gates.
 
-## Remaining phases
-Complete Phase 5 (Review) as defined in the phronithm:feature skill.
+## Phase 5 record
+
+The Phase 5 review (`phronithm:review`, all applicable lenses, sonnet) and the full-diff critique (critique-code, sonnet) ran in subagents. Static analysis was `go vet` (clean), `gofmt` (clean) and `-race`. staticcheck and golangci-lint are not installed, so neither was run. Neither pass raised a Critical finding.
+
+Fixed:
+- **Significant:** the nil-`ProcessState` guard failed open to green. It is now not-run.
+- **Minor:** a config `env` passthrough of `LSF_GATE_SEQ` or `LSF_GATE_COMMAND` would break the marker. Both names are now reserved.
+- **Minor:** a `setup` run before `PinHosts` silently had no network. It is now logged, and the precondition is in `RunGates`'s comment.
+- **Minor:** the legacy `children.json` log line is now bounded.
+- **Minor:** the doc's wildcard DNS clause was added to Known limits.
+
+Noted in the completion report:
+- no resolved-address check;
+- no tunnel idle timeout;
+- the dry-run listener;
+- the leftover home on a failed rename;
+- the upgrade transition for pre-unit `children.json` gate shells.
+
+The final suite passed at the Phase 5 fix commit, with live and parity requirements, under the same unrelated load, so S1k stays evidenced.
