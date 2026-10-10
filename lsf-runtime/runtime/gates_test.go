@@ -65,6 +65,10 @@ func TestRunGatesStatuses(t *testing.T) {
 		{GateNotRun, -1, "killed by signal killed", false},
 		{GateRed, 137, "", false}, // no output: no tail
 	}
+	// /bin/sh reports a killed child: bash does not, dash prints "Killed".
+	if runs[5].Summary == "Killed" {
+		want[5].summary, want[5].tail = "Killed", true
+	}
 	for i, w := range want {
 		r := runs[i]
 		if r.Status != w.status || r.ExitCode != w.code || r.Summary != w.summary || (r.Tail != "") != w.tail {
