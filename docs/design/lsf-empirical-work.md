@@ -6,7 +6,7 @@ How lsf plans, runs and records work whose outcome is a measurement. Sections ar
 
 Unit `empirical-criteria-design`, plan @ `14f2a07`.
 
-**Status:** decided, 2026-10-10. Requester verdict: **C1–C5 accepted as proposed**, with C4 and C5 adopted generally. P-A1's geometric part is declined.
+**Status:** decided, 2026-10-10. Requester verdict: **C1–C5 accepted as proposed**, with C4 and C5 adopted generally. P-A1's geometric part is declined. After the [C4 probe](../investigations/c4-probe-results.md), the requester chose to structure C4 along fixed axes; that change is untested.
 
 ### Problem
 
@@ -100,7 +100,10 @@ After R4 the brief adopted the form itself (`b7cee77`:56-65): "n and j are a req
 | Question for vision-standing criteria | each criterion names what it stands for: a vision passage, or the criterion it serves. The question is asked of the first kind only | one question on `quality-bar-interiors` (SC1), one on archipeligo (criterion 3) |
 | Post-relaxation review only | change log; after a second relaxation, recommend a vision review | archipeligo's second relaxation (09-28) precedes the review by four days, but the gap was there from 08-22 |
 
-None of the vision options has been tested. Whether a Phase 1 session, asked the question about criterion 3, would have named a world that persists without moving has not been measured. A probe of 3–5 fresh-context sonnet calls, given only `vision.md` and criterion 3's text, would measure it.
+**The C4 probe** ([results](../investigations/c4-probe-results.md)): eight opus calls answered the unstructured question on archipeligo's v0 criteria.
+- **Frozen world:** 0 of 4 fresh calls named it. Of the 4 author calls, 1 named it on a strict reading and 2 on a lenient one.
+- **Missing horizon:** 3 of the 4 author calls named it, which is P-A3's defect.
+- **Reading:** the question elicits real gaps, but not reliably the one it was aimed at, which depends on which failure the author happens to imagine.
 
 ### Proposed decision
 
@@ -144,6 +147,12 @@ None of the vision options has been tested. Whether a Phase 1 session, asked the
 - **Re-dating.** When an instrument or system is replaced, every citation of its results in the brief and the architecture is re-dated in the same amendment.
 
 **C4, against the vision.** Each criterion names the vision passage it stands for, or the criterion it serves. For each criterion that stands for a passage, the brief answers: *describe a system that passes this criterion and fails that passage.* The answer either adds a clause to the criterion or is recorded as a gap the requester accepts. The question is asked again of every amended criterion (re-entry step a).
+- **Axes.** The question is answered once along each axis, with a failing system or "none found" for each:
+  - **time:** beyond the horizon, or stationary within it;
+  - **starting conditions:** other than those tuned or tested;
+  - **instrument:** passing by satisfying the measure, not the passage.
+
+  The axes come from the probe's own hits: horizon in A1–A3, stationarity in A4. Whether they raise the hit rate on another case is untested.
 - **Chains.** Every "serves" chain must end in a criterion that stands for a passage. Each vision passage the brief claims to address must have at least one criterion that stands for it.
 - **Not answered from the record.** An answer that only restates a gap already on record does not discharge the question.
 
@@ -179,7 +188,7 @@ Presence is checkable where discovery failed. No Phase 1 or Phase 2 critique on 
 | Per-seed stage-2 rule | C2's plausible level must be cited, and stage 1's π̂ = 34/41 is the citation. Under independence P(pass) ≈ 0.002 there; under the correlated model `a01fe05` also gives, 0.03–0.50. The model must be stated, which makes that assumption visible. Raised at Phase 2 rather than by the Phase 3 plan critique |
 | "Persists" | C1: an undefined horizon blocks Phase 2 exit (`653c652`, 2026-08-23), 39 days before `b2d4748`, unless the requester defers it to a named unit |
 | 118/132 | C3: MVP engine and label classifier, which the brief called invalid, and the disclaimed-instrument rule bars citing it for criterion 2. As a premise its testing unit is `classifier-rebase`. The re-based figure, 4 of 12 grid cells persistent, came later, from a review-gate note (`foundation-signals/53fcff1a….md:42`). Re-dating at `18bc270` reaches the brief too |
-| Frozen world | C4: criterion 3 stands for `vision.md:9-10, 27-28`; it cannot be tagged as serving criterion 1, a binary critique-gate check that stands for no passage. The question asks for a world that persists and is not interesting or evolving. Whether a Phase 1 session would have answered with a static world is untested |
+| Frozen world | C4: criterion 3 stands for `vision.md:9-10, 27-28`; it cannot be tagged as serving criterion 1, a binary critique-gate check that stands for no passage. Unstructured, the question named the static world in 1–2 of 4 author calls and 0 of 4 fresh calls. It named the missing horizon in 3 of 4 author calls. The time axis asks for stationarity directly, so on this case it is not an independent test |
 | Relaxations | C5: the log has 8 entries, 3 of them relaxations. The prompt fires at `a01fe05` (09-28), four days before the vision review was run |
 | `quality-bar-interiors` | C1: three short definitions (SC2's cap, SC4's tolerance, SC6's "non-content"); SC4's would have exposed 1e-6 vs 0.02 before `gate-port`. C2: none. C3: a clause each for the architecture's measured figures (texture timings :502-508, the 70 px shadow comparison :708, the headroom arithmetic :806-809, N1 and N2 :987-988). C4: SC1 stands for "maps of the tier-2 exemplars' quality" and SC2–SC7 serve SC1 (brief:74), so one question asked at Phase 1, before F12 and F16 existed. C5: an entry per amendment |
 | `map-toolkit-mvp` SC1, SC2 | C2's binding states in advance whether SC1's median is a gate or a target, so the accepted 3:42 is not a disposition made after the fact. No model gives a median's pass probability over 13 rounds, so C2 asks for a probe of round-time spread first. SC2's "refined reading" was disclosed as an interpretive call (`style-audit-freeze-completion.md:15-20`). Under the fixed-reading rule it becomes a recorded amendment |
