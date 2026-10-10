@@ -35,7 +35,43 @@ Total cost $0.95. The raw outputs are not committed, because the prompts carry a
 
 - **Frozen world:** F 0/4; A 1/4 strict, 2/4 lenient. Both arms are ≤ 2/4, so C4 is reconsidered.
 - **Missing horizon:** 3/4 A calls named it, which is P-A3's defect. Archipeligo found it late: 6 of 40 runs collapse between 38k and 92k ticks.
-- **Other gaps:** their precision against archipeligo is unchecked.
+- **Other gaps:** checked against the record below.
+
+## Precision against archipeligo's record
+
+A read-only pass over `arch@c220c62` classified each criterion-3 gap the eight calls raised. VR is `docs/plans/foundation-vision-review.md`.
+
+| Gap | Calls | Record |
+|---|---|---|
+| Compute never changes hands, so it is fuel, not a currency | 8/8 | **Real.** VR finding 3, "The economy is mechanism, not yet an economy": "No shipped mind issues `Transfer`, and every shipped mind bids zero" (VR:83-85) |
+| Frozen or stationary world | 1–2/8 | **Real.** VR finding 2 (VR:52-66) |
+| Persistence only within the horizon | 3/8 | **Real and accepted.** 6/40 collapse at 38k–92k; "accepted as a known hazard" (`foundation-brief.md:74-79`) |
+| Single tuned genesis | 3/8 | **Real, partly.** One committed cell, certified on held-out seeds only; "held by choice … the world and genesis cell" (`foundation.md:2039`) |
+| Uniform ontology unchecked (system actors act off-grammar) | 4/8 | **Real.** "The uniform ontology is nominal. Treasuries are accounting rows, not entities" (VR §5) |
+| Selection for mindless entities | 4/8 | **Unknown.** Named in the brief as a risk and priced at stage 2; selection never tested |
+| "Applicable" R6 requirements self-assessed | 3/8 | **Addressed.** `r6-static-check.md` uses a closed verdict vocabulary and records each deferral |
+| Native minds read beyond percepts | 2/8 | **Unknown.** The signature takes a percept; no audit |
+
+None of the gaps is contradicted by the record. Five are real, one was addressed, and two cannot be settled from the record. Of the vision review's four numbered findings, the question at Phase 1 found finding 3 in every call and finding 2 in at most two. It did not find findings 1 or 4.
+
+## Planted cases
+
+The C4 axes came from the runs above, so they were tested on two invented cases. The protocol was fixed before the cases were generated.
+
+**Cases.** A separate headless opus call wrote two cases, each a vision, a brief with six criteria, and an answer key that respondents did not see:
+- **ON:** a food-bank demand forecast scored one week ahead, against a vision that needs six weeks' lead. The gap is on the time axis.
+- **OFF:** a tenant-filing tool scored on clerk acceptance, against a vision that says acceptance "is not the goal". The generator was asked for a gap off all three axes. As C4 words the instrument axis ("passing by satisfying the measure, not the passage"), the OFF gap arguably falls under it.
+
+**Runs.** 3 calls per case without the axes (U) and 3 with them (S): 12 opus calls, same settings as above, about $2.3 in total.
+
+| Case | U | S |
+|---|---|---|
+| ON | 3/3 | 3/3 |
+| OFF | 3/3 | 3/3 |
+
+**Reading.** Every cell hit its ceiling, so the protocol reads this as no detectable effect at this n. The one thing shown is that the axes did not narrow the search on OFF.
+
+**Why the cases were too easy.** In both generated visions, the key passage all but contradicts the criterion outright: "A forecast for next week tells me something I mostly can't act on"; "Getting a tenant's answer through the clerk's window is not the goal". Archipeligo's vision states no such thing about criterion 3. A retest needs a gap that the vision implies but does not state.
 
 ## Limits
 
@@ -45,4 +81,4 @@ Total cost $0.95. The raw outputs are not committed, because the prompts carry a
 
 ## Disposition
 
-The requester chose to structure C4 along three fixed axes: time, starting conditions and instrument (§Criteria, C4). The axes are drawn from these runs, so this case cannot test them; their effect on another case is untested.
+The requester chose to structure C4 along three fixed axes: time, starting conditions and instrument (§Criteria, C4). The axes come from these runs, so this case cannot test them, and the planted cases hit their ceiling. Their effect on a real case is untested; plan risk R42 carries it until a programme's vision review supplies one.

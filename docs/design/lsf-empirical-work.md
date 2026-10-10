@@ -103,7 +103,9 @@ After R4 the brief adopted the form itself (`b7cee77`:56-65): "n and j are a req
 **The C4 probe** ([results](../investigations/c4-probe-results.md)): eight opus calls answered the unstructured question on archipeligo's v0 criteria.
 - **Frozen world:** 0 of 4 fresh calls named it. Of the 4 author calls, 1 named it on a strict reading and 2 on a lenient one.
 - **Missing horizon:** 3 of the 4 author calls named it, which is P-A3's defect.
-- **Reading:** the question elicits real gaps, but not reliably the one it was aimed at, which depends on which failure the author happens to imagine.
+- **Other gaps:** of the eight gap classes the calls raised, five are real in archipeligo's record, one was addressed, two are unknown, and none is contradicted. All eight calls found the vision review's finding 3, "The economy is mechanism, not yet an economy".
+- **Reading:** the unstructured question reliably finds real criterion–vision gaps, but not reliably the one it was aimed at; which gap it finds depends on which failure the author happens to imagine.
+- **Planted cases:** a test of the axes on two invented cases hit its ceiling (12/12), so the axes remain untested (plan risk R42).
 
 ### Proposed decision
 
