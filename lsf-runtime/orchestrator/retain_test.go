@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -311,3 +314,106 @@ func TestRetainedMoveFailedRecord(t *testing.T) {
 		t.Error("a failed move's clones were removed")
 	}
 }
+
+// A termination reload with every unit complete, and a re-plan that drops a
+// unit, raise no retains-changed.
+func TestRetainsNotComparedForDoneOrDropped(t *testing.T) {
+	term := orchtest.Defaults()["termination"]
+	s := stub(t, retaining(), Hs{"termination": func(c Call, st *State) any {
+		withRetains(st, "A", nil)
+		withRetains(st, "B", nil)
+		return term(c, st)
+	}}, nil)
+	s.State.GatesBlock = "store: /srv/lsf-store\n"
+	v := run(t, s)
+	eq(t, v.Status, "complete", v.stops())
+
+	replan := orchtest.Defaults()["replan"]
+	s = stub(t, retaining(), merged(discovering(), Hs{"replan": func(c Call, st *State) any {
+		out := replan(c, st)
+		np := *st.Plan
+		np.Units, np.ExecutionOrder = np.Units[:1], []string{"A"}
+		st.Plan = &np
+		return out
+	}}), nil)
+	s.State.GatesBlock = "store: /srv/lsf-store\n"
+	v = run(t, s)
+	eq(t, v.Status, "complete", v.stops())
+}
+
+// D33: a merged unit with retains whose writer stages were all seeded moves
+// nothing and is a retained-move-failed record.
+func TestRetainsSeededWriters(t *testing.T) {
+	impl := R(orchtest.Implemented("A", nil))
+	plan := R(M{"branch": "salvaged-A", "sha": "s", "path": "docs/plans/A-plan.md", "bytes": 0, "readings": []any{}})
+	s := stub(t, retaining(), nil, M{"seed": M{"plan:A": plan, "implement:A": impl}})
+	s.State.GatesBlock = "store: /srv/lsf-store\n"
+	v := run(t, s)
+	eq(t, v.Digest.ByKind["retained-move-failed"], 1, v.raw)
+	if u := input(t, s, "cleanup:w1")["units"].([]any)[0].(map[string]any); u["retains"] != nil {
+		t.Errorf("a unit with no writer clone was given a move: %v", u)
+	}
+	if !hasPrefix(s.Logs, "wave 1: A has retains but no writer clone from this launch; nothing moved") {
+		t.Errorf("logs %q", s.Logs)
+	}
+}
+
+// End to end on the real runtime: cleanup moves a unit's declared path from
+// its latest writer clone with untracked content, then removes the clones;
+// a refused move keeps them.
+func TestCleanupRetainsOnRuntime(t *testing.T) {
+	r := newGitRepo(t)
+	r.commit(".gitignore", "out/\n", "ignore out")
+	store := t.TempDir()
+	var failed []retainFailure
+	var errOK, errRefused error
+	var clonesOK, clonesRefused []string
+	onRuntime(t, r, t.TempDir(), func(ctx context.Context, o *orch) {
+		run := func(unit string, refuse bool) ([]string, error) {
+			for _, l := range []string{"plan:", "implement:", "critique-code:r1:", "fix-code:r1:"} {
+				if _, _, err := o.agent(ctx, "x", lsfrt.Opts{Label: l + unit, Isolation: "worktree", Schema: json.RawMessage(`{"type":"object"}`)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			clone := func(l string) string { p, _ := o.rt.CloneOf(l + unit); return p }
+			writeFile(t, filepath.Join(clone("implement:"), "out", "data.bin"), "from implement")
+			writeFile(t, filepath.Join(clone("critique-code:r1:"), "out", "data.bin"), "from a reviewer")
+			if refuse {
+				os.Mkdir(filepath.Join(store, unit), 0o755)
+			}
+			labels := o.worktreesSince(unit, 0)
+			in := cleanupInput{Wave: 1, IntegrationBranch: "integration", Store: store,
+				Units: []cleanupUnitIn{{Unit: unit, Worktrees: slices.Sorted(slices.Values(labels)), Retains: []string{"out"}}}}
+			_, err := o.cleanupStage(in, &failed)(ctx, "cleanup:w1", false)
+			var dirs []string
+			for _, l := range labels {
+				if p, _ := o.rt.CloneOf(l); dirExists(p) {
+					dirs = append(dirs, l)
+				}
+			}
+			return dirs, err
+		}
+		clonesOK, errOK = run("U", false)
+		clonesRefused, errRefused = run("V", true)
+	})
+	if errOK != nil || len(clonesOK) != 0 {
+		t.Fatalf("move: %v; clones left %v", errOK, clonesOK)
+	}
+	b, _ := os.ReadFile(filepath.Join(store, "U", "out", "data.bin"))
+	eq(t, string(b), "from implement", "the latest writer clone with untracked content")
+	errMatch(t, errRefused, `V: destination .* exists`)
+	eq(t, len(clonesRefused), 4, "a refused move keeps every clone")
+	eq(t, len(failed), 1)
+}
+
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func dirExists(p string) bool { fi, err := os.Stat(p); return err == nil && fi.IsDir() }

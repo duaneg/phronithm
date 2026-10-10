@@ -356,12 +356,13 @@ func TestMoveRetainedRefusals(t *testing.T) {
 		{"symlinked parent", "U", []string{"via/secret.txt"}, func(t *testing.T, clone string) {
 			os.Symlink(outside, filepath.Join(clone, "via"))
 		}, "via is a symlink"},
-		{"second path refused", "U", []string{"out", "zfifo"}, func(t *testing.T, clone string) {
-			if err := syscall.Mkfifo(filepath.Join(clone, "zfifo"), 0o644); err != nil {
+		{"second path refused", "U", []string{"out", "z"}, func(t *testing.T, clone string) {
+			writeTree(t, clone, map[string]string{"z/data.log": "d"})
+			if err := syscall.Mkfifo(filepath.Join(clone, "z", "fifo"), 0o644); err != nil {
 				t.Skip(err)
 			}
-		}, "zfifo is a special file"},
-		{"git path", "U", []string{"out", ".git"}, nil, `retains ".git": must not be in .git`},
+		}, "z/fifo is a special file"},
+		{"git path", "U", []string{"out", ".git"}, nil, `retains ".git": must not be or be in a .git directory`},
 		{"unsafe unit", "../U", []string{"out"}, nil, `unit id "../U" cannot name a store directory`},
 		{"colon unit", "U:1", []string{"out"}, nil, "cannot name a store directory"},
 		{"no space", "U", []string{"out"}, func(t *testing.T, clone string) {
@@ -624,7 +625,7 @@ func TestMoveRetainedDamage(t *testing.T) {
 	if errDone != nil || len(done.Moved) != 1 {
 		t.Errorf("done, dest gone: %+v %v", done, errDone)
 	}
-	if errAdded == nil || !strings.Contains(errAdded.Error(), "late.log is declared but was not part of the completed move") {
+	if errAdded == nil || !strings.Contains(errAdded.Error(), "late.log is declared but was not part of the move recorded") {
 		t.Errorf("a path declared after the move: %v", errAdded)
 	}
 	if b, _ := os.ReadFile(filepath.Join(cfg.StateDir, "log.txt")); !strings.Contains(string(b), "G: retained paths were moved to") {
@@ -729,4 +730,61 @@ func TestCheckStore(t *testing.T) {
 		}
 		return nil, nil
 	})
+}
+
+// A clone holds a path only with untracked or ignored content there: a
+// later clone with only the path's tracked files is passed over. The
+// record ties a move to its sources and its paths, and staging with no
+// record is refused.
+func TestMoveRetainedHolderAndRecord(t *testing.T) {
+	var res RetainedMove
+	var err, errSources, errRenaming, errOrphan error
+	var store string
+	t.Setenv("STUB_SCRIPT", "ok")
+	cfg, _ := testConfig(t)
+	commitFile(t, cfg.Repo, ".gitignore", "*.bin\n")
+	os.MkdirAll(filepath.Join(cfg.Repo, "data"), 0o755)
+	commitFile(t, cfg.Repo, "data/.gitkeep", "")
+	store = t.TempDir()
+	launch(t, cfg, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		_, impl := mustCall(t, ctx, rt, "implement:H", "worktree")
+		_, fix := mustCall(t, ctx, rt, "fix-code:r1:H", "worktree")
+		writeTree(t, impl, map[string]string{"data/out.bin": "real"})
+		if !exists(filepath.Join(fix, "data", ".gitkeep")) {
+			t.Fatal("fixture: the fix clone lacks the tracked file")
+		}
+		sources := []string{"implement:H", "fix-code:r1:H"}
+		res, err = rt.MoveRetained(ctx, "H", store, "main", []string{"data"}, sources)
+		_, errSources = rt.MoveRetained(ctx, "H", store, "main", []string{"data"}, []string{"implement:H#2"})
+
+		_, c := mustCall(t, ctx, rt, "implement:R", "worktree")
+		writeTree(t, c, map[string]string{"a.bin": "a"})
+		killAt(t, "after-renaming-record", 1, func() {
+			rt.MoveRetained(ctx, "R", store, "main", []string{"a.bin"}, []string{"implement:R"})
+		})
+		writeTree(t, c, map[string]string{"b.bin": "b"})
+		_, errRenaming = rt.MoveRetained(ctx, "R", store, "main", []string{"a.bin", "b.bin"}, []string{"implement:R"})
+
+		_, c = mustCall(t, ctx, rt, "implement:O", "worktree")
+		writeTree(t, c, map[string]string{"a.bin": "a"})
+		staging, _ := retainDirs(store, rt.cfg.StateDir, "O")
+		os.Mkdir(staging, 0o755)
+		_, errOrphan = rt.MoveRetained(ctx, "O", store, "main", []string{"a.bin"}, []string{"implement:O"})
+		return nil, nil
+	})
+	if err != nil || len(res.Moved) != 1 || res.Moved[0].From != "implement:H" {
+		t.Fatalf("holder: %+v %v", res, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(store, "H", "data", "out.bin")); string(b) != "real" {
+		t.Errorf("the untracked output was not moved: %q", b)
+	}
+	if errSources == nil || !strings.Contains(errSources.Error(), "is for clones [implement:H fix-code:r1:H]") {
+		t.Errorf("other sources: %v", errSources)
+	}
+	if errRenaming == nil || !strings.Contains(errRenaming.Error(), "b.bin is declared but was not part of the move recorded") {
+		t.Errorf("a path added before a renaming resume: %v", errRenaming)
+	}
+	if errOrphan == nil || !strings.Contains(errOrphan.Error(), "exists with no move record") {
+		t.Errorf("staging with no record: %v", errOrphan)
+	}
 }

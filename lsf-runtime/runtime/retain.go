@@ -1,6 +1,7 @@
 package lsfrt
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -53,6 +54,7 @@ type retainRecord struct {
 	Store   string         `json:"store"`
 	Staging string         `json:"staging"`
 	Scratch string         `json:"scratch"`
+	Sources []string       `json:"sources"`
 	Moved   []RetainedPath `json:"moved"`
 	Dev     uint64         `json:"dev,omitempty"`
 	Ino     uint64         `json:"ino,omitempty"`
@@ -70,7 +72,7 @@ var (
 		if err := syscall.Statfs(path, &s); err != nil {
 			return 0, err
 		}
-		return s.Bavail * uint64(s.Bsize), nil
+		return s.Bavail * uint64(s.Frsize), nil
 	}
 )
 
@@ -85,8 +87,13 @@ func (rt *Runtime) writeRetainRecord(path string, rec *retainRecord) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+	if dir := filepath.Dir(path); !exists(dir) {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+		if err := syncDir(filepath.Dir(dir)); err != nil {
+			return err
+		}
 	}
 	return writeFileAtomic(path, append(b, '\n'))
 }
@@ -162,7 +169,12 @@ func (rt *Runtime) MoveRetained(ctx context.Context, unit, store, integration st
 	case !errors.Is(err, fs.ErrNotExist):
 		return res, rt.setStop(StopRuntimeError, fmt.Sprintf("%s: retained-move record %s: %v", unit, recPath, err))
 	}
-	if rec != nil && rec.Phase == "done" {
+	if rec != nil && !slices.Equal(rec.Sources, sources) {
+		// Another run of the unit's stages: its clones are not the ones the
+		// record's move took from.
+		return res, fmt.Errorf("%s: the retained-move record %s is for clones %v, not %v; move or remove it once its move is dealt with", unit, recPath, rec.Sources, sources)
+	}
+	if rec != nil && rec.Result != nil {
 		covered := map[string]bool{}
 		for _, m := range rec.Result.Moved {
 			covered[m.Path] = true
@@ -172,9 +184,11 @@ func (rt *Runtime) MoveRetained(ctx context.Context, unit, store, integration st
 		}
 		for _, p := range paths {
 			if !covered[p] {
-				return res, fmt.Errorf("%s: %s is declared but was not part of the completed move recorded in %s", unit, p, recPath)
+				return res, fmt.Errorf("%s: %s is declared but was not part of the move recorded in %s", unit, p, recPath)
 			}
 		}
+	}
+	if rec != nil && rec.Phase == "done" {
 		if rec.Result.Dest != "" {
 			if fi, err := os.Lstat(rec.Result.Dest); err != nil || devIno(fi) != [2]uint64{rec.Dev, rec.Ino} {
 				rt.Log(fmt.Sprintf("%s: retained paths were moved to %s, which is now absent or replaced", unit, rec.Result.Dest))
@@ -196,13 +210,15 @@ func (rt *Runtime) MoveRetained(ctx context.Context, unit, store, integration st
 		}
 		return fmt.Errorf("%w (staging %s, scratch %s, record %s)", err, staging, scratch, recPath)
 	}
-	exists := func(p string) bool { _, err := os.Lstat(p); return err == nil }
 
 	if exists(dest) {
 		if rec != nil && rec.Phase == "renaming" && !exists(staging) {
 			return rt.finishRetain(unit, store, dest, recPath, rec, nil)
 		}
 		return res, wrap(fmt.Errorf("%s: destination %s exists", unit, dest))
+	}
+	if rec == nil && (exists(staging) || exists(scratch)) {
+		return res, fmt.Errorf("%s: %s or %s exists with no move record; inspect it and remove it", unit, staging, scratch)
 	}
 	if rec != nil && rec.Phase == "renaming" {
 		return rt.renameRetained(unit, store, staging, scratch, dest, recPath, rec, nil, wrap)
@@ -260,7 +276,17 @@ func (rt *Runtime) MoveRetained(ctx context.Context, unit, store, integration st
 			if err != nil {
 				return res, wrap(err)
 			}
-			if tt.exists && exists(filepath.Join(tt.path, p)) {
+			if !tt.exists || !exists(filepath.Join(tt.path, p)) {
+				continue
+			}
+			if err := insideClone(tt.path, p); err != nil {
+				return res, wrap(fmt.Errorf("%s: %s in %s: %w", unit, p, label, err))
+			}
+			untracked, err := hasUntracked(gctx, tt, p)
+			if err != nil {
+				return res, wrap(fmt.Errorf("%s: %s in %s: %w", unit, p, label, err))
+			}
+			if untracked {
 				holder, t = label, tt
 				break
 			}
@@ -276,9 +302,6 @@ func (rt *Runtime) MoveRetained(ctx context.Context, unit, store, integration st
 			return res, wrap(fmt.Errorf("%s: the latest copy of %s is in %s (%s), which cleanup keeps: %s", unit, p, holder, t.path, t.kept))
 		}
 		src := filepath.Join(t.path, p)
-		if err := insideClone(t.path, p); err != nil {
-			return res, wrap(fmt.Errorf("%s: %s in %s: %w", unit, p, holder, err))
-		}
 		files, bytes, err := scanTree(src)
 		if err != nil {
 			return res, wrap(fmt.Errorf("%s: %s in %s: %w", unit, p, holder, err))
@@ -300,11 +323,11 @@ func (rt *Runtime) MoveRetained(ctx context.Context, unit, store, integration st
 
 	// Moves.
 	if rec == nil {
-		if len(moves) == 0 && len(already) == 0 {
+		if len(moves) == 0 {
 			r := RetainedMove{Unit: unit, Moved: []RetainedPath{}, Missing: missing}
-			return rt.finishRetain(unit, store, "", recPath, &retainRecord{Unit: unit, Store: store, Staging: staging, Scratch: scratch, Moved: []RetainedPath{}}, &r)
+			return rt.finishRetain(unit, store, "", recPath, &retainRecord{Unit: unit, Store: store, Staging: staging, Scratch: scratch, Sources: sources, Moved: []RetainedPath{}}, &r)
 		}
-		rec = &retainRecord{Phase: "moving", Unit: unit, Store: store, Staging: staging, Scratch: scratch, Moved: []RetainedPath{}}
+		rec = &retainRecord{Phase: "moving", Unit: unit, Store: store, Staging: staging, Scratch: scratch, Sources: sources, Moved: []RetainedPath{}}
 		if err := rt.writeRetainRecord(recPath, rec); err != nil {
 			return res, fmt.Errorf("%s: retained-move record: %w", unit, err)
 		}
@@ -329,7 +352,7 @@ func (rt *Runtime) MoveRetained(ctx context.Context, unit, store, integration st
 		switch {
 		case err == nil:
 			retainHook("after-path-rename")
-			syncDir(filepath.Dir(m.src))
+			syncDir(filepath.Dir(m.src)) // the source side: staging is fsynced below, before the record
 		case errors.Is(err, syscall.EXDEV):
 			method = "copy"
 			if err := removeTree(scratch); err != nil {
@@ -385,7 +408,7 @@ func (rt *Runtime) MoveRetained(ctx context.Context, unit, store, integration st
 		if err := removeTree(staging); err != nil {
 			return res, wrap(err)
 		}
-		removeTree(scratch)
+		removeTree(scratch) // nothing was copied that a leftover would hold
 		r.Dest = ""
 		return rt.finishRetain(unit, store, "", recPath, rec, &r)
 	}
@@ -414,12 +437,17 @@ func (rt *Runtime) renameRetained(unit, store, staging, scratch, dest, recPath s
 
 // finishRetain fsyncs the store and writes the done record. r is nil when
 // the record already holds the result.
-func (rt *Runtime) finishRetain(unit, store, dest, recPath string, rec *retainRecord, r *RetainedMove) (RetainedMove, error) {
+func (rt *Runtime) finishRetain(unit, store, dest, recPath string, rec *retainRecord, r *RetainedMove) (_ RetainedMove, err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("%s: finishing the retained move to %s (record %s): %w", unit, cmp.Or(dest, "no destination"), recPath, err)
+		}
+	}()
 	if r != nil {
 		rec.Result = r
 	}
 	if rec.Result == nil {
-		return RetainedMove{}, fmt.Errorf("%s: retained-move record %s has no result", unit, recPath)
+		return RetainedMove{}, errors.New("the record has no result")
 	}
 	if dest != "" {
 		if err := syncDir(store); err != nil {
@@ -435,7 +463,7 @@ func (rt *Runtime) finishRetain(unit, store, dest, recPath string, rec *retainRe
 	}
 	rec.Phase = "done"
 	if err := rt.writeRetainRecord(recPath, rec); err != nil {
-		return RetainedMove{}, fmt.Errorf("%s: retained-move record: %w", unit, err)
+		return RetainedMove{}, err
 	}
 	res := *rec.Result
 	ev := map[string]any{"unit": unit, "dest": res.Dest, "paths": len(res.Moved), "missing": res.Missing}
@@ -494,6 +522,23 @@ func removeTree(root string) error {
 		return nil
 	})
 	return os.RemoveAll(root)
+}
+
+func exists(p string) bool { _, err := os.Lstat(p); return err == nil }
+
+// hasUntracked reports whether the clone or worktree t has an untracked or
+// ignored file at or under rel: tracked content is merged, so it alone does
+// not make t a holder.
+func hasUntracked(gctx context.Context, t removalTarget, rel string) (bool, error) {
+	git := gitStdout
+	if t.isClone {
+		git = cloneStdout
+	}
+	out, err := git(gctx, t.path, "ls-files", "-z", "--others", "--", ":(literal)"+rel)
+	if err != nil {
+		return false, fmt.Errorf("ls-files: %w", err)
+	}
+	return len(out) > 0, nil
 }
 
 // insideClone checks that rel, a clean relative path, names a file inside
@@ -751,9 +796,23 @@ func devIno(fi fs.FileInfo) [2]uint64 {
 	return [2]uint64{}
 }
 
-// ClonePath is where label's kept clone is, or was.
-func (rt *Runtime) ClonePath(label string) string {
-	return filepath.Join(rt.cfg.StateDir, "clone", journalKey(label))
+// CloneOf is where label's kept clone is, or was, and its branch in the
+// main repo.
+func (rt *Runtime) CloneOf(label string) (path, branch string) {
+	key := journalKey(label)
+	var args worktreeArgs
+	json.Unmarshal(rt.cfg.Args, &args)
+	if len(args.PlanSha) >= 8 {
+		branch = branchName(args, key)
+	}
+	return filepath.Join(rt.cfg.StateDir, "clone", key), branch
+}
+
+// RetainFiles are a unit's retained-move staging and scratch directories
+// in store and its move record.
+func (rt *Runtime) RetainFiles(unit, store string) (staging, scratch, record string) {
+	staging, scratch = retainDirs(store, rt.cfg.StateDir, unit)
+	return staging, scratch, rt.retainRecordPath(unit)
 }
 
 // CheckStore checks a declared store at the pin: an existing directory

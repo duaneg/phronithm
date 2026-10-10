@@ -338,8 +338,15 @@ func (s *Stub) MoveRetained(ctx context.Context, unit, store, integration string
 // CheckStore accepts any store: the stub has no filesystem to check.
 func (s *Stub) CheckStore(store string) error { return nil }
 
-// ClonePath is where a label's clone would be: the stub has none.
-func (s *Stub) ClonePath(label string) string { return "<state>/clone/" + label }
+// CloneOf is where a label's clone and branch would be: the stub has none.
+func (s *Stub) CloneOf(label string) (string, string) {
+	return "<state>/clone/" + label, "lsf/<plan8>/" + label
+}
+
+// RetainFiles are where a unit's move files would be: the stub has none.
+func (s *Stub) RetainFiles(unit, store string) (string, string, string) {
+	return store + "/<staging>", store + "/<scratch>", "<state>/retained/" + unit + ".json"
+}
 
 // MergeClone fails: the stub has no repository.
 func (s *Stub) MergeClone(ctx context.Context, name string) (string, error) {

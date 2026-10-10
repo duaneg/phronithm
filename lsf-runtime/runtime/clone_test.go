@@ -31,8 +31,6 @@ func resolved(t *testing.T, p string) string {
 	return r
 }
 
-func exists(p string) bool { _, err := os.Lstat(p); return err == nil }
-
 // An isolated writer runs in its own kept clone, never the main checkout or
 // a worktree: a plain clone with every main branch local, the main repo's
 // hooks and identity, and no remote. Its commit comes back as main's

@@ -11,15 +11,15 @@ func retainsPlan(id, retains string) string {
 }
 
 func TestParseRetains(t *testing.T) {
-	p, problems := ParsePlanGraph(retainsPlan("u", "[out/data, results.csv, .tmp, a/.git, .gitignore]"))
+	p, problems := ParsePlanGraph(retainsPlan("u", "[out/data, results.csv, .tmp, a/.gitx, .gitignore]"))
 	if len(problems) != 0 {
 		t.Fatalf("problems: %v", problems)
 	}
-	if got := p.Units[0].Retains; !slices.Equal(got, []string{"out/data", "results.csv", ".tmp", "a/.git", ".gitignore"}) {
+	if got := p.Units[0].Retains; !slices.Equal(got, []string{"out/data", "results.csv", ".tmp", "a/.gitx", ".gitignore"}) {
 		t.Errorf("retains: %q", got)
 	}
 	b, _ := MarshalJS(p.Units[0], "")
-	if !strings.Contains(string(b), `"retains":["out/data","results.csv",".tmp","a/.git",".gitignore"]`) {
+	if !strings.Contains(string(b), `"retains":["out/data","results.csv",".tmp","a/.gitx",".gitignore"]`) {
 		t.Errorf("JSON: %s", b)
 	}
 	// Absent and empty both leave the unit's JSON as it was.
@@ -48,8 +48,9 @@ func TestParseRetainsProblems(t *testing.T) {
 		{"trailing slash", "[a/]", `u: retains "a/": must be a clean relative path`},
 		{"double slash", "[a//b]", `u: retains "a//b": must be a clean relative path`},
 		{"control", `["a\tb"]`, `u: retains "a\tb": must not contain control characters`},
-		{"git", "[.git]", `u: retains ".git": must not be in .git`},
-		{"under git", "[.git/hooks]", `u: retains ".git/hooks": must not be in .git`},
+		{"git", "[.git]", `u: retains ".git": must not be or be in a .git directory`},
+		{"under git", "[.git/hooks]", `u: retains ".git/hooks": must not be or be in a .git directory`},
+		{"nested git", "[sub/.git]", `u: retains "sub/.git": must not be or be in a .git directory`},
 		{"duplicate", "[a, a]", `u: retains "a": is listed twice`},
 		{"nested", "[a, a/b]", `u: retains "a/b": is inside "a"`},
 		{"nesting", "[a/b, a]", `u: retains "a": contains "a/b"`},

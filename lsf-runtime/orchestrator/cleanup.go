@@ -47,8 +47,10 @@ var writerStages = map[string]int{"plan": 0, "fix-plan": 1, "implement": 2, "fix
 
 // writerSources are the writer clones among a unit's labels (plan,
 // fix-plan:rN, implement, fix-code:rN, each label:<unit>[#n]), oldest
-// first: by stage, then round N, then the #n of a stage run again in the
-// launch (none before #2).
+// first: by stage, then round N, then #n (none before #2). The labels are
+// one run of the unit's stages (worktreesSince), in which a (stage, round)
+// pair does not repeat, so this is their chronological order; #n only
+// tells apart labels an earlier run in the launch used.
 func writerSources(labels []string) []string {
 	type key struct{ stage, round, n int }
 	keys := map[string]key{}
@@ -93,7 +95,8 @@ type removedPaths struct {
 // stop the others; the failures are the step's error once all have run. A
 // unit with retains has them moved first; a failed move is an error, keeps
 // every one of the unit's labels, and is noted in failed for the wave's
-// record.
+// record. failed is filled only by a live run: a failed step is not
+// journaled, so it is never replayed.
 func (o *orch) cleanupStage(in cleanupInput, failed *[]retainFailure) stageFn {
 	return func(ctx context.Context, label string, _ bool) (json.RawMessage, error) {
 		res := cleanupResult{Kept: []string{}, Paths: []removedPaths{}}
@@ -107,9 +110,6 @@ func (o *orch) cleanupStage(in cleanupInput, failed *[]retainFailure) stageFn {
 				if err != nil {
 					o.rt.Log(fmt.Sprintf("%s: %s: retained move failed, its clones kept: %v", label, u.Unit, err))
 					errs = append(errs, fmt.Errorf("%s: retained move: %w", u.Unit, err))
-					for _, wl := range u.Worktrees {
-						res.Kept = append(res.Kept, wl+": retained move failed")
-					}
 					*failed = append(*failed, retainFailure{unit: u.Unit, err: err.Error(), labels: slices.Clone(u.Worktrees)})
 					continue
 				}

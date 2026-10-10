@@ -349,17 +349,24 @@
 //     has no store for. The retains of the plan at args.planSha, as the pin
 //     read it, are a baseline: a load that drops a path from an incomplete
 //     unit's retains is a retains-changed stop (a Go-only stop kind); an
-//     added path joins the baseline. A unit no longer in the plan is not
-//     compared. An undeclared plan's steps and prompts are unchanged.
+//     added path joins the baseline once its load is accepted. A unit no
+//     longer in the plan is not compared, and keeps its baseline entry. A
+//     pin whose plan block does not parse leaves the baseline to the first
+//     accepted load (logged). An undeclared plan's steps and prompts are
+//     unchanged.
 //   - D33. Cleanup moves each merged unit's retains to <store>/<unit>/
 //     before removing its clones (lsfrt.Runtime.MoveRetained), from its
 //     writer clones (writerSources: plan, fix-plan:rN, implement,
 //     fix-code:rN, oldest first). The cleanup input carries each unit's
 //     retains and the store, both omitted when empty, so an undeclared
 //     plan's input, and its journal, are as before. The step's value lists
-//     each move. A failed move keeps every clone of that unit, fails the
-//     step, and is a retained-move-failed record (a Go-only record kind)
-//     naming the clones and the by-hand remedy; a stop during it stops. A
-//     path in no clone is logged as missing, not signalled. JS's cleanup
-//     agent retains nothing.
+//     each move; a failed step has no value, and the log has the moves. A
+//     failed move keeps every clone of that unit, fails the step, and is a
+//     retained-move-failed record (a Go-only record kind) naming the
+//     clones, their branches, the move's staging, scratch and record files
+//     (Runtime.CloneOf, RetainFiles) and the by-hand remedy; a stop during
+//     it stops. A merged unit with retains and no writer clone in the
+//     launch (its writer stages seeded) gets no move and the same record
+//     kind. A path in no clone is logged as missing, not signalled. JS's
+//     cleanup agent retains nothing.
 package orchestrator

@@ -12,7 +12,7 @@ import (
 // the store is the lsf-gates block's `store`. Both are Go-only (D32).
 
 // retainsProblems checks a unit's retains entries: each relative, clean
-// (no trailing /, no . or .. component), not ".", not under .git, and none
+// (no trailing /, no . or .. component), not ".", no .git component, and none
 // a duplicate of or inside another.
 func retainsProblems(ref string, retains []string) []Problem {
 	var problems []Problem
@@ -28,8 +28,8 @@ func retainsProblems(ref string, retains []string) []Problem {
 			bad(p, "must be a clean relative path, without . or .. components or a trailing /")
 		case strings.ContainsFunc(p, func(r rune) bool { return r < 0x20 || r == 0x7f }):
 			bad(p, "must not contain control characters")
-		case p == ".git" || strings.HasPrefix(p, ".git/"):
-			bad(p, "must not be in .git")
+		case slices.Contains(strings.Split(p, "/"), ".git"):
+			bad(p, "must not be or be in a .git directory")
 		default:
 			ok = append(ok, p)
 		}

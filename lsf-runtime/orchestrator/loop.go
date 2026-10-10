@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -354,6 +355,8 @@ func (l *launch) pinGates(ctx context.Context) (json.RawMessage, bool, error) {
 		for _, u := range g.Plan.Units {
 			l.retains[u.ID] = u.Retains
 		}
+	} else {
+		l.rt.Log("gates-pin: the plan block at " + l.ctx.planSha + " does not parse; the first accepted load is the retains baseline")
 	}
 	var hosts []string
 	if decl != nil {
@@ -430,18 +433,24 @@ func (l *launch) loadPlan(ctx context.Context, sha, label string, wave *int) (lo
 		for _, pr := range plan.CheckRetains(out.plan, l.decl) {
 			out.stops = append(out.stops, problem(pr))
 		}
-		out.stops = append(out.stops, l.retainsChanged(out.plan, wave)...)
+		stops, baseline := l.retainsChanged(out.plan, wave)
+		out.stops = append(out.stops, stops...)
+		if len(out.stops) == 0 {
+			l.retains = baseline
+		}
 	}
 	return out, nil
 }
 
 // retainsChanged compares each incomplete unit's retains with the
 // baseline: a path the baseline has and the plan lacks is a
-// retains-changed stop. Added paths and new units join the baseline; a
-// unit gone from the plan is not compared (D32).
-func (l *launch) retainsChanged(p *plan.Plan, wave *int) []*plan.Signal {
-	if l.retains == nil {
-		l.retains = map[string][]string{}
+// retains-changed stop. It returns the baseline with the plan's added
+// paths and new units, for the caller to keep once the load is accepted.
+// A unit gone from the plan is not compared, and keeps its entry (D32).
+func (l *launch) retainsChanged(p *plan.Plan, wave *int) ([]*plan.Signal, map[string][]string) {
+	baseline := maps.Clone(l.retains)
+	if baseline == nil {
+		baseline = map[string][]string{}
 	}
 	var stops []*plan.Signal
 	for _, u := range p.Units {
@@ -462,9 +471,9 @@ func (l *launch) retainsChanged(p *plan.Plan, wave *int) []*plan.Signal {
 				Referent: u.ID}))
 			continue
 		}
-		l.retains[u.ID] = slices.Clone(u.Retains)
+		baseline[u.ID] = slices.Clone(u.Retains)
 	}
-	return stops
+	return stops, baseline
 }
 
 // refreshPin: the pin follows the integration branch; a reload's load step

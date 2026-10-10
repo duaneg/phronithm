@@ -181,6 +181,7 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 	// except, after a failed retained move, the unit's retains, which is a
 	// retained-move-failed record (D33).
 	var retainFailed []retainFailure
+	var unmoved []string
 	if len(merged) > 0 {
 		gt := c.tierFor("gate")
 		gl, cl := "review-gate:w"+itoa(wave), "cleanup:w"+itoa(wave)
@@ -190,13 +191,19 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 			retains[u.ID] = u.Retains
 		}
 		for _, m := range merged {
+			unitRetains := retains[m.unit]
+			if len(unitRetains) > 0 && len(writerSources(m.worktrees)) == 0 {
+				// Its writer stages were seeded: their clones are an earlier
+				// launch's, which this cleanup does not touch.
+				unmoved, unitRetains = append(unmoved, m.unit), nil
+			}
 			if len(m.worktrees) == 0 {
 				continue
 			}
 			// Sorted: parallel stages record their labels in either order, and
 			// the step's input must be the same on a relaunch to replay.
-			cin.Units = append(cin.Units, cleanupUnitIn{Unit: m.unit, Worktrees: slices.Sorted(slices.Values(m.worktrees)), Retains: retains[m.unit]})
-			if len(retains[m.unit]) > 0 && l.decl != nil {
+			cin.Units = append(cin.Units, cleanupUnitIn{Unit: m.unit, Worktrees: slices.Sorted(slices.Values(m.worktrees)), Retains: unitRetains})
+			if len(unitRetains) > 0 {
 				cin.Store = l.decl.Store
 			}
 		}
@@ -255,7 +262,15 @@ func (l *launch) step(ctx context.Context) (out json.RawMessage, ret, brk bool, 
 			l.rt.Log(fmt.Sprintf("wave %d: worktree cleanup returned null", wave))
 		}
 		for _, f := range retainFailed {
-			waveSignals = append(waveSignals, l.retainFailedSignal(f, cin.Store, retains[f.unit], wave))
+			waveSignals = append(waveSignals, l.retainFailedSignal(f, l.decl.Store, retains[f.unit], wave))
+		}
+		for _, u := range unmoved {
+			dest := l.decl.Store + "/" + u
+			l.rt.Log(fmt.Sprintf("wave %d: %s has retains but no writer clone from this launch; nothing moved", wave, u))
+			waveSignals = append(waveSignals, plan.NewSignal(plan.Signal{Kind: "retained-move-failed", Source: "structural", Stage: "cleanup", Unit: u, Wave: plan.W(wave),
+				Statement: fmt.Sprintf("%s merged with no writer clone from this launch (its writer stages were seeded), so its retains (%s) were not moved to %s; any copies are in the earlier launch's clones, which stay. By hand: put each declared path at %s/ from the latest writer clone of that launch",
+					u, strings.Join(retains[u], ", "), dest, dest),
+				Referent: dest}))
 		}
 	}
 
@@ -514,16 +529,18 @@ func (l *launch) finish(ctx context.Context) (json.RawMessage, error) {
 // retainFailedSignal is the record of a failed retained move (D33): its
 // clones and branches are kept, and the remedy is by hand.
 func (l *launch) retainFailedSignal(f retainFailure, store string, paths []string, wave int) *plan.Signal {
-	clones := []string{}
+	clones, branches := []string{}, []string{}
 	for _, wl := range f.labels {
-		clones = append(clones, l.rt.ClonePath(wl))
+		c, b := l.rt.CloneOf(wl)
+		clones, branches = append(clones, c), append(branches, b)
 	}
+	staging, scratch, record := l.rt.RetainFiles(f.unit, store)
 	dest := store + "/" + f.unit
 	return plan.NewSignal(plan.Signal{Kind: "retained-move-failed", Source: "structural", Stage: "cleanup", Unit: f.unit, Wave: plan.W(wave),
-		Statement: fmt.Sprintf("the move of %s's retains (%s) to %s failed, so its clones and their lsf/ branches are kept: %s. Clones: %s. "+
-			"By hand: put each declared path at %s/, from the staging directory the error names if it is there, else from the latest writer clone; "+
-			"then remove the clones, the staging, scratch and record files the error names, and the unit's lsf/ branches named for the clones. "+
+		Statement: fmt.Sprintf("the move of %s's retains (%s) to %s failed, so its clones and branches are kept: %s. Clones: %s. Branches: %s. "+
+			"By hand: put each declared path at %s/ (already there if the destination exists), from the staging directory %s if it holds the path, else from the latest writer clone; "+
+			"then remove the clones, %s, %s, the record %s, and the branches. "+
 			"A resume retries the move only if this launch ends without an outcome; a relaunch does not",
-			f.unit, strings.Join(paths, ", "), dest, f.err, strings.Join(clones, ", "), dest),
+			f.unit, strings.Join(paths, ", "), dest, f.err, strings.Join(clones, ", "), strings.Join(branches, ", "), dest, staging, staging, scratch, record),
 		Referent: dest})
 }
