@@ -2,6 +2,7 @@ package testcfg
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -96,6 +97,13 @@ func TestStubDetached(t *testing.T) {
 	if _, stderr, code := podman(t, nil, "run", "--name", "d1", "img", "true"); code != 125 || !strings.Contains(stderr, "already in use") {
 		t.Errorf("a live name reused: exit %d %q", code, stderr)
 	}
+	// The record is written once setsid is forked, maybe before it has
+	// left the client's process group: wait until it leads its session.
+	for deadline := time.Now().Add(5 * time.Second); sessionOf(inner) != inner; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the detached command never led its own session")
+		}
+	}
 	syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 	time.Sleep(200 * time.Millisecond)
 	if syscall.Kill(inner, 0) != nil {
@@ -133,4 +141,21 @@ func TestStubInfo(t *testing.T) {
 	if _, _, code := podman(t, []string{"STUB_PODMAN_NOIMAGE=1"}, "image", "exists", Image); code != 1 {
 		t.Errorf("image exists with NOIMAGE: %d", code)
 	}
+}
+
+// sessionOf is a process's session id from /proc/<pid>/stat, or -1.
+func sessionOf(pid int) int {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return -1
+	}
+	f := strings.Fields(string(b[bytes.LastIndexByte(b, ')')+1:])) // state ppid pgrp session ...
+	if len(f) < 4 {
+		return -1
+	}
+	n, err := strconv.Atoi(f[3])
+	if err != nil {
+		return -1
+	}
+	return n
 }
