@@ -64,7 +64,9 @@ func cmdLaunch(args []string, stdout, stderr io.Writer) int {
 	}
 	var state string
 	if a.state != "" {
-		state, err = filepath.Abs(a.state)
+		if state, err = filepath.Abs(a.state); err == nil {
+			err = (&addr{name: name, repo: a.repo}).agrees(state)
+		}
 	} else {
 		state, err = defaultStateDir(repo, name)
 	}
@@ -234,6 +236,10 @@ func spawn(state, file string) (spawned, error) {
 	cmd.Stdout, cmd.Stderr = logf, logf // stdin is /dev/null
 	cmd.Env = driverEnv()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	// Before the start, so an interrupt cannot leave the driver unrecorded.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+	defer signal.Stop(sig)
 	if err := cmd.Start(); err != nil {
 		return spawned{}, fmt.Errorf("driver: %w", err)
 	}
@@ -252,9 +258,6 @@ func spawn(state, file string) (spawned, error) {
 	if err := writeAtomic(filepath.Join(state, driverFile), append(rec, '\n')); err != nil {
 		return spawned{pid: pid, left: fmt.Sprintf("driver %d left running, but %s: %v", pid, driverFile, err)}, nil
 	}
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt)
-	defer signal.Stop(sig)
 
 	// Started: wait, briefly, for the body's rename of the composed file
 	// to launch.json, so a status right after launch reads this launch's.

@@ -189,7 +189,7 @@ func isDriver(pid int, state string) bool {
 }
 
 // driverState applies the status table (lsf-runtime.md, CLI → Status).
-func driverState(held bool, d *driverRecord, s *statusFile) string {
+func driverState(state string, held bool, d *driverRecord, s *statusFile) string {
 	switch {
 	case held && d == nil: // a launch not made by this CLI
 		if s != nil && s.State == "running" {
@@ -198,7 +198,7 @@ func driverState(held bool, d *driverRecord, s *statusFile) string {
 		return driverStarting
 	case d == nil:
 		return driverNone
-	case held && s != nil && s.PID != d.PID && s.State == "running" && isDriver(s.PID, d.State):
+	case held && s != nil && s.PID != d.PID && s.State == "running" && (isDriver(s.PID, state) || isDriver(s.PID, d.State)):
 		// An earlier launch's driver won the lock after a later launch,
 		// whose driver was then refused, replaced driver.json.
 		return driverRunning
@@ -246,7 +246,7 @@ func statusOf(state string, fb fallback) report {
 	} else {
 		note(err)
 	}
-	r.Driver = driverState(held, dp, sp)
+	r.Driver = driverState(state, held, dp, sp)
 	if r.Driver == driverCrashed { // the lock was probed before status.json was read
 		if held, _ := lockHeld(state); held {
 			r.Driver = driverRunning
@@ -263,8 +263,12 @@ func statusOf(state string, fb fallback) report {
 		r.DriverLog = tail(filepath.Join(state, driverLog), 4096)
 		// status.json and summary.json are still the last launch that ran.
 		if r.Driver == driverFailed && sp != nil && sp.State != "running" {
-			if sum, err := readSummary(state, sp.Launch); err == nil && string(sum.StopReason) == sp.State {
+			sum, err := readSummary(state, sp.Launch)
+			switch {
+			case err == nil && string(sum.StopReason) == sp.State:
 				r.Previous = &previousView{Launch: sp.Launch, Summary: viewOf(sum), Outcome: sum.Outcome}
+			case err != nil && !errors.Is(err, os.ErrNotExist):
+				r.Errors = append(r.Errors, err.Error())
 			}
 		}
 	}

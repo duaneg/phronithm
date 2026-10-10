@@ -100,7 +100,7 @@ func cmdStop(args []string, stdout, stderr io.Writer) int {
 	if s, err := readStatus(state); err == nil {
 		sp = &s
 	}
-	switch st := driverState(held, dp, sp); {
+	switch st := driverState(state, held, dp, sp); {
 	case st == driverStarting:
 		// Until status.json says running, the runtime's signal handlers may
 		// not be installed, and SIGTERM would kill the driver unsummarised.
@@ -109,7 +109,9 @@ func cmdStop(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, fmt.Errorf("no driver is running on %s (driver %s)", state, st))
 	case dp == nil:
 		return fail(stderr, fmt.Errorf("the run on %s was not launched by this CLI (no %s); signal its process yourself", state, driverFile))
-	case !isDriver(sp.PID, dp.State):
+	case sp == nil:
+		return fail(stderr, fmt.Errorf("no status.json on %s", state))
+	case !isDriver(sp.PID, state) && !isDriver(sp.PID, dp.State):
 		return fail(stderr, fmt.Errorf("pid %d is not this state dir's driver", sp.PID))
 	}
 	// status.json's pid: driver.json's, unless a refused later launch
@@ -177,7 +179,7 @@ func cmdResume(args []string, stdout, stderr io.Writer) int {
 	case *plugin == "":
 		*plugin = l.PluginDir
 		if _, err := os.Stat(l.PluginDir); err != nil {
-			return fail(stderr, fmt.Errorf("the last launch's plugin dir: %v; pass -plugin-dir", err))
+			return fail(stderr, fmt.Errorf("the last launch's plugin dir: %v; pass -plugin-dir (a host config's pluginDir is not used, as the stored one beats it)", err))
 		}
 	case absPath(*plugin) != l.PluginDir:
 		fmt.Fprintf(stderr, "lsf-runtime: resuming with plugin dir %s; the last launch used %s, and its completed calls replay as they were\n", *plugin, l.PluginDir)
