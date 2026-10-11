@@ -194,12 +194,74 @@ All gates ran at sonnet, round 1. None had a Critical finding, so all passed.
 
 **Quiet-machine run (R35):** `go test -race -count=1 ./...` at `36bf8e2`, 2026-10-11 12:50–12:54 NZDT: every package passed (13 `ok` lines, exit 0). The load average was 1.01 at the start and 1.71 at the end, on 8 cores; Phase 5's read-only subagents started during the run.
 
+## Phase 5 (review)
+
+The multi-lens review and the full-diff critique ran in sonnet subagents, followed by a round-2 critique of the fixes. No round had a Critical finding.
+
+- **Requester decisions (2026-10-11).** Two points were raised by both reviewers or by the critique:
+  - **Live-run rebuild.** From a working tree that no longer builds, `status`, `watch`, `pause` and `stop` run the last `.build/` binary with a warning; other commands still exit 125. The design states the version skew between a self-modifying run's controls and its driver. Fixed in `2017584`.
+  - **Launcher in stage containers.** The launcher cannot run inside a stage container (read-only plugin mount, no GitHub egress), so a re-plan stage's quality check falls back to the hand check, as under `go run` before. This is documented and deferred.
+- **Fixed in `2017584`:**
+  - A missing utility exited 127, and the EXIT trap overwrote the status. Tools are now checked first and the trap keeps the status.
+  - A cache directory another user owns or can write is refused.
+  - `check-pin.sh` takes the first `commit` line, requires hex, and ignores tests and testdata.
+  - `pin.sh` refuses a binary whose embedded commit is not the local tag's.
+  - `config init` with no usable `HOME` wrote a junk path under the cwd; it now refuses.
+  - In `lsf-drive`, the leftovers are a list and `resume` passes `-plugin-dir`.
+  - The design records the `.git` evidence from the real install, the path-filtered `pin-drift`, and the launch rebuild race.
+- **Review S1, the `.git` premise:** re-evidenced, no code change.
+  - This plugin's real 0.3.1 install comes from a directory marketplace whose source is this git working tree, and its cache copy has no `.git`.
+  - The GitHub-sourced official marketplace checkout has a `.gcs-sha`, not a `.git`.
+- **Round 2** (`5f09d84`): `check-pin`'s `**` exclusions were plain pathspecs and missed the top-level `testdata/`; they now use glob magic, verified. The fallback test now asserts that `launch`, `resume`, `validate`, `config` and `version` are refused.
+- **Left open (Minor):**
+  - Duplicate push and pull-request CI runs on a same-repo pull request.
+  - `private()` does not check the cache's parent.
+  - The shell defers a trap until `go build` or `curl` exits.
+  - `pin.sh` checks only the host architecture's embedded commit.
+  - The older `status` globs discard errors.
+  - No Dependabot for the action pins.
+  - Podman's minimum version is unknown.
+  - The two-stage image recipe has not been run.
+- **Live suite:** `LSF_TEST_IMAGE=localhost/lsf-ref@sha256:949f2220… LSF_LIVE_REQUIRE=1 PROMPTPARITY_REQUIRE_NODE=1 GRAPHPARITY_REQUIRE_NODE=1 go test -race -count=1 ./...` at `2017584` passed every package, 13:18–13:22 NZDT. The load average was 4.7–6.5, so this is not a quiet run.
+
 ## Deferrals and discoveries (for the completion report)
 
 - `TestRunGatesStatuses` assumed bash as `/bin/sh`. Real gates run under the image's dash, which prints `Killed`, so a gate whose child is SIGKILLed has the summary `Killed`, not an empty one. No runtime change is needed.
 - Stub-podman detach race (`TestStubDetached`): fixed in the test. The real runtime's detach goes through podman, not this stub.
 - Every change under `lsf-runtime/` other than `dist/` and the launcher needs a release and a re-pin before `main`. That is a process cost for every later runtime unit (`script-retirement`, `empirical-script-support`).
 
+## Handoff (context cleared 2026-10-11, after Phase 5)
+
+Phase 5's review, critique and fixes are done. The completion report is committed as a **draft**.
+
+**State at handoff:**
+- Branch `lsf-workflow` is pushed up to `c4651f0`.
+- The pin is `lsf-runtime-v0.0.1-rc1` (`fee8015`), committed at `36bf8e2`.
+- `dist/check-pin.sh` fails at HEAD: `cli/configinit.go` changed after rc1.
+- Tag `lsf-runtime-v0.0.1-rc2` (`5f09d84`) exists on GitHub with **no release**. Its CI failed in `TestRunGatesStatuses` because my round-2 tightening compared the dash tail without trimming its newline. The tag stays, by the requester's choice.
+- `c4651f0` fixes the test. Its CI run, 38098629749, was in progress at handoff; check it with `gh run view 38098629749 -R duaneg/phronithm`.
+
+**Remaining, in order:**
+
+1. **Structured checks instead of human-facing text.** The requester asked about this; their decision on scope is pending, and rows 1–3 were recommended.
+   1. `runtime/gates_test.go` `TestRunGatesStatuses`: for the child-killed case assert only `red` and 137, and drop the summary and tail asserts, which come from the shell (bash prints nothing, dash prints `Killed`). Add an `exit 4` case (red, no output, no tail) for the no-output path.
+   2. CI orphan-reaping step: use `go test -json` and require a `{"Action":"pass","Test":"<name>"}` event per name, instead of grepping `--- PASS`.
+   3. Static check: a Go test in `dist/` that cross-builds amd64 and arm64 with `CGO_ENABLED=0` and uses `debug/elf` to require no `PT_INTERP` and no `DT_NEEDED`. It replaces or backs the CI `file | grep 'statically linked'`.
+   4. (Optional; a CLI change, so a new release.) `lsf-runtime version -json` for `pin.sh`'s commit check, replacing the parse of `<tag> <commit>`.
+
+   Rows 1–3 change no compiled code, so they do not affect `check-pin`. Update Distribution's CI bullet for rows 2–3.
+2. **Release.** Confirm with the requester before each push and tag. Push, wait for green CI, tag `lsf-runtime-v0.0.1-rc3` at the green commit, and push the tag. Wait for the release job, run `lsf-runtime/dist/pin.sh lsf-runtime-v0.0.1-rc3`, check `lsf-runtime/dist/check-pin.sh` passes, then commit and push.
+3. **Finalise the completion report.**
+   - Remove the "Draft" line.
+   - Name the rc3 commit and its CI run.
+   - Record the CI failure my round-2 change caused, under Execution signals.
+   - Record the structured-check changes as a deviation if made.
+   - Then present the continuation prompt: "Run `/phronithm:breakdown` in re-plan mode with the decomposition plan and this report before starting any dependent unit."
+4. **Requester tidy-ups, not done without asking:**
+   - delete `refs/original/refs/heads/lsf-workflow`, the pre-rewrite backup (`git update-ref -d refs/original/refs/heads/lsf-workflow`);
+   - decide whether `main` gets a final `lsf-runtime-v0.0.1` before merge (completion report, discovery 2).
+
+**Scratch state:** under the session scratchpad, removable, nothing needed. It holds the scratch `CLAUDE_CONFIG_DIR` install, the fixture repo, the caches and `host.json`. The user's own `~/.claude` config was not touched. The rc1 binary is not in `~/.cache/lsf-runtime`.
+
 ## Remaining phases
-Complete Phase 5 (Review) as defined in the phronithm:feature skill.
-Then step 10: re-tag (`lsf-runtime-v0.0.1-rc2`, after Phase 5's last `lsf-runtime/` change), pin, and check `dist/check-pin.sh` passes at HEAD.
+Phase 5 is complete apart from the Handoff items above. Step 10 and the final completion report remain.
