@@ -19,12 +19,16 @@ die() {
 }
 
 tmp=
-trap 'rm -f -- "$tmp"' EXIT
+# shellcheck disable=SC2154 # st is set in the trap
+trap 'st=$?; [ -z "$tmp" ] || rm -f -- "$tmp"; exit "$st"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+for tool in awk dirname uname; do
+	command -v "$tool" >/dev/null 2>&1 || die "$tool is not on PATH"
+done
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || die "cannot find the launcher's directory"
 root=$(dirname -- "$here")
 
 if [ -n "${LSF_RUNTIME_BIN:-}" ]; then
@@ -40,10 +44,24 @@ fi
 untree=
 if [ -e "$root/.git" ]; then
 	if command -v go >/dev/null 2>&1; then
+		command -v cmp >/dev/null 2>&1 || die "cmp is not on PATH"
 		mkdir -p "$here/.build" || die "cannot create $here/.build"
 		tmp=$here/.build/lsf-runtime.$$
 		if ! out=$(GOFLAGS='' go -C "$here" build -buildvcs=false -o "$tmp" ./cli 2>&1); then
 			printf '%s\n' "$out" >&2
+			# A run's controls still reach its driver while the tree is
+			# broken: they run the last build, which may differ from the
+			# driver's.
+			case ${1:-} in
+			status | watch | pause | stop)
+				if [ -f "$here/.build/lsf-runtime" ] && [ -x "$here/.build/lsf-runtime" ]; then
+					printf 'lsf-runtime launcher: building the working tree %s failed (above); running the last build, %s\n' "$root" "$here/.build/lsf-runtime" >&2
+					rm -f -- "$tmp"
+					tmp=
+					exec "$here/.build/lsf-runtime" "$@"
+				fi
+				;;
+			esac
 			die "building the working tree $root failed (above)"
 		fi
 		# An unchanged build leaves the binary a live driver re-executes.
@@ -64,6 +82,10 @@ x86_64 | amd64) arch=amd64 ;;
 aarch64 | arm64) arch=arm64 ;;
 *) die "unsupported machine $(uname -m): linux amd64 and arm64 only" ;;
 esac
+
+for tool in mktemp chmod mv stat id; do
+	command -v "$tool" >/dev/null 2>&1 || die "$tool is not on PATH"
+done
 
 pin=$here/dist/release
 [ -r "$pin" ] || die "cannot read $pin"
@@ -91,6 +113,18 @@ else
 	die "neither sha256sum nor shasum is on PATH"
 fi
 
+# private refuses a directory another user owns or can write: the binary
+# is trusted between its check and its exec.
+private() {
+	for d in "$@"; do
+		m=$(stat -c '%u %a' -- "$d") || die "cannot stat $d"
+		[ "${m%% *}" = "$(id -u)" ] || die "$d is not owned by this user; the release cache must be private"
+		case ${m#* } in
+		*[2367]? | *[2367]) die "$d is writable by group or others; the release cache must be private (chmod go-w)" ;;
+		esac
+	done
+}
+
 cache=${LSF_RUNTIME_CACHE:-}
 if [ -z "$cache" ]; then
 	case ${XDG_CACHE_HOME:-} in
@@ -116,6 +150,7 @@ if [ ! -e "$bin" ]; then
 	fi
 	url=$base/$tag/lsf-runtime-linux-$arch
 	(umask 077 && mkdir -p "$dir") || die "cannot create $dir"
+	private "$cache" "$cache/release" "$dir"
 	tmp=$(mktemp "$dir/.download.XXXXXX") || die "cannot create a file in $dir"
 	curl -q -fsSL --proto "$proto" --proto-redir '=https' --tlsv1.2 \
 		--connect-timeout 30 --max-time 600 --max-filesize 268435456 -o "$tmp" "$url" ||
@@ -126,11 +161,12 @@ if [ ! -e "$bin" ]; then
 		tmp=
 		die "$url has sha256 $got, but $pin pins $want; refused"
 	fi
-	chmod 755 "$tmp"
+	chmod 755 "$tmp" || die "cannot chmod $tmp"
 	mv -f -- "$tmp" "$bin" || die "cannot install $bin"
 	tmp=
 fi
 
+private "$cache" "$cache/release" "$dir"
 got=$(sha "$bin")
 [ "$got" = "$want" ] || die "$bin has sha256 $got, but $pin pins $want; remove $bin and rerun"
 exec "$bin" "$@"

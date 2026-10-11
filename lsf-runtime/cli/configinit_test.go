@@ -129,3 +129,14 @@ func TestStatusRetainLeftovers(t *testing.T) {
 		t.Errorf("errors %q", s.Errors)
 	}
 }
+
+// Without -config and with no usable HOME, config init refuses and writes
+// nothing.
+func TestConfigInitNoHome(t *testing.T) {
+	f := newFixture(t)
+	before := f.git("status", "--porcelain", "--untracked-files=all")
+	r := f.cli([]string{"HOME=", "XDG_CONFIG_HOME="}, "config", "init")
+	eq(t, r.code, exitError)
+	contains(t, r.stderr, "no default host config path")
+	eq(t, f.git("status", "--porcelain", "--untracked-files=all"), before, "nothing written in the repo")
+}

@@ -16,6 +16,20 @@ commit=$(git -C "$here" rev-list -n1 "refs/tags/$tag")
 gh release download "$tag" -R duaneg/phronithm -p SHA256SUMS -p 'lsf-runtime-linux-*' -D "$d"
 (cd "$d" && sha256sum -c --strict SHA256SUMS) >&2
 sum() { awk -v f="lsf-runtime-linux-$1" '$2 == f || $2 == "*" f { print $1 }' "$d/SHA256SUMS"; }
+# The binaries embed their commit (-X main.commit): it must be the tag's.
+case $(uname -m) in
+x86_64 | amd64) host=amd64 ;;
+aarch64 | arm64) host=arm64 ;;
+*) host= ;;
+esac
+if [ -n "$host" ]; then
+	chmod 755 "$d/lsf-runtime-linux-$host"
+	built=$("$d/lsf-runtime-linux-$host" version)
+	if [ "$built" != "$tag $commit" ]; then
+		echo "$0: the release's binary reports \"$built\"; the local tag $tag is at $commit" >&2
+		exit 1
+	fi
+fi
 amd64=$(sum amd64)
 arm64=$(sum arm64)
 for h in "$amd64" "$arm64"; do

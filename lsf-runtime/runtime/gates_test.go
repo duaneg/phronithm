@@ -66,7 +66,7 @@ func TestRunGatesStatuses(t *testing.T) {
 		{GateRed, 137, "", false}, // no output: no tail
 	}
 	// /bin/sh reports a killed child: bash does not, dash prints "Killed".
-	if runs[5].Summary == "Killed" {
+	if runs[5].Summary == "Killed" && runs[5].Tail == "Killed" {
 		want[5].summary, want[5].tail = "Killed", true
 	}
 	for i, w := range want {

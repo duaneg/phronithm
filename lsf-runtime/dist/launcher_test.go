@@ -169,6 +169,40 @@ func TestCacheDefaults(t *testing.T) {
 	contains(t, res.stderr, "lsf-runtime launcher: HOME is unset or not absolute")
 }
 
+// A missing utility is the launcher's failure, exit 125.
+func TestMissingTool(t *testing.T) {
+	r := newRoot(t)
+	env := r.release("v1", nil)
+	path := t.TempDir()
+	for _, tool := range []string{"sh", "dirname", "uname"} {
+		p, err := exec.LookPath(tool)
+		if err != nil {
+			t.Skipf("%s not installed", tool)
+		}
+		if err := os.Symlink(p, filepath.Join(path, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res := r.run(append(env, "PATH="+path), "version")
+	eq(t, res.code, 125)
+	contains(t, res.stderr, "lsf-runtime launcher: awk is not on PATH")
+}
+
+// A cache another user could write is refused before its binary runs.
+func TestCacheNotPrivate(t *testing.T) {
+	r := newRoot(t)
+	env := r.release("v1", nil)
+	eq(t, r.run(env, "version").code, 0)
+	dir := filepath.Dir(r.cached("v1"))
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	res := r.run(env, "version")
+	eq(t, res.code, 125)
+	eq(t, res.stdout, "")
+	contains(t, res.stderr, dir+" is writable by group or others")
+}
+
 func TestBadPin(t *testing.T) {
 	for name, sum := range map[string]string{
 		"upper": strings.Repeat("A", 64),
@@ -275,7 +309,7 @@ func TestWorkingTreeWithoutGo(t *testing.T) {
 	mkdir(t, filepath.Join(r.dir, ".git"))
 	env := r.release("v1", nil)
 	path := t.TempDir()
-	for _, tool := range []string{"sh", "dirname", "uname", "awk", "mktemp", "curl", "sha256sum", "chmod", "mv", "mkdir", "rm", "cmp"} {
+	for _, tool := range []string{"sh", "dirname", "uname", "awk", "mktemp", "curl", "sha256sum", "chmod", "mv", "mkdir", "rm", "cmp", "stat", "id"} {
 		p, err := exec.LookPath(tool)
 		if err != nil {
 			t.Skipf("%s not installed", tool)
@@ -357,6 +391,25 @@ func TestWorkingTree(t *testing.T) {
 	contains(t, res.stderr, "lsf-runtime validate: ")
 	left, _ := filepath.Glob(bin + ".*")
 	eq(t, len(left), 0, "no temp builds left")
+}
+
+// A run's controls run the last build when the tree no longer builds;
+// other commands are refused.
+func TestWorkingTreeBrokenControls(t *testing.T) {
+	r := treeRoot(t, "cli")
+	r.pin("")
+	eq(t, r.run(nil, "version").code, 0)
+	write(t, filepath.Join(r.dir, "lsf-runtime", "cli", "broken.go"), []byte("package main\n\nfunc {\n"), 0o644)
+	for _, c := range []string{"status", "watch", "pause", "stop"} {
+		res := r.run(nil, c, "-h")
+		if res.code == 125 {
+			t.Errorf("%s: exit 125: %s", c, res.stderr)
+		}
+		contains(t, res.stderr, "failed (above); running the last build", c)
+	}
+	res := r.run(nil, "version")
+	eq(t, res.code, 125)
+	contains(t, res.stderr, "lsf-runtime launcher: building the working tree "+r.dir+" failed")
 }
 
 // A changed tree replaces the binary with a new file.

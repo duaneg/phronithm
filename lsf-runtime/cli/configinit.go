@@ -32,7 +32,11 @@ func cmdConfig(args []string, stdout, stderr io.Writer) int {
 	}
 	path := *file
 	if path == "" {
-		path = hostConfigPath()
+		dir, err := xdgDir("XDG_CONFIG_HOME", ".config")
+		if err != nil {
+			return fail(stderr, fmt.Errorf("no default host config path: %w; pass -config", err))
+		}
+		path = filepath.Join(dir, "lsf-runtime", "config.json")
 	}
 	if err := writeStarter(path, *pluginDir); err != nil {
 		return fail(stderr, err)
