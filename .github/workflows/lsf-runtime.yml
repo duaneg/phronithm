@@ -55,16 +55,18 @@ jobs:
         run: go test -race ./...
       - name: orphan reaping ran
         run: |
-          go test -race -count=1 -v -run 'TestOrphanGateContainerReaped|TestOrphansReapedByNextLaunch|TestReaperEscalatesToSigkill' ./runtime | tee orphans.log
+          status=0
+          go test -race -count=1 -json -run 'TestOrphanGateContainerReaped|TestOrphansReapedByNextLaunch|TestReaperEscalatesToSigkill' ./runtime > orphans.json || status=$?
+          jq -j 'select(.Action == "output") | .Output' orphans.json
           for t in TestOrphanGateContainerReaped TestOrphansReapedByNextLaunch TestReaperEscalatesToSigkill; do
-            grep -q -- "--- PASS: $t " orphans.log || { echo "$t did not pass" >&2; exit 1; }
+            jq -e --arg t "$t" 'select(.Action == "pass" and .Test == $t)' orphans.json > /dev/null || { echo "$t did not pass" >&2; exit 1; }
           done
+          exit "$status"
       - name: the static build runs here
         env:
           CGO_ENABLED: '0'
         run: |
           go build -trimpath -o lsf-runtime-native ./cli
-          file lsf-runtime-native | grep -q 'statically linked'
           ./lsf-runtime-native version
 
   build:
@@ -90,9 +92,8 @@ jobs:
           for arch in amd64 arm64; do
             out=../dist-out/lsf-runtime-linux-$arch
             GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$version -X main.commit=$GITHUB_SHA" -o "$out" ./cli
-            file "$out"
-            file "$out" | grep -q 'statically linked' || { echo "$out is not statically linked" >&2; exit 1; }
           done
+          LSF_STATIC_CHECK="$(realpath ../dist-out/lsf-runtime-linux-*)" go test -count=1 -run TestStaticBuild ./dist
           cd ../dist-out && sha256sum lsf-runtime-linux-* > SHA256SUMS && cat SHA256SUMS
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

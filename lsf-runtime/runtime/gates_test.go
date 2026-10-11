@@ -48,6 +48,7 @@ func TestRunGatesStatuses(t *testing.T) {
 		{Name: "after", Command: "true"},
 		{Name: "shell killed", Command: "kill -KILL $$"},
 		{Name: "child killed", Command: "sh -c 'kill -KILL $$'"},
+		{Name: "silent", Command: "exit 4"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -57,21 +58,22 @@ func TestRunGatesStatuses(t *testing.T) {
 		code    int
 		summary string
 		tail    bool
+		// The shell's own report of a killed child varies (bash prints
+		// nothing, dash prints "Killed"), so only status and code count.
+		anyOutput bool
 	}{
-		{GateGreen, 0, "all good", false},
-		{GateRed, 3, "last line", true},
-		{GateNotRun, -1, "timed out after 200ms", false},
-		{GateGreen, 0, "", false},
-		{GateNotRun, -1, "killed by signal killed", false},
-		{GateRed, 137, "", false}, // no output: no tail
-	}
-	// /bin/sh reports a killed child: bash does not, dash prints "Killed".
-	if runs[5].Summary == "Killed" && strings.TrimSpace(runs[5].Tail) == "Killed" {
-		want[5].summary, want[5].tail = "Killed", true
+		{GateGreen, 0, "all good", false, false},
+		{GateRed, 3, "last line", true, false},
+		{GateNotRun, -1, "timed out after 200ms", false, false},
+		{GateGreen, 0, "", false, false},
+		{GateNotRun, -1, "killed by signal killed", false, false},
+		{GateRed, 137, "", false, true},
+		{GateRed, 4, "", false, false}, // no output: no tail
 	}
 	for i, w := range want {
 		r := runs[i]
-		if r.Status != w.status || r.ExitCode != w.code || r.Summary != w.summary || (r.Tail != "") != w.tail {
+		output := w.anyOutput || (r.Summary == w.summary && (r.Tail != "") == w.tail)
+		if r.Status != w.status || r.ExitCode != w.code || !output {
 			t.Errorf("run %d: %+v", i, r)
 		}
 		if _, err := os.Stat(r.Log); err != nil {
