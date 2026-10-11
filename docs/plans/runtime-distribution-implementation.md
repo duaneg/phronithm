@@ -38,7 +38,7 @@ Before the first push, the requester chose to rewrite history so that the 13.7 M
 - no ref from `main..lsf-workflow` reaches the blob;
 - no old SHA is cited.
 
-No other branch or tag held the commits, and the `desktop` remote has no `lsf-workflow`. The memory files citing `f0f9e8e`, `3348829`, `8208ccf` and `fa16e31` were remapped. The pre-rewrite branch is kept at `refs/original/refs/heads/lsf-workflow` until the requester drops it.
+No other branch or tag held the commits, and the `desktop` remote has no `lsf-workflow`. The memory files citing `f0f9e8e`, `3348829`, `8208ccf` and `fa16e31` were remapped. The pre-rewrite backup ref, `refs/original/refs/heads/lsf-workflow`, was deleted after the final push (requester).
 
 | Old | New | Commit |
 |---|---|---|

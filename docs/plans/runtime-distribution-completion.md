@@ -65,7 +65,7 @@ Unit `runtime-distribution` of `docs/plans/lsf-improvements-breakdown.md`, entry
 - **History rewrite** (requester, before the first push). `lsf-runtime/cli/cli` was dropped from the 20 commits from `e442c43` on, so every SHA from `e442c43` (now `c4ba790`) onward changed.
   - Citations in `docs/**/*.md` and the memory files were remapped; the map is in the implementation summary.
   - The decomposition plan's citations of `runtime-cli-drive` and `retained-artefacts-impl` now read `912585d`, `2a9d785`, `2502f93` and `c7bf8d2`.
-  - The old branch is kept at `refs/original/refs/heads/lsf-workflow` until the requester drops it.
+  - The pre-rewrite backup ref was deleted after the final push (requester).
 
 ## Deferrals
 
