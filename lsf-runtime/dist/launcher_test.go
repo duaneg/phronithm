@@ -407,9 +407,15 @@ func TestWorkingTreeBrokenControls(t *testing.T) {
 		}
 		contains(t, res.stderr, "failed (above); running the last build", c)
 	}
-	res := r.run(nil, "version")
+	for _, c := range []string{"launch", "resume", "validate", "config", "version"} {
+		res := r.run(nil, c, "-h")
+		eq(t, res.code, 125, c)
+		contains(t, res.stderr, "lsf-runtime launcher: building the working tree "+r.dir+" failed", c)
+	}
+	// With no earlier build the controls are refused too.
+	os.Remove(filepath.Join(r.dir, "lsf-runtime", ".build", "lsf-runtime"))
+	res := r.run(nil, "stop", "-h")
 	eq(t, res.code, 125)
-	contains(t, res.stderr, "lsf-runtime launcher: building the working tree "+r.dir+" failed")
 }
 
 // A changed tree replaces the binary with a new file.

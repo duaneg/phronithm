@@ -16,7 +16,8 @@ case $commit in
 	exit 1
 	;;
 esac
-set -- lsf-runtime ':!lsf-runtime/dist' ':!lsf-runtime/lsf-runtime' ':!lsf-runtime/**/*_test.go' ':!lsf-runtime/**/testdata/**' 
+# glob magic: "**/" matches zero or more directories.
+set -- lsf-runtime ':!lsf-runtime/dist' ':!lsf-runtime/lsf-runtime' ':(exclude,glob)lsf-runtime/**/*_test.go' ':(exclude,glob)lsf-runtime/**/testdata/**'
 cd "$here/../.."
 if ! git cat-file -e "$commit^{commit}" 2>/dev/null; then
 	echo "check-pin: the pinned commit $commit is not in this repository; fetch more history" >&2
