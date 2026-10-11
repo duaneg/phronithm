@@ -120,7 +120,7 @@ No other branch or tag held the commits, and the `desktop` remote has no `lsf-wo
 - **Pin** (`36bf8e2`): `dist/pin.sh` verified both binaries against `SHA256SUMS`.
   - From a `git archive` export with an empty cache: the launcher downloaded from GitHub (following a redirect to another https host), verified and ran the binary. `version` printed `lsf-runtime-v0.0.1-rc1 fee8015…` and `validate` exited 0, in 2.5 s for the first run.
   - A tampered cache file was refused with exit 125.
-- `check-pin.sh` fails at `36bf8e2`, because `e1a71f5` changed `lsf-runtime/` after the tag. Step 10 re-pins.
+- `check-pin.sh` failed at `36bf8e2`, because `e1a71f5` changed `lsf-runtime/` after the tag. Step 10 re-pinned.
 
 ### Step 8: local-marketplace install
 - `git archive HEAD` was exported to a scratch directory and added as a directory marketplace with `CLAUDE_CONFIG_DIR` pointed at a scratch dir. `claude plugin install phronithm@phronithm` installed version 0.3.1 into the scratch config's plugin cache as a copy.
@@ -133,6 +133,11 @@ No other branch or tag held the commits, and the `desktop` remote has no `lsf-wo
   - `launch -dry-run` on the spike fixture repo was refused, naming `image`.
   - With `image` set to `localhost/lsf-ref@sha256:949f2220…`, `launch -dry-run` exited 0 with `stop_reason` `dry-run`, 0 calls and $0.
 - **Not run:** the two-stage image build in Distribution (a project image `FROM` the reference image by digest). The reference image's digest recipe is the one s2-sandbox used. The second stage is conjectured (step 6 critique M11).
+
+### Step 10 (`4b4b069`, `75e3ada`): structured checks and the rc3 pin
+- Structured checks (requester's scope: rows 1–3 of the Phase 5 proposal) in `4b4b069`: `TestRunGatesStatuses` asserts status and code only for the killed child, plus an `exit 4` case; CI's orphan-reaping step requires `go test -json` pass events; `dist`'s `TestStaticBuild` checks the ELF headers (it reported both faults against `/bin/ls`). Branch run 38099462205 was green, with both new checks seen in its logs.
+- `lsf-runtime-v0.0.1-rc3` tagged at `4b4b069`; tag run 38100199084 published the pre-release. `dist/pin.sh` verified both binaries; `check-pin.sh` passes at `75e3ada`.
+- From a `git archive` export with an empty cache, the launcher downloaded, verified and ran rc3 (`version` printed `lsf-runtime-v0.0.1-rc3 4b4b069…`), `validate` exited 0, and a tampered cache file was refused with exit 125.
 
 ## Per-step critique findings
 
@@ -229,39 +234,3 @@ The multi-lens review and the full-diff critique ran in sonnet subagents, follow
 - `TestRunGatesStatuses` assumed bash as `/bin/sh`. Real gates run under the image's dash, which prints `Killed`, so a gate whose child is SIGKILLed has the summary `Killed`, not an empty one. No runtime change is needed.
 - Stub-podman detach race (`TestStubDetached`): fixed in the test. The real runtime's detach goes through podman, not this stub.
 - Every change under `lsf-runtime/` other than `dist/` and the launcher needs a release and a re-pin before `main`. That is a process cost for every later runtime unit (`script-retirement`, `empirical-script-support`).
-
-## Handoff (context cleared 2026-10-11, after Phase 5)
-
-Phase 5's review, critique and fixes are done. The completion report is committed as a **draft**.
-
-**State at handoff:**
-- Branch `lsf-workflow` is pushed up to `c4651f0`.
-- The pin is `lsf-runtime-v0.0.1-rc1` (`fee8015`), committed at `36bf8e2`.
-- `dist/check-pin.sh` fails at HEAD: `cli/configinit.go` changed after rc1.
-- Tag `lsf-runtime-v0.0.1-rc2` (`5f09d84`) exists on GitHub with **no release**. Its CI failed in `TestRunGatesStatuses` because my round-2 tightening compared the dash tail without trimming its newline. The tag stays, by the requester's choice.
-- `c4651f0` fixes the test. Its CI run, 38098629749, was in progress at handoff; check it with `gh run view 38098629749 -R duaneg/phronithm`.
-
-**Remaining, in order:**
-
-1. **Structured checks instead of human-facing text.** The requester asked about this; their decision on scope is pending, and rows 1–3 were recommended.
-   1. `runtime/gates_test.go` `TestRunGatesStatuses`: for the child-killed case assert only `red` and 137, and drop the summary and tail asserts, which come from the shell (bash prints nothing, dash prints `Killed`). Add an `exit 4` case (red, no output, no tail) for the no-output path.
-   2. CI orphan-reaping step: use `go test -json` and require a `{"Action":"pass","Test":"<name>"}` event per name, instead of grepping `--- PASS`.
-   3. Static check: a Go test in `dist/` that cross-builds amd64 and arm64 with `CGO_ENABLED=0` and uses `debug/elf` to require no `PT_INTERP` and no `DT_NEEDED`. It replaces or backs the CI `file | grep 'statically linked'`.
-   4. (Optional; a CLI change, so a new release.) `lsf-runtime version -json` for `pin.sh`'s commit check, replacing the parse of `<tag> <commit>`.
-
-   Rows 1–3 change no compiled code, so they do not affect `check-pin`. Update Distribution's CI bullet for rows 2–3.
-2. **Release.** Confirm with the requester before each push and tag. Push, wait for green CI, tag `lsf-runtime-v0.0.1-rc3` at the green commit, and push the tag. Wait for the release job, run `lsf-runtime/dist/pin.sh lsf-runtime-v0.0.1-rc3`, check `lsf-runtime/dist/check-pin.sh` passes, then commit and push.
-3. **Finalise the completion report.**
-   - Remove the "Draft" line.
-   - Name the rc3 commit and its CI run.
-   - Record the CI failure my round-2 change caused, under Execution signals.
-   - Record the structured-check changes as a deviation if made.
-   - Then present the continuation prompt: "Run `/phronithm:breakdown` in re-plan mode with the decomposition plan and this report before starting any dependent unit."
-4. **Requester tidy-ups, not done without asking:**
-   - delete `refs/original/refs/heads/lsf-workflow`, the pre-rewrite backup (`git update-ref -d refs/original/refs/heads/lsf-workflow`);
-   - decide whether `main` gets a final `lsf-runtime-v0.0.1` before merge (completion report, discovery 2).
-
-**Scratch state:** under the session scratchpad, removable, nothing needed. It holds the scratch `CLAUDE_CONFIG_DIR` install, the fixture repo, the caches and `host.json`. The user's own `~/.claude` config was not touched. The rc1 binary is not in `~/.cache/lsf-runtime`.
-
-## Remaining phases
-Phase 5 is complete apart from the Handoff items above. Step 10 and the final completion report remain.

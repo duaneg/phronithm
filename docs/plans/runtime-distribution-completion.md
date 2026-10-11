@@ -1,16 +1,14 @@
 # runtime-distribution: completion report
 
-**Draft, pending step 10** (see the implementation summary's Handoff): rc3 is not yet tagged or pinned, and the verdict below is final only once it is.
-
 Unit `runtime-distribution` of `docs/plans/lsf-improvements-breakdown.md`, entry at `c7bf8d2` (the pre-rewrite `f0f9e8e`), on branch `lsf-workflow`.
 
 - **Plan:** `docs/plans/runtime-distribution-plan.md`.
 - **Implementation summary:** `docs/plans/runtime-distribution-implementation.md`.
-- **Commits:** fc6dc3f, d30a2d5, 4b2acfb, 3ecc857, 9991bb7, f27991a, 062e920, ee0903d, 70f4075, fee8015, e1a71f5, 36bf8e2, 2c31fa9, 2017584, 5f09d84, c4651f0, and the commits that pin rc3 and carry this report.
+- **Commits:** fc6dc3f, d30a2d5, 4b2acfb, 3ecc857, 9991bb7, f27991a, 062e920, ee0903d, 70f4075, fee8015, e1a71f5, 36bf8e2, 2c31fa9, 2017584, 5f09d84, c4651f0, c3014b7, 4b4b069, 75e3ada, and the commit that carries this report.
 - **Releases:**
   - `lsf-runtime-v0.0.1-rc1` (at `fee8015`): a GitHub pre-release, pinned at `36bf8e2`.
   - `lsf-runtime-v0.0.1-rc2`: a tag at `5f09d84` with no release, because its CI failed. It stays on GitHub (requester).
-  - `lsf-runtime-v0.0.1-rc3`: pending, after the structured-check changes.
+  - `lsf-runtime-v0.0.1-rc3` (at `4b4b069`): a GitHub pre-release built by CI run 38100199084, pinned at `75e3ada`. `dist/check-pin.sh` passes.
 
 ## Done-condition verdict
 
@@ -18,14 +16,14 @@ Unit `runtime-distribution` of `docs/plans/lsf-improvements-breakdown.md`, entry
 
 - **The Distribution section** chooses D1, with the requester's verdict of 2026-10-11 and D4's rejection. *Evidenced.*
 - **CI.**
-  - It builds static `CGO_ENABLED=0` linux amd64 and arm64 binaries, and `file` must report them statically linked.
+  - It builds static `CGO_ENABLED=0` linux amd64 and arm64 binaries, and `TestStaticBuild` must find no ELF program interpreter or needed library in them.
   - It runs `go test -race ./...` on `ubuntu-24.04` and `ubuntu-24.04-arm`, with the parity tools required.
-  - The three orphan-reaping tests must each show `--- PASS`.
-  - *Proven* by the workflow, and *evidenced* by green runs 38095317858 and 38095629745, plus the rc3 run (pending).
+  - The three orphan-reaping tests must each have a `go test -json` `pass` event.
+  - *Proven* by the workflow, and *evidenced* by green runs 38095317858 and 38095629745, branch run 38099462205 at `4b4b069`, and the rc3 tag run 38100199084.
 - **The launcher** `${CLAUDE_PLUGIN_ROOT}/lsf-runtime/lsf-runtime` runs the platform's binary, and `validate` through it.
   - It prefers `LSF_RUNTIME_BIN`, then a working-tree build, then the pinned release.
   - It refuses a sha256 mismatch, both on download and in the cache.
-  - *Proven* by the `dist` tests. *Evidenced* against the real rc1 release: download, verify and run, with a tampered cache file refused.
+  - *Proven* by the `dist` tests. *Evidenced* against the real rc1 and rc3 releases, each from a `git archive` export with an empty cache: download, verify and run, `validate` exit 0, and a tampered cache file refused with exit 125.
 - **The skills.** `phronithm:breakdown`'s quality check and `phronithm:lsf-drive`'s Startup run `validate` through the launcher.
   - Exit 1 is problems. Exit 125 means the launcher cannot run: report it and check by hand. Exit 2 or any other non-zero is the command's own failure.
   - `phronithm:lsf-drive` invokes the launcher. The interim cache build is gone, and there is no top-level `bin/`.
@@ -55,8 +53,13 @@ Unit `runtime-distribution` of `docs/plans/lsf-improvements-breakdown.md`, entry
   - `runtime/retain.go` gained the exported `RetainPrefix`.
   - `CLAUDE.md` and `.gitignore` changed.
   - Two test-portability fixes, found by CI:
-    - `runtime/gates_test.go`: dash prints `Killed`;
+    - `runtime/gates_test.go`: dash prints `Killed`, which the structured checks below superseded;
     - `internal/testcfg/podman_test.go`: the stub's setsid race.
+  - **Structured checks** (requester, after Phase 5; `4b4b069`). Checks now assert exit codes and structured output, not shell or tool text:
+    - `TestRunGatesStatuses` asserts only status and code for a killed child, and gains an `exit 4` no-output case;
+    - CI's orphan-reaping step requires `go test -json` pass events;
+    - the new `dist` test `TestStaticBuild` reads the ELF headers in place of `file | grep`, both under `go test` and on the build job's release binaries.
+    - The optional `version -json` for `pin.sh` was not made.
 - **Publishes:** all three as named.
   - The starter host config is published as a CLI command (`config init [-config] [-plugin-dir]`). `-plugin-dir` is beyond the plan.
 - **History rewrite** (requester, before the first push). `lsf-runtime/cli/cli` was dropped from the 20 commits from `e442c43` on, so every SHA from `e442c43` (now `c4ba790`) onward changed.
@@ -78,11 +81,11 @@ Unit `runtime-distribution` of `docs/plans/lsf-improvements-breakdown.md`, entry
    - `pin-drift` fails `main` otherwise.
    - The order is tag `lsf-runtime-v*` at X, let CI publish, `dist/pin.sh`, then commit at X+1.
    - This adds a step to `script-retirement`, `empirical-script-support` and any later runtime unit, each with its own requester confirmation for the tag.
-2. **The pin is an rc.** `main` would ship `lsf-runtime-v0.0.1-rc2` to plugin users unless a final `lsf-runtime-v0.0.1` is tagged first. That is the requester's call at merge.
+2. **The pin is an rc.** `main` would ship `lsf-runtime-v0.0.1-rc3` to plugin users unless a final `lsf-runtime-v0.0.1` is tagged first. That is the requester's call at merge.
 3. **Self-driving runs.** Merges that change `lsf-runtime/` while the run is live give its controls a newer binary than its driver. On a broken tree the controls run the last build.
    - The state-dir file formats (`status.json`, `launch.json`, `driver.json`, the journal) must stay readable across that skew.
    - This binds any unit that changes them while this repository drives itself.
-4. **Gates run under the image's dash**, which prints `Killed` for a SIGKILLed child. A red gate's summary can therefore be `Killed`. This is not a runtime change, but it matters to `drive-decision-design` and to any digest that quotes summaries.
+4. **Gates run under the image's dash**, which prints `Killed` for a SIGKILLed child. A red gate's summary can therefore be `Killed`, where bash gives none. This is not a runtime change, but it matters to `drive-decision-design` and to any digest that quotes summaries.
 5. **`pin-drift` is path-filtered** on pushes and pull requests. A stale pin reaches `main` only with a change that leaves `lsf-runtime/` alone, and the plugin `v*` tag run reports it afterwards.
 6. **CI duplicates** the test matrix for a same-repo pull request: push plus `pull_request`. This is open, Minor.
 7. **R35:** a quiet-machine run of the stub suite now exists (above), but a quiet run that includes the live tests is still owed.
@@ -98,7 +101,7 @@ Unit `runtime-distribution` of `docs/plans/lsf-improvements-breakdown.md`, entry
 
 | Gate | Outcome |
 |---|---|
-| `github-actions` | confirmed: repo public, Actions enabled; five runs |
+| `github-actions` | confirmed: repo public, Actions enabled; runs through 38100199084 |
 | `lsf-toolchain` | confirmed: Go 1.27.1 locally and on CI (`setup-go` from `go.mod`) |
 | `git` | confirmed: 2.54.0 locally, 2.55.0 on both runners |
 | `podman` | confirmed: 6.1.3 rootless locally; not applicable on CI, where live tests skip by decision (the runner's podman is 4.9, unpinned) |
@@ -114,8 +117,10 @@ Unit `runtime-distribution` of `docs/plans/lsf-improvements-breakdown.md`, entry
   - `config init -plugin-dir`;
   - pinning actions to releases at least two weeks old;
   - the `-buildvcs=false` tree build;
-  - two test-portability fixes that CI forced.
+  - two test-portability fixes that CI forced;
+  - the structured-check changes (requester).
 - **Gates:** no gate found a Critical finding. The six per-step critique gates found 12 Significant findings, and the three Phase 5 passes found 5.
-- **Size:** larger than "medium". Two CI round-trips and a release rerun extended step 7.
+- **CI failure I caused:** my Phase 5 round-2 tightening of `TestRunGatesStatuses` compared dash's `Killed` tail without trimming its newline. The `lsf-runtime-v0.0.1-rc2` tag's CI failed on it, so rc2 has no release. `c4651f0` fixed the test, and the structured checks then removed that comparison.
+- **Size:** larger than "medium". Two CI round-trips and a release rerun extended step 7, and the failed rc2 added a third release.
 
 Run `/phronithm:breakdown` in re-plan mode with the decomposition plan and this report before starting any dependent unit.
